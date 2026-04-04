@@ -106,3 +106,18 @@ structure.ts
 # ── Scripts one-shot (init repo, etc.) ───────────────────────────────────────
 init_commits.sh
 
+# ── Modèles trackés via Git LFS (exceptions aux règles *.onnx / *.pt) ────────
+# Les patterns ci-dessous annulent les règles d'exclusion globales pour
+# les fichiers binaires versionnés explicitement dans .gitattributes.
+!debertav3-ner/best_model-v2.onnx
+!debertav3-ner/best_model-v2.onnx.data
+!debertav3-ner/tokenizer_from_hf/
+!debertav3-ner/tokenizer_from_hf/tokenizer.json
+!debertav3-ner/tokenizer_from_hf/tokenizer_config.json
+!docker-resources/onnx_converter_bundle/models/bge-m3-mac/model_quantized.onnx
+!docker-resources/onnx_converter_bundle/models/bge-m3-mac/sentencepiece.bpe.model
+!docker-resources/onnx_converter_bundle/models/bge-m3-mac/tokenizer.json
+!docker-resources/onnx_converter_bundle/models/bge-m3-mac/tokenizer_config.json
+!docker-resources/onnx_converter_bundle/models/bge-m3-mac/config.json
+!docker-resources/onnx_converter_bundle/models/bge-m3-mac/special_tokens_map.json
+

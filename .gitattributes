@@ -1,0 +1,22 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# PimpMyRAG — Git LFS tracking
+# Fichiers binaires lourds versionnés via LFS (modèles ONNX, tokenizers, vocab)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Modèles DeBERTa-v3 NER (used by connectors/ner/onnx-ner) ─────────────────
+debertav3-ner/*.onnx          filter=lfs diff=lfs merge=lfs -text
+debertav3-ner/*.onnx.data     filter=lfs diff=lfs merge=lfs -text
+
+# ── Tokenizer DeBERTa-v3 (debertav3-ner/tokenizer_from_hf/) ──────────────────
+debertav3-ner/tokenizer_from_hf/tokenizer.json        filter=lfs diff=lfs merge=lfs -text
+debertav3-ner/tokenizer_from_hf/tokenizer_config.json filter=lfs diff=lfs merge=lfs -text
+
+# ── Modèle BGE-M3 quantisé Mac (used by connectors/embed/onnx-emb) ───────────
+docker-resources/onnx_converter_bundle/models/bge-m3-mac/model_quantized.onnx  filter=lfs diff=lfs merge=lfs -text
+docker-resources/onnx_converter_bundle/models/bge-m3-mac/sentencepiece.bpe.model filter=lfs diff=lfs merge=lfs -text
+
+# ── Tous les futurs modèles ONNX dans models/ ─────────────────────────────────
+docker-resources/onnx_converter_bundle/models/**/*.onnx      filter=lfs diff=lfs merge=lfs -text
+docker-resources/onnx_converter_bundle/models/**/*.onnx_data filter=lfs diff=lfs merge=lfs -text
+docker-resources/onnx_converter_bundle/models/**/*.onnx.data filter=lfs diff=lfs merge=lfs -text
+

@@ -1,5 +1,10 @@
 # PimpMyRAG
 
+[![CI](https://github.com/pimpmyrag/pimpmyrag/actions/workflows/ci.yml/badge.svg)](https://github.com/pimpmyrag/pimpmyrag/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Kotlin](https://img.shields.io/badge/Kotlin-2.x-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
+[![JVM](https://img.shields.io/badge/JVM-17%2B-ED8B00?logo=openjdk&logoColor=white)](https://adoptium.net)
+
 Framework RAG modulaire Kotlin/JVM avec pipeline NER + UD pour l'extraction
 d'entités et d'eventlets structurés. Conçu pour le traitement de presse
 francophone (et multilingue via XLM-RoBERTa).
