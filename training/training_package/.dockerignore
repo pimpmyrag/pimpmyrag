@@ -1,0 +1,22 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Data & outputs (énorme)
+training_output/
+output/
+
+# HuggingFace / caches
+.cache/
+.huggingface/
+**/.cache/
+
+# OS
+.DS_Store
+``

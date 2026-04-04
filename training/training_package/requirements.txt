@@ -1,0 +1,12 @@
+# Python packages required for training
+torch
+sentencepiece
+transformers
+tokenizers
+tiktoken
+scikit-learn
+seqeval
+numpy
+protobuf
+datasets
+accelerate

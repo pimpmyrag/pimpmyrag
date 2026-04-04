@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+
+  # ── Pipeline 1 : XLM-RoBERTa NER coarse (BIO, 13 labels) ─────────────────
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Force la construction pour l'architecture ARM
+    platform: linux/arm64
+    image: pimpmyrag-trainer:latest
+    container_name: pimpmyrag_trainer
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface:rw
+      - ./training_output:/app/output:rw
+      - ../../data:/app/data:rw
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+    entrypoint: []
+    command:
+      - python
+      - /app/train_ner.py
+      - --bilou
+      - /app/data/data.bilou.fixed
+      - --output_dir
+      - /app/output
+      - --model
+      - xlm-roberta-base
+      - --epochs
+      - "4"
+      - --batch_size
+      - "16"
+      - --lr
+      - "2e-5"
+      - --eval_steps
+      - "200"
+      - --logging_steps
+      - "50"
+    stdin_open: true
+    tty: true
+
+  # ── Pipeline 2 : DeBERTa-v3 SpanClassifier (22 labels fine-grained) ───────
+  deberta-trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    image: pimpmyrag-trainer:latest
+    container_name: pimpmyrag_deberta_trainer
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface:rw
+      - ./training_output_deberta:/app/output:rw
+      # Données DeBERTa (train/val/test.jsonl) montées depuis training_package/
+      - ./train.jsonl:/app/train.jsonl:ro
+      - ./val.jsonl:/app/val.jsonl:ro
+      - ./test.jsonl:/app/test.jsonl:ro
+      # Tokenizer local DeBERTa (exclu du dépôt — à générer via debertav3-ner/)
+      - ../../debertav3-ner/tokenizer_from_hf:/app/tokenizer:ro
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - TOKENIZER_PATH=/app/tokenizer
+    entrypoint: []
+    command:
+      - python
+      - /app/train.py
+      - --train
+      - /app/train.jsonl
+      - --val
+      - /app/val.jsonl
+      - --test
+      - /app/test.jsonl
+      - --tokenizer-path
+      - /app/tokenizer
+      - --epochs
+      - "5"
+      - --batch
+      - "16"
+      - --lr
+      - "2e-5"
+      - --accum-steps
+      - "2"
+      - --coarse-noise
+      - "0.10"
+    stdin_open: true
+    tty: true
