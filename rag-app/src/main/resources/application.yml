@@ -1,0 +1,94 @@
+spring:
+  application:
+    name: rag-kotlin
+  webflux:
+    timeout: 180000
+    request-timeout: 600000
+  http:
+    codecs:
+      max-in-memory-size: 10MB
+  codec:
+    max-in-memory-size: 10MB
+  data:
+    mongodb:
+      uri: "mongodb://root:password@localhost:27017/admin?authSource=admin"
+      database: "rag-data-dev"
+  neo4j:
+    uri: bolt://localhost:7687
+    authentication:
+      username: neo4j
+      password: your-password
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: user
+    password: password
+
+
+
+chunk:
+  size: 4000
+
+server:
+  netty:
+    connection-timeout: 30000
+
+
+
+unstructured:
+  api:
+    language: "fra" # Français par défaut
+    strategy: "hi_res" # Stratégie par défaut
+
+mistral:
+  api:
+    key: "sX7fpLMqKqXbHx5bRtxTZSkjK0EWfdnF"
+
+logging:
+  level:
+    org.springframework.web: DEBUG
+    com.search.doc.ragkotlin: DEBUG
+
+
+
+infinity:
+  embedding:
+    base-url: "https://api.runpod.ai/v2/p9hl2lmm5jiz1k/runsync"   # <-- pas de /embeddings ici
+    api-key: "${RUNPOD_API_KEY}"
+    model-name: "BAAI/bge-m3"
+    batch-size: 32
+    concurrency: 64
+
+  rerank:
+    base-url: "https://api.runpod.ai/v2/p9hl2lmm5jiz1k/runsync"             # <-- racine endpoint serverless
+    api-key: "${RUNPOD_API_KEY}"
+    model-name: "BAAI/bge-reranker-v2-m3"
+    mode: runpod                                                     # <-- important : on parle à /runsync
+    concurrency: 64
+
+chapter:
+  rebuilder:
+    enable-controller: false
+    mode: STRICT          # STRICT | ASSISTED | SAFE_FLAT
+    layout:
+      min-title-upper-ratio: 0.40
+      min-title-gap-px: 18
+      paragraph-gap-px: 14
+      numbering-enabled: true
+      numbering-patterns:
+        - "^(chapitre|chapter)\\s+[ivxlcdm]+$"   # roman
+        - "^(chapitre|chapter)\\s+\\d+$"         # arabe
+
+
+classifier:
+  chroma:
+    base-url: "http://localhost:8000"
+    api-version: "V2"
+    tenant: "default_tenant"
+    database: "default_database"
+    collection: "phrases"
+    topK: 30
+    documentIdKey: "docId"
+    preQueryEnabled: true
+    preQueryText: "event; occurrence; change; significant moment; update; transition; action; happened"
+    preQueryTopK: 40
