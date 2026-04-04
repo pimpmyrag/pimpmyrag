@@ -4,54 +4,85 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
-
-permissions:
-  contents: read
 
 jobs:
-  build:
-    name: Build & Test (JVM 21)
+  build-and-test:
+    name: Build & Test
     runs-on: ubuntu-latest
 
     steps:
       # ── Checkout ────────────────────────────────────────────────────────────
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          lfs: false        # modèles ONNX non nécessaires pour compiler/tester
-          fetch-depth: 0
+          lfs: false   # données d'entraînement gérées hors git
 
-      # ── Java ────────────────────────────────────────────────────────────────
-      - name: Set up JDK 21
+      # ── JDK ─────────────────────────────────────────────────────────────────
+      - name: Setup JDK 21
         uses: actions/setup-java@v4
         with:
           java-version: '21'
-          distribution: temurin
+          distribution: 'temurin'
 
       # ── Gradle cache ────────────────────────────────────────────────────────
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+        uses: gradle/actions/setup-gradle@v3
 
-      # ── Build ────────────────────────────────────────────────────────────────
-      - name: Build all modules
-        run: ./gradlew build -x test --no-daemon --parallel --stacktrace
+      # ── Build + tests unitaires ─────────────────────────────────────────────
+      # Les tests d'intégration @Tag("integration") sont exclus ici :
+      # le serveur NER n'est pas démarré (modèles ONNX non disponibles en CI).
+      - name: Build & unit tests
+        run: |
+          ./gradlew test --continue \
+            -Dner.test.url=http://localhost:8080 \
+            -Dner.test.report=${{ github.workspace }}/build/ner-report.md
         env:
-          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          GRADLE_OPTS: "-Dorg.gradle.daemon=false"
 
-      # ── Tests ───────────────────────────────────────────────────────────────
-      - name: Run tests
-        run: ./gradlew test --no-daemon --continue --stacktrace
-        env:
-          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-
-      # ── Rapport de test ─────────────────────────────────────────────────────
-      - name: Upload test reports
+      # ── Rapport JUnit (annotations PR + onglet Tests) ───────────────────────
+      - name: Publish JUnit results
+        uses: dorny/test-reporter@v1
         if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: test-reports-jdk21
-          path: '**/build/reports/tests/'
-          retention-days: 7
+          name: 'JUnit Tests'
+          path: '**/build/test-results/test/*.xml'
+          reporter: java-junit
+          fail-on-error: false   # ne pas casser le build si zéro test trouvé
+
+      # ── Rapport NER → Job Summary ────────────────────────────────────────────
+      # Le fichier n'existe que si le serveur était disponible pendant les tests.
+      # Sur CI standard il sera absent (test skippé) → message informatif affiché.
+      - name: NER report to Job Summary
+        if: always()
+        run: |
+          REPORT="${{ github.workspace }}/build/ner-report.md"
+          echo "### NER Integration Test" >> $GITHUB_STEP_SUMMARY
+          if [ -f "$REPORT" ]; then
+            cat "$REPORT" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "> ⏭️ Test d'intégration ignoré — serveur NER non disponible en CI." >> $GITHUB_STEP_SUMMARY
+            echo ">" >> $GITHUB_STEP_SUMMARY
+            echo "> Lancez localement :" >> $GITHUB_STEP_SUMMARY
+            echo "> \`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "> ./gradlew :radar-nli-toolkit:test -Dner.test.url=http://localhost:8080" >> $GITHUB_STEP_SUMMARY
+            echo "> \`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # ── Artifact : rapport NER (téléchargeable depuis l'onglet Summary) ──────
+      - name: Upload NER report artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ner-test-report
+          path: build/ner-report.md
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # ── Artifact : résultats JUnit XML bruts ─────────────────────────────────
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: '**/build/test-results/test/*.xml'
+          if-no-files-found: ignore
+          retention-days: 14

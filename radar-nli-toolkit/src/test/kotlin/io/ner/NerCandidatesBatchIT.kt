@@ -12,6 +12,7 @@ import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.WebClientRequestException
 import org.springframework.web.reactive.function.client.WebClientResponseException
 import org.springframework.web.reactive.function.client.bodyToMono
+import java.io.File
 import java.text.Normalizer
 
 /**
@@ -22,9 +23,10 @@ import java.text.Normalizer
  * Si le serveur n'est pas disponible, le test est automatiquement ignoré (Assumption).
  *
  * Configuration :
- *   -Dner.test.url=http://localhost:8080   (défaut)
- *   -Dner.test.batchSize=16               (défaut)
- *   -Dner.test.threshold=70               (% minimum pour passer, défaut 70)
+ *   -Dner.test.url=http://localhost:8080          (défaut)
+ *   -Dner.test.batchSize=16                       (défaut)
+ *   -Dner.test.threshold=70                       (% minimum pour passer, défaut 70)
+ *   -Dner.test.report=/path/to/report.md          (optionnel — rapport Markdown pour CI)
  */
 @Tag("integration")
 class NerCandidatesBatchIT {
@@ -34,6 +36,8 @@ class NerCandidatesBatchIT {
     private val batchSize = System.getProperty("ner.test.batchSize", "16").toInt()
     /** Score minimum (%) en dessous duquel le test fail. 0 = jamais fail. */
     private val threshold = System.getProperty("ner.test.threshold", "70").toInt()
+    /** Chemin du rapport Markdown à écrire (pour CI). Null = pas de fichier. */
+    private val reportFile = System.getProperty("ner.test.report")
 
     private val mapper = ObjectMapper().registerKotlinModule()
     private val client = WebClient.builder()
@@ -179,9 +183,58 @@ class NerCandidatesBatchIT {
         return issues
     }
 
+    // ── Rapport Markdown (CI / Job Summary) ──────────────────────────────────
+    private fun buildMarkdown(
+        cases: List<TestCase>,
+        failures: List<Triple<TestCase, List<String>, List<Candidate>>>,
+        scorePct: Int,
+    ): String {
+        val ok      = cases.size - failures.size
+        val icon    = if (scorePct >= threshold) "✅" else "❌"
+        val byCategory = cases.groupBy { it.category.substringBefore("/") }
+
+        return buildString {
+            appendLine("## $icon NER Candidates — $ok/${cases.size} OK ($scorePct%)")
+            appendLine()
+            appendLine("> **Seuil** : $threshold% &nbsp;|&nbsp; **Cas** : ${cases.size} &nbsp;|&nbsp; **URL** : `$baseUrl`")
+            appendLine()
+
+            // ── Par catégorie ────────────────────────────────────────────
+            appendLine("### Par catégorie")
+            appendLine()
+            appendLine("| Catégorie | OK | Total | |")
+            appendLine("|-----------|---:|------:|---|")
+            byCategory.toSortedMap().forEach { (cat, group) ->
+                val catOk = group.count { c -> failures.none { it.first.id == c.id } }
+                val bar   = "🟩".repeat(catOk) + "🟥".repeat(group.size - catOk)
+                appendLine("| `$cat` | $catOk | ${group.size} | $bar |")
+            }
+            appendLine()
+
+            // ── Détail des échecs ────────────────────────────────────────
+            if (failures.isEmpty()) {
+                appendLine("### ✅ Tous les cas passent !")
+            } else {
+                appendLine("### ⚠️ Cas en échec (${failures.size})")
+                appendLine()
+                appendLine("<details>")
+                appendLine("<summary>Voir le détail (${failures.size} cas)</summary>")
+                appendLine()
+                failures.forEach { (case, issues, got) ->
+                    appendLine("**[${case.category}]** `${case.text.take(80)}`  ")
+                    appendLine("_${case.note}_  ")
+                    appendLine("Obtenu : `${got.joinToString { "${it.nerType}='${it.text}'" }}`  ")
+                    issues.forEach { appendLine("⚠️ $it  ") }
+                    appendLine()
+                }
+                appendLine("</details>")
+            }
+        }
+    }
+
     // ── Test principal ───────────────────────────────────────────────────────
     @Test
-    fun `NER candidates batch — tous les cas du JSONL`() {
+    fun `NER candidates batch - tous les cas du JSONL`() {
         Assumptions.assumeTrue(
             isServerAvailable(),
             "Serveur NER non disponible à $baseUrl — test d'intégration ignoré (lancez le serveur ou passez -Dner.test.url=…)"
@@ -192,7 +245,7 @@ class NerCandidatesBatchIT {
         println("\n${"=".repeat(110)}")
         println("NER CANDIDATES BATCH  —  ${cases.size} cas  [url=$baseUrl  batchSize=$batchSize]")
         println("=".repeat(110))
-        println("%4s  %-52s  %-20s  %s".format("#", "STATUT", "CATÉGORIE", "PHRASE[:60]"))
+        println("%4s  %-52s  %-20s  %s".format("#", "STATUT", "CATEGORIE", "PHRASE[:60]"))
         println("-".repeat(110))
 
         // Appels API par chunks
@@ -208,8 +261,7 @@ class NerCandidatesBatchIT {
         cases.forEachIndexed { i, case ->
             val candidates = allCandidates.getOrElse(i) { emptyList() }
             val issues     = checkCase(case, candidates)
-            val label      = if (issues.isEmpty()) "✅ OK"
-                             else "❌ ${issues[0].take(44)}"
+            val label      = if (issues.isEmpty()) "OK" else "KO ${issues[0].take(44)}"
             println("%4d  %-52s  [%-18s]  %s".format(
                 case.id, label, case.category.take(18), case.text.take(60)
             ))
@@ -218,31 +270,38 @@ class NerCandidatesBatchIT {
 
         // ── Statistiques par catégorie ────────────────────────────────────
         val byCategory = cases.groupBy { it.category.substringBefore("/") }
-        println("\n── PAR CATÉGORIE " + "─".repeat(93))
+        println("\n-- PAR CATEGORIE " + "-".repeat(93))
         byCategory.toSortedMap().forEach { (cat, group) ->
             val ok  = group.count { c -> failures.none { it.case.id == c.id } }
-            val bar = "█".repeat(ok) + "░".repeat(group.size - ok)
+            val bar = "#".repeat(ok) + ".".repeat(group.size - ok)
             println("  %-18s  %d/%d  %s".format(cat, ok, group.size, bar))
         }
 
         // ── Résumé ────────────────────────────────────────────────────────
-        val ok      = cases.size - failures.size
+        val ok       = cases.size - failures.size
         val scorePct = ok * 100 / cases.size
         println("\n${"=".repeat(110)}")
-        println("RÉSULTAT : $ok/${cases.size} OK  ($scorePct%)  — seuil=$threshold%")
+        println("RESULTAT : $ok/${cases.size} OK  ($scorePct%)  -- seuil=$threshold%")
         println("=".repeat(110))
+
+        // ── Rapport Markdown (CI) ─────────────────────────────────────────
+        val md = buildMarkdown(cases, failures.map { Triple(it.case, it.issues, it.got) }, scorePct)
+        reportFile?.let { path ->
+            File(path).also { it.parentFile?.mkdirs() }.writeText(md)
+            println("Rapport Markdown ecrit : $path")
+        }
 
         // ── Détail des échecs (affiché même si on passe le seuil) ────────
         if (failures.isNotEmpty()) {
             val sb = StringBuilder()
-            sb.appendLine("\n${failures.size} cas en échec :")
+            sb.appendLine("\n${failures.size} cas en echec :")
             failures.forEach { (case, issues, got) ->
                 sb.appendLine("\n  [${case.category}] ${case.text.take(80)}")
                 sb.appendLine("  Note   : ${case.note}")
                 sb.appendLine("  Obtenu : ${got.map { Triple(it.nerType, it.nerHint, it.text) }}")
-                issues.forEach { sb.appendLine("  ⚠  $it") }
+                issues.forEach { sb.appendLine("  !  $it") }
             }
-            println(sb)   // toujours logué en console
+            println(sb)
 
             if (scorePct < threshold) {
                 fail(
@@ -250,9 +309,8 @@ class NerCandidatesBatchIT {
                     "($ok/${cases.size} OK)\n$sb"
                 )
             } else {
-                println("⚠  $scorePct% ≥ seuil $threshold% — test PASSÉ malgré ${failures.size} cas KO")
+                println("!  $scorePct% >= seuil $threshold% -- test PASSE malgre ${failures.size} cas KO")
             }
         }
     }
 }
-
