@@ -11,43 +11,39 @@ permissions:
 
 jobs:
   build:
-    name: Build & Test (JVM ${{ matrix.java }})
+    name: Build & Test (JVM 21)
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        java: [ '17', '21' ]
 
     steps:
       # ── Checkout ────────────────────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          lfs: true          # télécharge les pointeurs LFS (modèles ONNX)
+          lfs: false        # modèles ONNX non nécessaires pour compiler/tester
           fetch-depth: 0
 
       # ── Java ────────────────────────────────────────────────────────────────
-      - name: Set up JDK ${{ matrix.java }}
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: ${{ matrix.java }}
+          java-version: '21'
           distribution: temurin
 
       # ── Gradle cache ────────────────────────────────────────────────────────
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # ── Build ────────────────────────────────────────────────────────────────
       - name: Build all modules
-        run: ./gradlew build -x test --no-daemon --parallel
+        run: ./gradlew build -x test --no-daemon --parallel --stacktrace
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
 
       # ── Tests ───────────────────────────────────────────────────────────────
       - name: Run tests
-        run: ./gradlew test --no-daemon --continue
+        run: ./gradlew test --no-daemon --continue --stacktrace
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
 
@@ -56,7 +52,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-reports-jdk${{ matrix.java }}
+          name: test-reports-jdk21
           path: '**/build/reports/tests/'
           retention-days: 7
-

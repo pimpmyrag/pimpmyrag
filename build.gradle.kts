@@ -45,6 +45,10 @@ allprojects {
     group = "com.pimpmyrag"
     version = "1.0.0"
 
+    extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension> {
+        jvmToolchain(21)
+    }
+
     tasks.withType<Jar> {
         archiveBaseName.set(project.path.substring(1).replace(":", "-"))
     }
