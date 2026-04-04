@@ -1,0 +1,2 @@
+rag.connectors.ud.stanza.config.OnnxNerAutoConfiguration
+rag.connectors.ner.onnx.config.OnnxLabelNerAutoConfiguration
