@@ -23,7 +23,8 @@ dependencies {
     runtimeOnly(libs.onnx.runtime)
 //    runtimeOnly(libs.onnxruntime.native)
 
-
+    testImplementation(kotlin("test"))
+    testImplementation(libs.junit.jupiter)
 }
 
 tasks.withType<Jar> {
