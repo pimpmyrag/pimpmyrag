@@ -1,0 +1,763 @@
+{
+  "schema_version": "3.0",
+  "created_at": "2026-02-06T15:30:00Z",
+  "embedding_model": "intfloat/multilingual-e5-large",
+  "description": "Dataset de test pour la taxonomie réduite (6 catégories, 30 sous-types)",
+  "test_cases": [
+    {
+      "id": "birth_01",
+      "sentence": "Jeanne d'Arc est née vers 1412 à Domrémy, en Lorraine.",
+      "expected": {
+        "category": "lifecycle",
+        "subType": "birth",
+        "event": 0.85,
+        "temporal_explicit": 0.45,
+        "birth": 0.88
+      }
+    },
+    {
+      "id": "birth_02",
+      "sentence": "L'enfant vint au monde le 3 mai 1785 à la maternité de Lyon.",
+      "expected": {
+        "category": "lifecycle",
+        "subType": "birth",
+        "event": 0.92,
+        "temporal_explicit": 0.95,
+        "birth": 0.91
+      }
+    },
+    {
+      "id": "baptism_01",
+      "sentence": "Marie-Antoinette fut baptisée le 2 novembre 1755 à la Hofburg de Vienne.",
+      "expected": {
+        "category": "lifecycle",
+        "subType": "baptism",
+        "event": 0.90,
+        "temporal_explicit": 0.92,
+        "baptism": 0.89
+      }
+    },
+    {
+      "id": "baptism_02",
+      "sentence": "Le nourrisson reçut le sacrement à la paroisse Saint-Martin le 14 juin 1820.",
+      "expected": {
+        "category": "lifecycle",
+        "subType": "baptism",
+        "event": 0.91,
+        "temporal_explicit": 0.93,
+        "baptism": 0.88
+      }
+    },
+    {
+      "id": "marriage_01",
+      "sentence": "Louis XVI et Marie-Antoinette se sont mariés le 16 mai 1770 à Versailles.",
+      "expected": {
+        "category": "lifecycle",
+        "subType": "marriage",
+        "event": 0.92,
+        "temporal_explicit": 0.95,
+        "marriage": 0.90
+      }
+    },
+    {
+      "id": "marriage_02",
+      "sentence": "Le couple contracta mariage devant témoins le 8 mars 1804 à la mairie.",
+      "expected": {
+        "category": "lifecycle",
+        "subType": "marriage",
+        "event": 0.93,
+        "temporal_explicit": 0.94,
+        "marriage": 0.89
+      }
+    },
+    {
+      "id": "death_01",
+      "sentence": "Napoléon Bonaparte est décédé le 5 mai 1821 à Sainte-Hélène.",
+      "expected": {
+        "category": "lifecycle",
+        "subType": "death",
+        "event": 0.95,
+        "temporal_explicit": 0.96,
+        "death": 0.93
+      }
+    },
+    {
+      "id": "death_02",
+      "sentence": "Le roi expira suite à ses blessures le 12 janvier 1793 à 10h.",
+      "expected": {
+        "category": "lifecycle",
+        "subType": "death",
+        "event": 0.94,
+        "temporal_explicit": 0.95,
+        "death": 0.92
+      }
+    },
+    {
+      "id": "burial_01",
+      "sentence": "La dépouille fut inhumée au cimetière du Père-Lachaise le 8 mai 1821.",
+      "expected": {
+        "category": "lifecycle",
+        "subType": "burial",
+        "event": 0.93,
+        "temporal_explicit": 0.94,
+        "burial": 0.90
+      }
+    },
+    {
+      "id": "burial_02",
+      "sentence": "L'enterrement eut lieu en présence de la famille le 4 juin 1830 à 14h.",
+      "expected": {
+        "category": "lifecycle",
+        "subType": "burial",
+        "event": 0.92,
+        "temporal_explicit": 0.95,
+        "burial": 0.89
+      }
+    },
+    {
+      "id": "divorce_01",
+      "sentence": "Le divorce fut prononcé par le tribunal le 15 décembre 1809.",
+      "expected": {
+        "category": "lifecycle",
+        "subType": "divorce",
+        "event": 0.91,
+        "temporal_explicit": 0.93,
+        "divorce": 0.88
+      }
+    },
+    {
+      "id": "dissolution_01",
+      "sentence": "Le parlement fut dissous par décret royal le 3 juin 1830.",
+      "expected": {
+        "category": "governance",
+        "subType": "dissolution",
+        "event": 0.93,
+        "temporal_explicit": 0.94,
+        "dissolution": 0.91
+      }
+    },
+    {
+      "id": "dissolution_02",
+      "sentence": "L'assemblée législative cessa ses fonctions à minuit le 2 décembre 1851.",
+      "expected": {
+        "category": "governance",
+        "subType": "dissolution",
+        "event": 0.92,
+        "temporal_explicit": 0.96,
+        "dissolution": 0.90
+      }
+    },
+    {
+      "id": "coup_01",
+      "sentence": "Le coup d'État du 18 Brumaire an VIII renversa le Directoire le 9 novembre 1799.",
+      "expected": {
+        "category": "governance",
+        "subType": "coup",
+        "event": 0.96,
+        "temporal_explicit": 0.95,
+        "coup": 0.94
+      }
+    },
+    {
+      "id": "coup_02",
+      "sentence": "La junte militaire s'empara du pouvoir à l'aube du 2 décembre 1851.",
+      "expected": {
+        "category": "governance",
+        "subType": "coup",
+        "event": 0.95,
+        "temporal_explicit": 0.93,
+        "coup": 0.92
+      }
+    },
+    {
+      "id": "proclamation_01",
+      "sentence": "La République fut proclamée le 22 septembre 1792 à Paris.",
+      "expected": {
+        "category": "governance",
+        "subType": "proclamation",
+        "event": 0.94,
+        "temporal_explicit": 0.95,
+        "proclamation": 0.92
+      }
+    },
+    {
+      "id": "proclamation_02",
+      "sentence": "L'indépendance fut proclamée solennellement le 4 juillet 1776 à Philadelphie.",
+      "expected": {
+        "category": "governance",
+        "subType": "proclamation",
+        "event": 0.95,
+        "temporal_explicit": 0.96,
+        "proclamation": 0.93
+      }
+    },
+    {
+      "id": "oath_01",
+      "sentence": "Napoléon prêta serment comme empereur le 2 décembre 1804 à Notre-Dame.",
+      "expected": {
+        "category": "governance",
+        "subType": "oath",
+        "event": 0.94,
+        "temporal_explicit": 0.95,
+        "oath": 0.91
+      }
+    },
+    {
+      "id": "oath_02",
+      "sentence": "Le ministre prononça le serment d'investiture devant l'assemblée à 10h.",
+      "expected": {
+        "category": "governance",
+        "subType": "oath",
+        "event": 0.93,
+        "temporal_explicit": 0.78,
+        "oath": 0.90
+      }
+    },
+    {
+      "id": "decree_01",
+      "sentence": "Le président ordonna un couvre-feu national le 14 juillet 1940 à 20h.",
+      "expected": {
+        "category": "governance",
+        "subType": "decree",
+        "event": 0.92,
+        "temporal_explicit": 0.94,
+        "decree": 0.89
+      }
+    },
+    {
+      "id": "decree_02",
+      "sentence": "L'ordonnance présidentielle entra en vigueur à minuit le 5 août 1944.",
+      "expected": {
+        "category": "governance",
+        "subType": "decree",
+        "event": 0.91,
+        "temporal_explicit": 0.96,
+        "decree": 0.88
+      }
+    },
+    {
+      "id": "election_01",
+      "sentence": "L'élection présidentielle se déroula le 10 décembre 1848 en France.",
+      "expected": {
+        "category": "governance",
+        "subType": "election",
+        "event": 0.93,
+        "temporal_explicit": 0.94,
+        "election": 0.90
+      }
+    },
+    {
+      "id": "election_02",
+      "sentence": "Le scrutin pour renouveler l'assemblée eut lieu le 21 octobre 1945.",
+      "expected": {
+        "category": "governance",
+        "subType": "election",
+        "event": 0.92,
+        "temporal_explicit": 0.95,
+        "election": 0.89
+      }
+    },
+    {
+      "id": "battle_01",
+      "sentence": "La bataille de Waterloo eut lieu le 18 juin 1815 près de Bruxelles.",
+      "expected": {
+        "category": "conflict",
+        "subType": "battle",
+        "event": 0.94,
+        "temporal_explicit": 0.95,
+        "battle": 0.92
+      }
+    },
+    {
+      "id": "battle_02",
+      "sentence": "Les forces s'affrontèrent durant toute la journée du 2 décembre 1805 à Austerlitz.",
+      "expected": {
+        "category": "conflict",
+        "subType": "battle",
+        "event": 0.95,
+        "temporal_explicit": 0.96,
+        "battle": 0.93
+      }
+    },
+    {
+      "id": "attack_01",
+      "sentence": "Les rebelles attaquèrent la position fortifiée à l'aube du 14 juillet 1789.",
+      "expected": {
+        "category": "conflict",
+        "subType": "attack",
+        "event": 0.93,
+        "temporal_explicit": 0.92,
+        "attack": 0.91
+      }
+    },
+    {
+      "id": "attack_02",
+      "sentence": "L'assaut fut lancé contre la Bastille à 13h30 le 14 juillet 1789.",
+      "expected": {
+        "category": "conflict",
+        "subType": "attack",
+        "event": 0.94,
+        "temporal_explicit": 0.96,
+        "attack": 0.92
+      }
+    },
+    {
+      "id": "siege_01",
+      "sentence": "Le siège d'Orléans dura du 12 octobre 1428 au 8 mai 1429.",
+      "expected": {
+        "category": "conflict",
+        "subType": "siege",
+        "event": 0.92,
+        "temporal_explicit": 0.94,
+        "siege": 0.90
+      }
+    },
+    {
+      "id": "siege_02",
+      "sentence": "La cité fut assiégée pendant quarante jours à partir du 3 mars 1814.",
+      "expected": {
+        "category": "conflict",
+        "subType": "siege",
+        "event": 0.91,
+        "temporal_explicit": 0.92,
+        "siege": 0.89
+      }
+    },
+    {
+      "id": "bombardment_01",
+      "sentence": "Le pilonnage d'artillerie débuta à 5h le 21 septembre 1914 sur le front.",
+      "expected": {
+        "category": "conflict",
+        "subType": "bombardment",
+        "event": 0.93,
+        "temporal_explicit": 0.95,
+        "bombardment": 0.91
+      }
+    },
+    {
+      "id": "bombardment_02",
+      "sentence": "Les frappes aériennes détruisirent plusieurs bâtiments le 6 juin 1944 à l'aube.",
+      "expected": {
+        "category": "conflict",
+        "subType": "bombardment",
+        "event": 0.94,
+        "temporal_explicit": 0.93,
+        "bombardment": 0.92
+      }
+    },
+    {
+      "id": "skirmish_01",
+      "sentence": "Une escarmouche éclata près du pont à midi le 18 mars 1871.",
+      "expected": {
+        "category": "conflict",
+        "subType": "skirmish",
+        "event": 0.90,
+        "temporal_explicit": 0.94,
+        "skirmish": 0.87
+      }
+    },
+    {
+      "id": "skirmish_02",
+      "sentence": "Un accrochage opposa les patrouilles à la lisière de la forêt vers 15h.",
+      "expected": {
+        "category": "conflict",
+        "subType": "skirmish",
+        "event": 0.89,
+        "temporal_explicit": 0.75,
+        "skirmish": 0.86
+      }
+    },
+    {
+      "id": "trial_opening_01",
+      "sentence": "Le procès de Jeanne d'Arc s'ouvrit le 21 février 1431 à Rouen.",
+      "expected": {
+        "category": "legal",
+        "subType": "trial_opening",
+        "event": 0.93,
+        "temporal_explicit": 0.95,
+        "trial_opening": 0.91
+      }
+    },
+    {
+      "id": "trial_opening_02",
+      "sentence": "L'audience inaugurale débuta à 9h devant la cour d'assises le 3 mai 1793.",
+      "expected": {
+        "category": "legal",
+        "subType": "trial_opening",
+        "event": 0.92,
+        "temporal_explicit": 0.96,
+        "trial_opening": 0.90
+      }
+    },
+    {
+      "id": "conviction_01",
+      "sentence": "Louis XVI fut condamné à mort le 17 janvier 1793 par la Convention.",
+      "expected": {
+        "category": "legal",
+        "subType": "conviction",
+        "event": 0.95,
+        "temporal_explicit": 0.96,
+        "conviction": 0.93
+      }
+    },
+    {
+      "id": "conviction_02",
+      "sentence": "Le tribunal prononça une peine de dix ans de réclusion le 12 juin 1832.",
+      "expected": {
+        "category": "legal",
+        "subType": "conviction",
+        "event": 0.94,
+        "temporal_explicit": 0.95,
+        "conviction": 0.92
+      }
+    },
+    {
+      "id": "acquittal_01",
+      "sentence": "L'accusé fut acquitté faute de preuves le 8 mars 1815 à 11h.",
+      "expected": {
+        "category": "legal",
+        "subType": "acquittal",
+        "event": 0.92,
+        "temporal_explicit": 0.94,
+        "acquittal": 0.90
+      }
+    },
+    {
+      "id": "acquittal_02",
+      "sentence": "Le prévenu fut innocenté par le jury le 14 juillet 1820 à la cour.",
+      "expected": {
+        "category": "legal",
+        "subType": "acquittal",
+        "event": 0.91,
+        "temporal_explicit": 0.93,
+        "acquittal": 0.89
+      }
+    },
+    {
+      "id": "appeal_01",
+      "sentence": "La cour d'appel annula le jugement initial le 5 septembre 1825.",
+      "expected": {
+        "category": "legal",
+        "subType": "appeal",
+        "event": 0.93,
+        "temporal_explicit": 0.94,
+        "appeal": 0.91
+      }
+    },
+    {
+      "id": "appeal_02",
+      "sentence": "Le verdict fut réformé en appel le 12 novembre 1830 par la juridiction supérieure.",
+      "expected": {
+        "category": "legal",
+        "subType": "appeal",
+        "event": 0.92,
+        "temporal_explicit": 0.95,
+        "appeal": 0.90
+      }
+    },
+    {
+      "id": "dismissal_01",
+      "sentence": "Le juge prononça un non-lieu en audience le 18 avril 1835.",
+      "expected": {
+        "category": "legal",
+        "subType": "dismissal",
+        "event": 0.91,
+        "temporal_explicit": 0.93,
+        "dismissal": 0.88
+      }
+    },
+    {
+      "id": "dismissal_02",
+      "sentence": "L'affaire fut classée sans suite le 5 mai 1840 faute de charges suffisantes.",
+      "expected": {
+        "category": "legal",
+        "subType": "dismissal",
+        "event": 0.90,
+        "temporal_explicit": 0.92,
+        "dismissal": 0.87
+      }
+    },
+    {
+      "id": "speech_01",
+      "sentence": "Le président prononça un discours solennel le 18 juin 1940 à la radio de Londres.",
+      "expected": {
+        "category": "communication",
+        "subType": "speech",
+        "event": 0.94,
+        "temporal_explicit": 0.95,
+        "speech": 0.92
+      }
+    },
+    {
+      "id": "speech_02",
+      "sentence": "L'allocution présidentielle fut retransmise en direct à 20h le 8 mai 1945.",
+      "expected": {
+        "category": "communication",
+        "subType": "speech",
+        "event": 0.93,
+        "temporal_explicit": 0.96,
+        "speech": 0.91
+      }
+    },
+    {
+      "id": "announcement_01",
+      "sentence": "La porte-parole annonça la nouvelle mesure lors d'une conférence le 14 juillet 1789.",
+      "expected": {
+        "category": "communication",
+        "subType": "announcement",
+        "event": 0.92,
+        "temporal_explicit": 0.94,
+        "announcement": 0.90
+      }
+    },
+    {
+      "id": "announcement_02",
+      "sentence": "L'annonce officielle fut faite à 10h devant la presse le 2 décembre 1804.",
+      "expected": {
+        "category": "communication",
+        "subType": "announcement",
+        "event": 0.91,
+        "temporal_explicit": 0.95,
+        "announcement": 0.89
+      }
+    },
+    {
+      "id": "press_conference_01",
+      "sentence": "Le ministre confirma la suspension lors d'un point presse à 15h le 3 juin 1958.",
+      "expected": {
+        "category": "communication",
+        "subType": "press_conference",
+        "event": 0.93,
+        "temporal_explicit": 0.96,
+        "press_conference": 0.91
+      }
+    },
+    {
+      "id": "press_conference_02",
+      "sentence": "La conférence de presse réunit les journalistes à 11h au ministère le 10 mai 1981.",
+      "expected": {
+        "category": "communication",
+        "subType": "press_conference",
+        "event": 0.92,
+        "temporal_explicit": 0.95,
+        "press_conference": 0.90
+      }
+    },
+    {
+      "id": "statement_01",
+      "sentence": "Le gouvernement publia un communiqué officiel le 12 novembre 1918 à 14h.",
+      "expected": {
+        "category": "communication",
+        "subType": "statement",
+        "event": 0.91,
+        "temporal_explicit": 0.95,
+        "statement": 0.89
+      }
+    },
+    {
+      "id": "statement_02",
+      "sentence": "Le chef de service déclara l'ouverture d'une enquête à 18h le 6 février 1934.",
+      "expected": {
+        "category": "communication",
+        "subType": "statement",
+        "event": 0.90,
+        "temporal_explicit": 0.94,
+        "statement": 0.88
+      }
+    },
+    {
+      "id": "broadcast_01",
+      "sentence": "L'agence diffusa une alerte publique sur toutes les fréquences à 8h le 3 septembre 1939.",
+      "expected": {
+        "category": "communication",
+        "subType": "broadcast",
+        "event": 0.92,
+        "temporal_explicit": 0.96,
+        "broadcast": 0.90
+      }
+    },
+    {
+      "id": "broadcast_02",
+      "sentence": "La retransmission en direct débuta à 19h sur les canaux officiels le 14 juillet 1790.",
+      "expected": {
+        "category": "communication",
+        "subType": "broadcast",
+        "event": 0.91,
+        "temporal_explicit": 0.95,
+        "broadcast": 0.89
+      }
+    },
+    {
+      "id": "foundation_01",
+      "sentence": "ouis XIV fonda l'Académie royale de danse le 15 mars 1661 à Paris.L",
+      "expected": {
+        "category": "creation_destruction",
+        "subType": "foundation",
+        "event": 0.93,
+        "temporal_explicit": 0.95,
+        "foundation": 0.91
+      }
+    },
+    {
+      "id": "foundation_02",
+      "sentence": "La Société des Nations fut créée le 10 janvier 1920 à Genève.",
+      "expected": {
+        "category": "creation_destruction",
+        "subType": "foundation",
+        "event": 0.94,
+        "temporal_explicit": 0.96,
+        "foundation": 0.92
+      }
+    },
+    {
+      "id": "inauguration_01",
+      "sentence": "Le musée du Louvre inaugura une nouvelle aile le 6 août 1793 à 9h.",
+      "expected": {
+        "category": "creation_destruction",
+        "subType": "inauguration",
+        "event": 0.92,
+        "temporal_explicit": 0.95,
+        "inauguration": 0.90
+      }
+    },
+    {
+      "id": "inauguration_02",
+      "sentence": "L'ouverture solennelle de la tour Eiffel eut lieu le 31 mars 1889 à midi.",
+      "expected": {
+        "category": "creation_destruction",
+        "subType": "inauguration",
+        "event": 0.93,
+        "temporal_explicit": 0.96,
+        "inauguration": 0.91
+      }
+    },
+    {
+      "id": "fire_01",
+      "sentence": "L'incendie ravagea le château de Tuileries le 23 mai 1871 durant la nuit.",
+      "expected": {
+        "category": "creation_destruction",
+        "subType": "fire",
+        "event": 0.94,
+        "temporal_explicit": 0.93,
+        "fire": 0.92
+      }
+    },
+    {
+      "id": "fire_02",
+      "sentence": "Le feu détruisit plusieurs entrepôts à 3h du matin le 4 septembre 1870.",
+      "expected": {
+        "category": "creation_destruction",
+        "subType": "fire",
+        "event": 0.93,
+        "temporal_explicit": 0.96,
+        "fire": 0.91
+      }
+    },
+    {
+      "id": "earthquake_01",
+      "sentence": "Le séisme détruisit plus de 300 habitations à l'aube du 11 juin 1909 en Provence.",
+      "expected": {
+        "category": "creation_destruction",
+        "subType": "earthquake",
+        "event": 0.95,
+        "temporal_explicit": 0.94,
+        "earthquake": 0.93
+      }
+    },
+    {
+      "id": "earthquake_02",
+      "sentence": "Le tremblement de terre rasa le quartier historique à 5h le 16 août 1812.",
+      "expected": {
+        "category": "creation_destruction",
+        "subType": "earthquake",
+        "event": 0.94,
+        "temporal_explicit": 0.96,
+        "earthquake": 0.92
+      }
+    },
+    {
+      "id": "demolition_01",
+      "sentence": "La démolition de la Bastille débuta le 14 juillet 1789 à 16h.",
+      "expected": {
+        "category": "creation_destruction",
+        "subType": "demolition",
+        "event": 0.93,
+        "temporal_explicit": 0.96,
+        "demolition": 0.91
+      }
+    },
+    {
+      "id": "demolition_02",
+      "sentence": "Le dynamitage de la tour réduisit l'édifice en décombres à midi le 3 mai 1871.",
+      "expected": {
+        "category": "creation_destruction",
+        "subType": "demolition",
+        "event": 0.94,
+        "temporal_explicit": 0.96,
+        "demolition": 0.92
+      }
+    },
+    {
+      "id": "negative_01",
+      "sentence": "Il fait beau aujourd'hui à Paris.",
+      "expected": {
+        "category": null,
+        "subType": null,
+        "event": 0.25,
+        "birth": 0.20,
+        "battle": 0.18,
+        "speech": 0.22
+      }
+    },
+    {
+      "id": "negative_02",
+      "sentence": "Je pense que Napoléon était un grand stratège militaire.",
+      "expected": {
+        "category": null,
+        "subType": null,
+        "event": 0.35,
+        "opinion": 0.85,
+        "battle": 0.30,
+        "speech": 0.28
+      }
+    },
+    {
+      "id": "negative_03",
+      "sentence": "Les batailles étaient fréquentes au Moyen Âge en Europe.",
+      "expected": {
+        "category": null,
+        "subType": null,
+        "event": 0.40,
+        "factual": 0.65,
+        "battle": 0.38,
+        "conflict": 0.35
+      }
+    },
+    {
+      "id": "edge_01",
+      "sentence": "Marie pourrait être promue directrice l'année prochaine.",
+      "expected": {
+        "category": null,
+        "subType": null,
+        "event": 0.45,
+        "future_prediction": 0.82,
+        "uncertainty": 0.78,
+        "oath": 0.35
+      }
+    },
+    {
+      "id": "edge_02",
+      "sentence": "Le serveur a crashé hier soir vers 22h, affectant environ 5000 utilisateurs.",
+      "expected": {
+        "category": null,
+        "subType": null,
+        "event": 0.92,
+        "incident": 0.89,
+        "impact": 0.85,
+        "temporal_explicit": 0.55,
+        "fire": 0.42,
+        "demolition": 0.40
+      }
+    }
+  ]
+}

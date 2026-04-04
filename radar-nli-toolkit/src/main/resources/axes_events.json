@@ -1,0 +1,559 @@
+{
+  "schema_version": "3.1",
+  "created_at": "2026-02-06T16:30:00Z",
+  "embedding_model": "intfloat/multilingual-e5-large",
+  "categories": {
+    "lifecycle": ["birth", "marriage", "baptism", "death", "burial", "divorce"],
+    "governance": ["dissolution", "coup", "proclamation", "oath", "decree", "election"],
+    "conflict": ["battle", "attack", "siege", "bombardment", "skirmish"],
+    "legal": ["trial_opening", "conviction", "acquittal", "appeal", "dismissal"],
+    "communication": ["speech", "announcement", "press_conference", "statement", "broadcast"],
+    "creation_destruction": ["foundation", "inauguration", "fire", "earthquake", "demolition"]
+  },
+  "axes": [
+    {
+      "name": "birth",
+      "positive_examples": [
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois.",
+        "ÉVÉNEMENT: Le nourrisson vint au monde à 3h du matin.",
+        "ÉVÉNEMENT: L'accouchement eut lieu au domicile familial.",
+        "ÉVÉNEMENT: La naissance fut enregistrée à l'état civil.",
+        "ÉVÉNEMENT: Le bébé naquit prématurément à la clinique."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le tribunal condamna le prévenu à dix ans.",
+        "ÉVÉNEMENT: Les troupes engagèrent le combat à l'aube.",
+        "ÉVÉNEMENT: Le président prononça un discours diffusé en direct.",
+        "ÉVÉNEMENT: L'incendie ravagea le marché couvert.",
+        "ÉVÉNEMENT: Le parlement fut dissous par décret."
+      ]
+    },
+    {
+      "name": "marriage",
+      "positive_examples": [
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: L'union fut célébrée à la mairie à 11h.",
+        "ÉVÉNEMENT: Les époux contractèrent mariage devant témoins.",
+        "ÉVÉNEMENT: La cérémonie nuptiale eut lieu à l'église.",
+        "ÉVÉNEMENT: Le mariage fut consacré selon le rite traditionnel."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le procès s'ouvrit devant la cour à 9h.",
+        "ÉVÉNEMENT: Les rebelles attaquèrent la position avancée.",
+        "ÉVÉNEMENT: Le musée inaugura une nouvelle aile à 9h.",
+        "ÉVÉNEMENT: Le séisme détruisit plus de 300 habitations.",
+        "ÉVÉNEMENT: La république fut proclamée à l'issue du scrutin."
+      ]
+    },
+    {
+      "name": "baptism",
+      "positive_examples": [
+        "ÉVÉNEMENT: Le nourrisson fut baptisé à la paroisse locale.",
+        "ÉVÉNEMENT: Le baptême eut lieu en présence du parrain.",
+        "ÉVÉNEMENT: L'enfant reçut le sacrement à l'église paroissiale.",
+        "ÉVÉNEMENT: La cérémonie baptismale fut célébrée le dimanche.",
+        "ÉVÉNEMENT: Le prêtre administra le baptême à 15h."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le tribunal condamna le prévenu à dix ans.",
+        "ÉVÉNEMENT: Les bombardements visèrent les dépôts logistiques.",
+        "ÉVÉNEMENT: Le ministère publia un communiqué officiel.",
+        "ÉVÉNEMENT: L'entreprise fut fondée le 14 du mois.",
+        "ÉVÉNEMENT: Le régime instaura une junte militaire."
+      ]
+    },
+    {
+      "name": "death",
+      "positive_examples": [
+        "ÉVÉNEMENT: La personne décéda à son domicile dans la nuit.",
+        "ÉVÉNEMENT: Le défunt expira suite à ses blessures à 10h.",
+        "ÉVÉNEMENT: Le trépas survint à l'hôpital le 5 du mois.",
+        "ÉVÉNEMENT: La mort fut constatée par le médecin à 8h.",
+        "ÉVÉNEMENT: Le patient s'éteignit paisiblement à l'aube."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: Les unités engagèrent le combat à l'aube.",
+        "ÉVÉNEMENT: La cour d'appel annula le jugement initial.",
+        "ÉVÉNEMENT: Le président prononça un discours solennel.",
+        "ÉVÉNEMENT: L'incendie ravagea le marché couvert."
+      ]
+    },
+    {
+      "name": "burial",
+      "positive_examples": [
+        "ÉVÉNEMENT: La dépouille fut inhumée au cimetière communal.",
+        "ÉVÉNEMENT: L'enterrement eut lieu en présence de la famille.",
+        "ÉVÉNEMENT: Les obsèques se déroulèrent à la paroisse à 14h.",
+        "ÉVÉNEMENT: Le corps fut enseveli au caveau familial.",
+        "ÉVÉNEMENT: La mise en terre eut lieu le 8 du mois."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le parlement fut dissous par décret.",
+        "ÉVÉNEMENT: Les rebelles attaquèrent la position avancée.",
+        "ÉVÉNEMENT: L'accusé fut acquitté faute de preuves.",
+        "ÉVÉNEMENT: Le directeur confirma la suspension lors d'un point presse.",
+        "ÉVÉNEMENT: Le séisme détruisit plus de 300 habitations."
+      ]
+    },
+    {
+      "name": "divorce",
+      "positive_examples": [
+        "ÉVÉNEMENT: La séparation fut actée par décision judiciaire.",
+        "ÉVÉNEMENT: Le divorce fut prononcé par le tribunal à 11h.",
+        "ÉVÉNEMENT: La rupture du mariage fut entérinée le 3 du mois.",
+        "ÉVÉNEMENT: La dissolution du lien conjugal eut lieu devant le juge.",
+        "ÉVÉNEMENT: L'union fut rompue par jugement définitif."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois.",
+        "ÉVÉNEMENT: Les troupes engagèrent le combat à l'aube.",
+        "ÉVÉNEMENT: La république fut proclamée à l'issue du scrutin.",
+        "ÉVÉNEMENT: Le musée inaugura une nouvelle aile à 9h.",
+        "ÉVÉNEMENT: L'incendie ravagea le marché couvert."
+      ]
+    },
+    {
+      "name": "dissolution",
+      "positive_examples": [
+        "ÉVÉNEMENT: Le parlement fut dissous par décret royal.",
+        "ÉVÉNEMENT: L'assemblée législative cessa ses fonctions à minuit.",
+        "ÉVÉNEMENT: La dissolution de la chambre fut prononcée le 3 du mois.",
+        "ÉVÉNEMENT: Le conseil fut dissout par ordonnance présidentielle.",
+        "ÉVÉNEMENT: L'institution parlementaire prit fin par décision exécutive."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: Les bombardements visèrent les dépôts logistiques.",
+        "ÉVÉNEMENT: Le tribunal condamna le prévenu à dix ans.",
+        "ÉVÉNEMENT: Le président prononça un discours diffusé en direct.",
+        "ÉVÉNEMENT: L'incendie ravagea le marché couvert."
+      ]
+    },
+    {
+      "name": "coup",
+      "positive_examples": [
+        "ÉVÉNEMENT: Le régime instaura une junte militaire à minuit.",
+        "ÉVÉNEMENT: Le coup d'État renversa le gouvernement à l'aube.",
+        "ÉVÉNEMENT: La prise de pouvoir par les forces armées eut lieu le 2 du mois.",
+        "ÉVÉNEMENT: Le putsch militaire s'empara du palais présidentiel.",
+        "ÉVÉNEMENT: L'insurrection porta les rebelles au pouvoir à 6h."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois.",
+        "ÉVÉNEMENT: Le procès s'ouvrit devant la cour à 9h.",
+        "ÉVÉNEMENT: La porte-parole annonça la nouvelle mesure lors d'une conférence.",
+        "ÉVÉNEMENT: L'entreprise fut fondée le 14 du mois.",
+        "ÉVÉNEMENT: Le séisme détruisit plus de 300 habitations."
+      ]
+    },
+    {
+      "name": "proclamation",
+      "positive_examples": [
+        "ÉVÉNEMENT: La république fut proclamée à l'issue du scrutin.",
+        "ÉVÉNEMENT: L'indépendance fut déclarée solennellement à midi.",
+        "ÉVÉNEMENT: La proclamation de l'empire eut lieu le 2 du mois.",
+        "ÉVÉNEMENT: L'État souverain fut officiellement annoncé devant l'assemblée.",
+        "ÉVÉNEMENT: La promulgation du nouveau régime débuta à 10h."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: Les rebelles attaquèrent la position avancée.",
+        "ÉVÉNEMENT: L'accusé fut acquitté faute de preuves.",
+        "ÉVÉNEMENT: L'incendie ravagea le marché couvert.",
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois."
+      ]
+    },
+    {
+      "name": "oath",
+      "positive_examples": [
+        "ÉVÉNEMENT: La ministre prêta serment devant l'assemblée à 10h.",
+        "ÉVÉNEMENT: L'assermentation eut lieu au palais à 10h.",
+        "ÉVÉNEMENT: Le magistrat prêta serment de fidélité à la constitution.",
+        "ÉVÉNEMENT: La cérémonie de serment se déroula en séance solennelle.",
+        "ÉVÉNEMENT: L'investiture officielle débuta par le serment à 9h."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Les bombardements visèrent les dépôts logistiques.",
+        "ÉVÉNEMENT: Le nourrisson fut baptisé à la paroisse locale.",
+        "ÉVÉNEMENT: La dépouille fut inhumée au cimetière communal.",
+        "ÉVÉNEMENT: Le séisme détruisit plus de 300 habitations.",
+        "ÉVÉNEMENT: Le musée inaugura une nouvelle aile à 9h."
+      ]
+    },
+    {
+      "name": "decree",
+      "positive_examples": [
+        "ÉVÉNEMENT: Le président ordonna un couvre-feu national à 20h.",
+        "ÉVÉNEMENT: Le décret fut promulgué au journal officiel.",
+        "ÉVÉNEMENT: L'ordonnance présidentielle entra en vigueur à minuit.",
+        "ÉVÉNEMENT: La mesure fut décrétée par le chef de l'État.",
+        "ÉVÉNEMENT: Le gouvernement promulgua un arrêté d'urgence."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: Les troupes engagèrent le combat à l'aube.",
+        "ÉVÉNEMENT: Le procès s'ouvrit devant la cour à 9h.",
+        "ÉVÉNEMENT: La porte-parole annonça la nouvelle mesure lors d'une conférence.",
+        "ÉVÉNEMENT: L'incendie ravagea le marché couvert."
+      ]
+    },
+    {
+      "name": "election",
+      "positive_examples": [
+        "ÉVÉNEMENT: Le conseil vota l'adoption du règlement à main levée.",
+        "ÉVÉNEMENT: Le scrutin se déroula dans les bureaux de vote.",
+        "ÉVÉNEMENT: L'élection présidentielle eut lieu le 10 du mois.",
+        "ÉVÉNEMENT: Les électeurs votèrent pour renouveler l'assemblée.",
+        "ÉVÉNEMENT: Le vote parlementaire confirma la nomination à 15h."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois.",
+        "ÉVÉNEMENT: Les rebelles attaquèrent la position avancée.",
+        "ÉVÉNEMENT: Le tribunal condamna le prévenu à dix ans.",
+        "ÉVÉNEMENT: Le président prononça un discours diffusé en direct.",
+        "ÉVÉNEMENT: Le séisme détruisit plus de 300 habitations."
+      ]
+    },
+    {
+      "name": "battle",
+      "positive_examples": [
+        "ÉVÉNEMENT: Les unités engagèrent le combat à l'aube.",
+        "ÉVÉNEMENT: La bataille fit rage durant toute la journée.",
+        "ÉVÉNEMENT: Les forces s'affrontèrent sur le plateau.",
+        "ÉVÉNEMENT: Le combat s'intensifia près de la colline.",
+        "ÉVÉNEMENT: Les troupes livrèrent bataille pendant trois heures."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: Le procès s'ouvrit devant la cour à 9h.",
+        "ÉVÉNEMENT: Le président prononça un discours solennel.",
+        "ÉVÉNEMENT: L'entreprise fut fondée le 14 du mois.",
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois."
+      ]
+    },
+    {
+      "name": "attack",
+      "positive_examples": [
+        "ÉVÉNEMENT: Les rebelles attaquèrent la position avancée.",
+        "ÉVÉNEMENT: L'assaut fut lancé contre les défenses à 6h.",
+        "ÉVÉNEMENT: Les forces offensives prirent d'assaut le fortin.",
+        "ÉVÉNEMENT: L'attaque surprise déstabilisa les défenseurs.",
+        "ÉVÉNEMENT: Les assaillants pénétrèrent dans le périmètre à l'aube."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le nourrisson fut baptisé à la paroisse locale.",
+        "ÉVÉNEMENT: L'accusé fut acquitté faute de preuves.",
+        "ÉVÉNEMENT: Le ministère publia un communiqué officiel.",
+        "ÉVÉNEMENT: Le musée inaugura une nouvelle aile à 9h.",
+        "ÉVÉNEMENT: La personne décéda à son domicile dans la nuit."
+      ]
+    },
+    {
+      "name": "siege",
+      "positive_examples": [
+        "ÉVÉNEMENT: Le siège encercla la ville pendant des semaines.",
+        "ÉVÉNEMENT: L'encerclement débuta à l'aube du 4 du mois.",
+        "ÉVÉNEMENT: La cité fut assiégée durant quarante jours.",
+        "ÉVÉNEMENT: Le blocus empêcha tout ravitaillement de la place forte.",
+        "ÉVÉNEMENT: Les assiégeants maintinrent l'encerclement jusqu'en mars."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: Le tribunal condamna le prévenu à dix ans.",
+        "ÉVÉNEMENT: La porte-parole annonça la nouvelle mesure.",
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois.",
+        "ÉVÉNEMENT: Le musée inaugura une nouvelle aile à 9h."
+      ]
+    },
+    {
+      "name": "bombardment",
+      "positive_examples": [
+        "ÉVÉNEMENT: Les bombardements visèrent les dépôts logistiques.",
+        "ÉVÉNEMENT: Le pilonnage d'artillerie débuta à 5h.",
+        "ÉVÉNEMENT: Les frappes aériennes détruisirent plusieurs bâtiments.",
+        "ÉVÉNEMENT: Le tir de barrage s'abattit sur les positions ennemies.",
+        "ÉVÉNEMENT: L'aviation bombarda les infrastructures durant la nuit."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: Le procès s'ouvrit devant la cour à 9h.",
+        "ÉVÉNEMENT: Le président prononça un discours diffusé en direct.",
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois.",
+        "ÉVÉNEMENT: Le musée inaugura une nouvelle aile à 9h."
+      ]
+    },
+    {
+      "name": "skirmish",
+      "positive_examples": [
+        "ÉVÉNEMENT: Une escarmouche éclata près du pont.",
+        "ÉVÉNEMENT: Un accrochage opposa les patrouilles à midi.",
+        "ÉVÉNEMENT: Une échauffourée survint aux abords du village.",
+        "ÉVÉNEMENT: Un engagement mineur eut lieu à la lisière.",
+        "ÉVÉNEMENT: Des coups de feu furent échangés lors d'une brève confrontation."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: La dépouille fut inhumée au cimetière communal.",
+        "ÉVÉNEMENT: Le parlement fut dissous par décret.",
+        "ÉVÉNEMENT: L'accusé fut acquitté faute de preuves.",
+        "ÉVÉNEMENT: Le ministère publia un communiqué officiel.",
+        "ÉVÉNEMENT: L'entreprise fut fondée le 14 du mois."
+      ]
+    },
+    {
+      "name": "trial_opening",
+      "positive_examples": [
+        "ÉVÉNEMENT: Le procès s'ouvrit devant la cour à 9h.",
+        "ÉVÉNEMENT: L'audience inaugurale débuta en séance publique.",
+        "ÉVÉNEMENT: Le tribunal entama les débats le 3 du mois.",
+        "ÉVÉNEMENT: L'ouverture du procès fut prononcée par le juge.",
+        "ÉVÉNEMENT: La première audience se tint à la cour d'assises."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: Les rebelles attaquèrent la position avancée.",
+        "ÉVÉNEMENT: Le président prononça un discours diffusé en direct.",
+        "ÉVÉNEMENT: L'incendie ravagea le marché couvert.",
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois."
+      ]
+    },
+    {
+      "name": "conviction",
+      "positive_examples": [
+        "ÉVÉNEMENT: Le tribunal condamna le prévenu à dix ans.",
+        "ÉVÉNEMENT: La cour prononça une peine de réclusion.",
+        "ÉVÉNEMENT: Le jugement de condamnation fut rendu à 16h.",
+        "ÉVÉNEMENT: L'accusé reçut une sentence de quinze années.",
+        "ÉVÉNEMENT: La condamnation fut prononcée en audience solennelle."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: La république fut proclamée à l'issue du scrutin.",
+        "ÉVÉNEMENT: Les bombardements visèrent les dépôts logistiques.",
+        "ÉVÉNEMENT: Le nourrisson fut baptisé à la paroisse locale.",
+        "ÉVÉNEMENT: Le musée inaugura une nouvelle aile à 9h.",
+        "ÉVÉNEMENT: La personne décéda à son domicile dans la nuit."
+      ]
+    },
+    {
+      "name": "acquittal",
+      "positive_examples": [
+        "ÉVÉNEMENT: L'accusé fut acquitté faute de preuves.",
+        "ÉVÉNEMENT: Le tribunal prononça l'acquittement du prévenu.",
+        "ÉVÉNEMENT: La relaxe fut ordonnée par le juge à 11h.",
+        "ÉVÉNEMENT: L'inculpé fut innocenté par la cour.",
+        "ÉVÉNEMENT: Le verdict d'acquittement fut rendu le 8 du mois."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Les rebelles attaquèrent la position avancée.",
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: Le président prononça un discours solennel.",
+        "ÉVÉNEMENT: L'incendie ravagea le marché couvert.",
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois."
+      ]
+    },
+    {
+      "name": "appeal",
+      "positive_examples": [
+        "ÉVÉNEMENT: La cour d'appel annula le jugement initial.",
+        "ÉVÉNEMENT: L'appel fut jugé par la juridiction supérieure.",
+        "ÉVÉNEMENT: La cour de cassation infirma la décision de première instance.",
+        "ÉVÉNEMENT: Le verdict fut réformé en appel le 12 du mois.",
+        "ÉVÉNEMENT: La juridiction d'appel confirma le jugement antérieur."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le parlement fut dissous par décret.",
+        "ÉVÉNEMENT: Les troupes engagèrent le combat à l'aube.",
+        "ÉVÉNEMENT: La porte-parole annonça la nouvelle mesure.",
+        "ÉVÉNEMENT: Le séisme détruisit plus de 300 habitations.",
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée."
+      ]
+    },
+    {
+      "name": "dismissal",
+      "positive_examples": [
+        "ÉVÉNEMENT: Le juge prononça un non-lieu en audience.",
+        "ÉVÉNEMENT: L'affaire fut classée sans suite le 5 du mois.",
+        "ÉVÉNEMENT: La procédure fut abandonnée faute de charges.",
+        "ÉVÉNEMENT: Le parquet décida du classement du dossier.",
+        "ÉVÉNEMENT: L'instruction fut close par ordonnance de non-lieu."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Les bombardements visèrent les dépôts logistiques.",
+        "ÉVÉNEMENT: Le nourrisson fut baptisé à la paroisse locale.",
+        "ÉVÉNEMENT: Le président prononça un discours diffusé en direct.",
+        "ÉVÉNEMENT: L'entreprise fut fondée le 14 du mois.",
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois."
+      ]
+    },
+    {
+      "name": "speech",
+      "positive_examples": [
+        "ÉVÉNEMENT: Le président prononça un discours diffusé en direct.",
+        "ÉVÉNEMENT: L'allocution présidentielle fut retransmise à 20h.",
+        "ÉVÉNEMENT: Le chef d'État s'adressa à la nation depuis le palais.",
+        "ÉVÉNEMENT: Le discours solennel dura vingt minutes.",
+        "ÉVÉNEMENT: L'oraison fut prononcée devant l'assemblée."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: Les rebelles attaquèrent la position avancée.",
+        "ÉVÉNEMENT: Le tribunal condamna le prévenu à dix ans.",
+        "ÉVÉNEMENT: L'incendie ravagea le marché couvert.",
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois."
+      ]
+    },
+    {
+      "name": "announcement",
+      "positive_examples": [
+        "ÉVÉNEMENT: La porte-parole annonça la nouvelle mesure lors d'une conférence à 10h.",
+        "ÉVÉNEMENT: L'annonce officielle fut faite en direct.",
+        "ÉVÉNEMENT: Le directeur révéla la décision à la presse.",
+        "ÉVÉNEMENT: La communication de la nouvelle eut lieu à midi.",
+        "ÉVÉNEMENT: L'information fut divulguée publiquement le 7 du mois."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: La dépouille fut inhumée au cimetière communal.",
+        "ÉVÉNEMENT: Les troupes engagèrent le combat à l'aube.",
+        "ÉVÉNEMENT: Le procès s'ouvrit devant la cour à 9h.",
+        "ÉVÉNEMENT: Le séisme détruisit plus de 300 habitations.",
+        "ÉVÉNEMENT: Le musée inaugura une nouvelle aile à 9h."
+      ]
+    },
+    {
+      "name": "press_conference",
+      "positive_examples": [
+        "ÉVÉNEMENT: Le directeur confirma la suspension du projet pendant un point presse.",
+        "ÉVÉNEMENT: La conférence de presse débuta à 15h au ministère.",
+        "ÉVÉNEMENT: Le point médiatique réunit les journalistes à 11h.",
+        "ÉVÉNEMENT: La rencontre avec la presse se tint dans la salle principale.",
+        "ÉVÉNEMENT: Le briefing journalistique eut lieu le 9 du mois."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: Les rebelles attaquèrent la position avancée.",
+        "ÉVÉNEMENT: L'accusé fut acquitté faute de preuves.",
+        "ÉVÉNEMENT: L'incendie ravagea le marché couvert.",
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois."
+      ]
+    },
+    {
+      "name": "statement",
+      "positive_examples": [
+        "ÉVÉNEMENT: Le ministère publia un communiqué officiel le 12 du mois.",
+        "ÉVÉNEMENT: Le chef de service déclara l'ouverture d'une enquête à 18h.",
+        "ÉVÉNEMENT: La déclaration gouvernementale fut diffusée sur les canaux.",
+        "ÉVÉNEMENT: Le communiqué de presse parut le soir même.",
+        "ÉVÉNEMENT: La note officielle fut transmise aux médias à 14h."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Les bombardements visèrent les dépôts logistiques.",
+        "ÉVÉNEMENT: Le nourrisson fut baptisé à la paroisse locale.",
+        "ÉVÉNEMENT: Les troupes engagèrent le combat à l'aube.",
+        "ÉVÉNEMENT: Le musée inaugura une nouvelle aile à 9h.",
+        "ÉVÉNEMENT: La personne décéda à son domicile dans la nuit."
+      ]
+    },
+    {
+      "name": "broadcast",
+      "positive_examples": [
+        "ÉVÉNEMENT: L'agence diffusa une alerte publique sur les canaux officiels.",
+        "ÉVÉNEMENT: La retransmission en direct débuta à 19h.",
+        "ÉVÉNEMENT: Le message fut émis sur toutes les fréquences à 8h.",
+        "ÉVÉNEMENT: La diffusion radiophonique atteignit l'ensemble du territoire.",
+        "ÉVÉNEMENT: L'émission spéciale fut programmée à 21h."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: Le procès s'ouvrit devant la cour à 9h.",
+        "ÉVÉNEMENT: Les rebelles attaquèrent la position avancée.",
+        "ÉVÉNEMENT: L'incendie ravagea le marché couvert.",
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois."
+      ]
+    },
+    {
+      "name": "foundation",
+      "positive_examples": [
+        "ÉVÉNEMENT: L'entreprise fut fondée le 14 du mois à la capitale.",
+        "ÉVÉNEMENT: La création de la société fut actée par statuts.",
+        "ÉVÉNEMENT: L'organisation vit le jour le 3 du mois.",
+        "ÉVÉNEMENT: L'établissement fut institué par décision collective.",
+        "ÉVÉNEMENT: La fondation de l'association eut lieu à 10h."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Les bombardements visèrent les dépôts logistiques.",
+        "ÉVÉNEMENT: Le tribunal condamna le prévenu à dix ans.",
+        "ÉVÉNEMENT: Le président prononça un discours diffusé en direct.",
+        "ÉVÉNEMENT: La personne décéda à son domicile dans la nuit.",
+        "ÉVÉNEMENT: Les rebelles attaquèrent la position avancée."
+      ]
+    },
+    {
+      "name": "inauguration",
+      "positive_examples": [
+        "ÉVÉNEMENT: Le musée inaugura une nouvelle aile à 9h.",
+        "ÉVÉNEMENT: L'ouverture solennelle de l'édifice eut lieu le 6 du mois.",
+        "ÉVÉNEMENT: La cérémonie d'inauguration réunit les autorités.",
+        "ÉVÉNEMENT: Le bâtiment fut officiellement ouvert au public à midi.",
+        "ÉVÉNEMENT: La mise en service de l'infrastructure débuta à 15h."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Les troupes engagèrent le combat à l'aube.",
+        "ÉVÉNEMENT: Le procès s'ouvrit devant la cour à 9h.",
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: L'incendie ravagea le marché couvert.",
+        "ÉVÉNEMENT: La personne décéda à son domicile dans la nuit."
+      ]
+    },
+    {
+      "name": "fire",
+      "positive_examples": [
+        "ÉVÉNEMENT: L'incendie ravagea le marché couvert durant la nuit.",
+        "ÉVÉNEMENT: Le feu détruisit plusieurs entrepôts à 3h.",
+        "ÉVÉNEMENT: L'embrasement consuma l'édifice en quelques heures.",
+        "ÉVÉNEMENT: Les flammes se propagèrent aux bâtiments adjacents.",
+        "ÉVÉNEMENT: Le sinistre réduisit en cendres la halle principale."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: Le procès s'ouvrit devant la cour à 9h.",
+        "ÉVÉNEMENT: Le président prononça un discours solennel.",
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois.",
+        "ÉVÉNEMENT: Le conseil vota l'adoption du règlement."
+      ]
+    },
+    {
+      "name": "earthquake",
+      "positive_examples": [
+        "ÉVÉNEMENT: Le séisme détruisit plus de 300 habitations à l'aube.",
+        "ÉVÉNEMENT: Le tremblement de terre fit s'effondrer plusieurs édifices.",
+        "ÉVÉNEMENT: La secousse tellurique dévasta le centre-ville.",
+        "ÉVÉNEMENT: Le cataclysme rasa le quartier historique à 5h.",
+        "ÉVÉNEMENT: L'onde sismique provoqua l'écroulement de dizaines de structures."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: Le tribunal condamna le prévenu à dix ans.",
+        "ÉVÉNEMENT: La porte-parole annonça la nouvelle mesure.",
+        "ÉVÉNEMENT: Le musée inaugura une nouvelle aile à 9h.",
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois."
+      ]
+    },
+    {
+      "name": "demolition",
+      "positive_examples": [
+        "ÉVÉNEMENT: Les bombardements rasèrent plusieurs blocs d'immeubles.",
+        "ÉVÉNEMENT: La démolition de l'édifice débuta à 7h.",
+        "ÉVÉNEMENT: L'explosion pulvérisa le bâtiment administratif à 9h12.",
+        "ÉVÉNEMENT: Le dynamitage réduisit la structure en décombres.",
+        "ÉVÉNEMENT: La destruction programmée de la tour eut lieu à midi."
+      ],
+      "negative_examples": [
+        "ÉVÉNEMENT: Le couple se maria civilement en matinée.",
+        "ÉVÉNEMENT: Le procès s'ouvrit devant la cour à 9h.",
+        "ÉVÉNEMENT: Le président prononça un discours solennel.",
+        "ÉVÉNEMENT: L'enfant naquit à l'hôpital le 2 du mois.",
+        "ÉVÉNEMENT: Le nourrisson fut baptisé à la paroisse locale."
+      ]
+    }
+  ]
+}

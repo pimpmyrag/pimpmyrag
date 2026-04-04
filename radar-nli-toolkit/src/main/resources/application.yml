@@ -1,0 +1,47 @@
+infinity:
+  embedding:
+    base-url: "https://api.runpod.ai/v2/9vafmopz4lhiak/runsync"   # Ajout de /embeddings
+    api-key: "${RUNPOD_API_KEY}"
+    model-name: "intfloat/multilingual-e5-large"
+    batch-size: 32
+    concurrency: 1  # Réduit pour éviter surcharge
+
+ud:
+  client:
+    host: localhost
+    port: 8000
+onnx:
+  ner:
+    label:
+      modelPath: "/Users/simon_longuet/IdeaProjects/pimpmyrag/training/training_package/training_output/model_v2.onnx"
+      tokenizerDir: "/Users/simon_longuet/IdeaProjects/pimpmyrag/training/training_package/training_output"
+      maxLen: 256
+      useGpu: false
+      intraOpThreads: 4 # Ou Runtime.getRuntime().availableProcessors()
+    ud:
+      modelPath: "/Users/simon_longuet/IdeaProjects/pimpmyrag/training/training_package/best_model_v3.onnx"
+      tokenizerDir: "/Users/simon_longuet/IdeaProjects/pimpmyrag/debertav3-ner/tokenizer_from_hf"
+      maxLen: 256
+      useGpu: false
+      intraOpThreads: 4 # Ou Runtime.getRuntime().availableProcessors()
+
+
+  embedding:
+    # Chemin vers le modèle bge-m3 quantifié pour Mac (ARM64)
+    modelPath: "/Users/simon_longuet/IdeaProjects/pimpmyrag/docker-resources/onnx_converter_bundle/models/bge-m3-mac/model_quantized.onnx"
+    # Répertoire contenant le tokenizer pour bge-m3
+    tokenizerDir: "/Users/simon_longuet/IdeaProjects/pimpmyrag/docker-resources/onnx_converter_bundle/models/bge-m3-mac/"
+    # bge-m3 nécessite une normalisation L2 pour des scores de similarité corrects
+    l2Normalize: true
+    # Longueur de séquence maximale, 512 est une valeur standard pour bge-m3
+    maxLen: 64
+    # Désactiver le GPU car le modèle est optimisé pour le CPU ARM64
+    useGpu: false
+    # Nombre de threads à utiliser pour les opérations internes du modèle
+    intraOpThreads: 4 # Ou Runtime.getRuntime().availableProcessors()
+
+logging:
+  level:
+    org.springframework.web: DEBUG
+    rag.connectors.ud.stanza.OnnxSpanNerExtractor: DEBUG
+    io.netty: DEBUG

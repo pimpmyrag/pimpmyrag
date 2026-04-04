@@ -1,0 +1,499 @@
+{
+  "schema_version": "1.2",
+  "created_at": "2026-02-04T10:00:00.000000Z",
+  "embedding_model": "BAAI/bge-m3",
+  "categories": {
+    "event_detection": ["event", "incident", "state_change", "action_human", "org_change", "impact"],
+    "temporal": ["temporal_explicit", "temporal_implicit", "planning"],
+    "spatial": ["location_explicit"],
+    "coreference": ["coref_required", "needs_coref_person", "needs_coref_location", "needs_coref_time"],
+    "style": ["factual", "opinion", "formal", "subjective", "abstract", "concrete"],
+    "sentiment": ["positive_sentiment", "negative_sentiment", "uncertainty"],
+    "content_type": ["procedural", "technical", "instructional", "definition", "causal"],
+    "domain": ["release_update", "financial", "biography_event"]
+  },
+  "axes": [
+    {
+      "name": "event",
+      "locale": ["fr", "en"],
+      "tags": ["event", "temporal"],
+      "positive_examples": [
+        "Le 1er juin 2024, l'entreprise a annoncé un nouveau produit.",
+        "Un incident majeur s'est produit hier soir à 22h.",
+        "La conférence a débuté ce matin à 9h à Paris.",
+        "Le serveur a crashé pendant les heures de pointe.",
+        "On June 1st, 2024, the company announced a new product.",
+        "A major incident occurred last night at 10 PM.",
+        "The server crashed during peak hours."
+      ],
+      "negative_examples": [
+        "Une conférence est un rassemblement de personnes.",
+        "Je pense que le nouveau produit sera génial.",
+        "Les serveurs peuvent crasher en cas de surcharge.",
+        "A conference is a gathering of people.",
+        "I think the new product will be amazing.",
+        "Servers can crash under heavy load."
+      ]
+    },
+    {
+      "name": "incident",
+      "locale": ["fr", "en"],
+      "tags": ["event", "risk", "impact"],
+      "positive_examples": [
+        "Une panne critique a interrompu le service pendant deux heures.",
+        "Un incendie s'est déclaré dans la salle serveur à 14h.",
+        "Le service est actuellement indisponible suite à une panne critique.",
+        "Le serveur a crashé pendant les heures de pointe, affectant 10 000 utilisateurs.",
+        "A critical outage disrupted the service for two hours.",
+        "A fire broke out in the server room at 2 PM.",
+        "The service is currently unavailable due to a critical outage."
+      ],
+      "negative_examples": [
+        "Les pannes peuvent affecter les systèmes.",
+        "Un incident est un événement indésirable.",
+        "La surveillance permet de détecter les problèmes.",
+        "Outages can affect systems.",
+        "An incident is an undesirable event.",
+        "Monitoring helps detect issues."
+      ]
+    },
+    {
+      "name": "state_change",
+      "locale": ["fr", "en"],
+      "tags": ["event", "transition"],
+      "positive_examples": [
+        "Le service est passé hors ligne à 14h30.",
+        "L'application a été réactivée à 16h.",
+        "Le système est maintenant en mode maintenance.",
+        "The service went offline at 2:30 PM.",
+        "The application was brought back online at 4 PM.",
+        "The system is now in maintenance mode."
+      ],
+      "negative_examples": [
+        "Le service est surveillé en continu.",
+        "Les systèmes ont différents états possibles.",
+        "The service is continuously monitored.",
+        "Systems can have different states."
+      ]
+    },
+    {
+      "name": "action_human",
+      "locale": ["fr", "en"],
+      "tags": ["event", "agent"],
+      "positive_examples": [
+        "L'équipe a déployé la mise à jour ce matin.",
+        "Le technicien a redémarré le serveur à 15h.",
+        "Marie a configuré le pare-feu hier.",
+        "L'administrateur a restauré la base de données.",
+        "The team deployed the update this morning.",
+        "The technician rebooted the server at 3 PM.",
+        "The administrator restored the database."
+      ],
+      "negative_examples": [
+        "Le déploiement est une étape du cycle de vie.",
+        "Les administrateurs gèrent les systèmes.",
+        "Deployment is a stage in the lifecycle.",
+        "Administrators manage systems."
+      ]
+    },
+    {
+      "name": "org_change",
+      "locale": ["fr", "en"],
+      "tags": ["event", "hr", "organization"],
+      "positive_examples": [
+        "Le directeur technique a démissionné hier.",
+        "Marie a été promue directrice des opérations.",
+        "L'entreprise a nommé un nouveau CTO la semaine dernière.",
+        "L'équipe de sécurité a recruté trois ingénieurs en janvier.",
+        "The CTO resigned yesterday.",
+        "Marie was promoted to Director of Operations.",
+        "The company hired three security engineers in January."
+      ],
+      "negative_examples": [
+        "Un directeur technique supervise l'équipe.",
+        "Les entreprises recrutent régulièrement.",
+        "A CTO oversees the technical team.",
+        "Companies hire regularly."
+      ]
+    },
+    {
+      "name": "impact",
+      "locale": ["fr", "en"],
+      "tags": ["event", "consequence"],
+      "positive_examples": [
+        "L'incident a fortement perturbé les opérations pendant 3 heures.",
+        "La panne a affecté 50 000 utilisateurs dans toute l'Europe.",
+        "Le bug a causé une perte de 2 millions d'euros.",
+        "L'attaque a compromis 10 000 comptes clients.",
+        "The incident heavily disrupted operations for 3 hours.",
+        "The outage affected 50,000 users across Europe.",
+        "The bug caused a loss of 2 million euros."
+      ],
+      "negative_examples": [
+        "Les pannes peuvent avoir un impact.",
+        "Il est important de mesurer l'impact.",
+        "Outages can have an impact.",
+        "It's important to measure impact."
+      ]
+    },
+    {
+      "name": "temporal_explicit",
+      "locale": ["fr", "en"],
+      "tags": ["temporal", "date"],
+      "positive_examples": [
+        "Le 12 juin 2024 à 14h30, l'incident a été résolu.",
+        "Hier soir à 22h, le système a été mis à jour.",
+        "La maintenance est prévue vendredi 15 mars à 9h.",
+        "On June 12th, 2024 at 2:30 PM, the incident was resolved.",
+        "Yesterday evening at 10 PM, the system was updated.",
+        "Maintenance is scheduled for Friday, March 15th at 9 AM."
+      ],
+      "negative_examples": [
+        "Les incidents doivent être traités rapidement.",
+        "La maintenance est une opération régulière.",
+        "Incidents must be handled quickly.",
+        "Maintenance is a regular operation."
+      ]
+    },
+    {
+      "name": "temporal_implicit",
+      "locale": ["fr", "en"],
+      "tags": ["temporal", "relative"],
+      "positive_examples": [
+        "La veille, elle avait déjà averti l'équipe du risque.",
+        "Peu après le déploiement, le service a redémarré.",
+        "Le lendemain, la situation était revenue à la normale.",
+        "The day before, she had already warned the team.",
+        "Soon after the deployment, the service restarted.",
+        "The next day, the situation had returned to normal."
+      ],
+      "negative_examples": [
+        "Le service redémarre automatiquement après une panne.",
+        "Les équipes doivent être averties des risques.",
+        "The service restarts automatically after an outage.",
+        "Teams must be warned of risks."
+      ]
+    },
+    {
+      "name": "planning",
+      "locale": ["fr", "en"],
+      "tags": ["temporal", "future"],
+      "positive_examples": [
+        "La maintenance est prévue vendredi prochain de 8h à 10h.",
+        "Le déploiement aura lieu demain à 14h.",
+        "Une réunion est planifiée mardi à 15h30.",
+        "Maintenance is scheduled for next Friday from 8 AM to 10 AM.",
+        "The deployment will take place tomorrow at 2 PM.",
+        "A meeting is planned for Tuesday at 3:30 PM."
+      ],
+      "negative_examples": [
+        "Les projets nécessitent une planification.",
+        "La maintenance est importante.",
+        "Projects require planning.",
+        "Maintenance is important."
+      ]
+    },
+    {
+      "name": "location_explicit",
+      "locale": ["fr", "en"],
+      "tags": ["spatial", "geography"],
+      "positive_examples": [
+        "La panne s'est produite dans le datacenter de Lyon.",
+        "La réunion s'est tenue au siège de Paris, 10 rue de Rivoli.",
+        "L'incident a affecté les serveurs de Francfort et Amsterdam.",
+        "The outage occurred in the Lyon datacenter.",
+        "The meeting was held at the Paris headquarters, 10 rue de Rivoli.",
+        "The incident affected servers in Frankfurt and Amsterdam."
+      ],
+      "negative_examples": [
+        "Les datacenters sont répartis géographiquement.",
+        "La réunion était importante.",
+        "Datacenters are geographically distributed.",
+        "The meeting was important."
+      ]
+    },
+    {
+      "name": "coref_required",
+      "locale": ["fr", "en"],
+      "tags": ["coreference", "context"],
+      "positive_examples": [
+        "Elle a signé l'accord ce matin.",
+        "Il a finalement démissionné après cette affaire.",
+        "Ils l'ont annoncé ici.",
+        "Ce dernier a été promu directeur.",
+        "She signed the agreement this morning.",
+        "He finally resigned after this affair.",
+        "They announced it here."
+      ],
+      "negative_examples": [
+        "Marie Curie a signé l'accord ce matin.",
+        "Le directeur technique a démissionné.",
+        "L'entreprise a annoncé la nouvelle au siège de Paris.",
+        "Marie Curie signed the agreement this morning.",
+        "The CTO resigned."
+      ]
+    },
+    {
+      "name": "needs_coref_person",
+      "locale": ["fr", "en"],
+      "tags": ["coreference", "person"],
+      "positive_examples": [
+        "Elle a déclaré que le système était stable.",
+        "Il a été nommé directeur après l'incident.",
+        "Ils ont confirmé la résolution du bug.",
+        "He explained the root cause.",
+        "She confirmed it.",
+        "They approved the change."
+      ],
+      "negative_examples": [
+        "Marie Curie a déclaré que le système était stable.",
+        "Jean Dupont a été nommé directeur.",
+        "Marie Curie stated the system was stable.",
+        "John Doe was appointed director."
+      ]
+    },
+    {
+      "name": "needs_coref_location",
+      "locale": ["fr", "en"],
+      "tags": ["coreference", "location"],
+      "positive_examples": [
+        "C'est ici que la panne a commencé.",
+        "L'incident s'est produit là-bas.",
+        "Ils ont déployé ça sur place.",
+        "It happened here.",
+        "The outage occurred there.",
+        "They deployed it on-site."
+      ],
+      "negative_examples": [
+        "La panne a commencé dans le datacenter de Lyon.",
+        "L'incident s'est produit à Francfort.",
+        "The outage started in the Lyon datacenter.",
+        "The incident occurred in Frankfurt."
+      ]
+    },
+    {
+      "name": "needs_coref_time",
+      "locale": ["fr", "en"],
+      "tags": ["coreference", "temporal"],
+      "positive_examples": [
+        "Ce jour-là, ils ont quitté le bureau précipitamment.",
+        "La veille, elle a écrit au directeur.",
+        "Le lendemain, tout était résolu.",
+        "That day, they left the office hastily.",
+        "The day before, she wrote to the director.",
+        "The next day, everything was resolved."
+      ],
+      "negative_examples": [
+        "Le 5 mai 2024, ils ont quitté le bureau.",
+        "Le 12 juin, elle a écrit au directeur.",
+        "On May 5, 2024, they left the office.",
+        "On June 12th, she wrote to the director."
+      ]
+    },
+    {
+      "name": "factual",
+      "locale": ["fr", "en"],
+      "tags": ["style", "objectivity"],
+      "positive_examples": [
+        "Le serveur contient 64 Go de RAM et 4 processeurs.",
+        "La température a atteint 30°C à 14h.",
+        "Le datacenter consomme 2,5 MW.",
+        "The server has 64 GB of RAM and 4 processors.",
+        "The temperature reached 30°C at 2 PM.",
+        "The datacenter consumes 2.5 MW."
+      ],
+      "negative_examples": [
+        "Je pense que le serveur est lent.",
+        "À mon avis, la température est trop élevée.",
+        "I think the server is slow.",
+        "In my opinion, the temperature is too high."
+      ]
+    },
+    {
+      "name": "opinion",
+      "locale": ["fr", "en"],
+      "tags": ["style", "subjectivity"],
+      "positive_examples": [
+        "Je trouve ce logiciel vraiment intuitif.",
+        "À mon avis, cette décision est une erreur.",
+        "Je pense que le nouveau produit sera génial.",
+        "I think this software is intuitive.",
+        "In my opinion, this decision is a mistake.",
+        "I believe the new product will be amazing."
+      ],
+      "negative_examples": [
+        "Le logiciel a été installé hier.",
+        "La décision a été prise mardi.",
+        "The software was installed yesterday.",
+        "The decision was made on Tuesday."
+      ]
+    },
+    {
+      "name": "subjective",
+      "locale": ["fr", "en"],
+      "tags": ["style", "perception"],
+      "positive_examples": [
+        "Cette approche me semble plus pertinente.",
+        "Je ressens une amélioration de la performance.",
+        "This approach seems more appropriate to me.",
+        "I feel an improvement in performance."
+      ],
+      "negative_examples": [
+        "Le document contient 20 pages.",
+        "La performance a augmenté de 15%.",
+        "The document has 20 pages.",
+        "Performance increased by 15%."
+      ]
+    },
+    {
+      "name": "positive_sentiment",
+      "locale": ["fr", "en"],
+      "tags": ["sentiment"],
+      "positive_examples": [
+        "Le résultat est excellent et dépasse nos attentes.",
+        "La performance est remarquable.",
+        "Je pense que ce produit sera génial.",
+        "The result is excellent and exceeds expectations.",
+        "The performance is outstanding.",
+        "I think this product will be amazing."
+      ],
+      "negative_examples": [
+        "Le service est médiocre.",
+        "La panne a été catastrophique.",
+        "The service is mediocre.",
+        "The outage was catastrophic."
+      ]
+    },
+    {
+      "name": "negative_sentiment",
+      "locale": ["fr", "en"],
+      "tags": ["sentiment"],
+      "positive_examples": [
+        "Le système est très lent et instable.",
+        "La panne a été catastrophique.",
+        "Le service est actuellement indisponible suite à une panne critique.",
+        "The system is very slow and unstable.",
+        "The outage was catastrophic.",
+        "The service is currently unavailable due to a critical outage."
+      ],
+      "negative_examples": [
+        "La performance est correcte.",
+        "Le résultat est acceptable.",
+        "The performance is acceptable.",
+        "The result is satisfactory."
+      ]
+    },
+    {
+      "name": "uncertainty",
+      "locale": ["fr", "en"],
+      "tags": ["modality"],
+      "positive_examples": [
+        "Il se pourrait que le système tombe en panne.",
+        "Le résultat semble incertain.",
+        "Peut-être que la mise à jour résoudra le problème.",
+        "The system might fail.",
+        "The outcome seems uncertain.",
+        "Perhaps the update will fix the issue."
+      ],
+      "negative_examples": [
+        "Le système fonctionne comme prévu.",
+        "Le résultat est confirmé.",
+        "The system works as expected.",
+        "The result is confirmed."
+      ]
+    },
+    {
+      "name": "technical",
+      "locale": ["fr", "en"],
+      "tags": ["domain", "expertise"],
+      "positive_examples": [
+        "Le protocole TLS 1.3 est activé avec HSTS.",
+        "La latence réseau atteint 20 ms sur TCP.",
+        "Le système utilise un algorithme de consensus Raft.",
+        "TLS 1.3 is enabled with HSTS.",
+        "Network latency reaches 20 ms on TCP.",
+        "The system uses a Raft consensus algorithm."
+      ],
+      "negative_examples": [
+        "La technologie est importante.",
+        "Le réseau est rapide.",
+        "Technology is important.",
+        "The network is fast."
+      ]
+    },
+    {
+      "name": "causal",
+      "locale": ["fr", "en"],
+      "tags": ["reasoning", "causality"],
+      "positive_examples": [
+        "La panne a été causée par une surcharge mémoire.",
+        "Le bug a provoqué une erreur critique.",
+        "L'incident résulte d'une mauvaise configuration.",
+        "The outage was caused by memory overload.",
+        "The bug triggered a critical error.",
+        "The incident resulted from misconfiguration."
+      ],
+      "negative_examples": [
+        "Une panne est un dysfonctionnement.",
+        "Les bugs doivent être corrigés.",
+        "An outage is a malfunction.",
+        "Bugs must be fixed."
+      ]
+    },
+    {
+      "name": "release_update",
+      "locale": ["fr", "en"],
+      "tags": ["product", "event"],
+      "positive_examples": [
+        "La version 2.0 a été publiée aujourd'hui avec de nouvelles fonctionnalités.",
+        "Nous avons déployé la mise à jour 3.1.5 ce matin.",
+        "We released version 2.0 today with new features.",
+        "We deployed update 3.1.5 this morning."
+      ],
+      "negative_examples": [
+        "Une version logicielle suit un cycle de release.",
+        "Les mises à jour sont importantes.",
+        "A software version follows a release cycle.",
+        "Updates are important."
+      ]
+    },
+    {
+      "name": "financial",
+      "locale": ["fr", "en"],
+      "tags": ["finance", "business"],
+      "positive_examples": [
+        "Le chiffre d'affaires a augmenté de 12% au T1 2024.",
+        "L'entreprise a levé 50 millions d'euros.",
+        "Le coût de la panne est estimé à 2 millions d'euros.",
+        "Revenue increased by 12% in Q1 2024.",
+        "The company raised 50 million euros.",
+        "The cost of the outage is estimated at 2 million euros."
+      ],
+      "negative_examples": [
+        "Le chiffre d'affaires est un indicateur financier.",
+        "Les entreprises ont des budgets.",
+        "Revenue is a financial indicator.",
+        "Companies have budgets."
+      ]
+    },
+    {
+      "name": "biography_event",
+      "locale": ["fr", "en"],
+      "tags": ["bio", "event", "history"],
+      "positive_examples": [
+        "Jeanne d'Arc est née en 1412 à Domrémy.",
+        "Victor Hugo est mort en 1885 à Paris.",
+        "Marie Curie a reçu le prix Nobel en 1903.",
+        "Joan of Arc was born in 1412 in Domrémy.",
+        "Victor Hugo died in 1885 in Paris.",
+        "Marie Curie received the Nobel Prize in 1903."
+      ],
+      "negative_examples": [
+        "Jeanne d'Arc est une héroïne française.",
+        "Victor Hugo a écrit de nombreux livres.",
+        "Joan of Arc is a French heroine.",
+        "Victor Hugo wrote many books."
+      ]
+    }
+  ]
+}

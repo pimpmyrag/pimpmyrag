@@ -1,0 +1,107 @@
+{
+  "schema_version": "2.1",
+  "created_at": "2026-02-04T11:00:00.000000Z",
+  "model": "mdeberta-mnli-xnli",
+  "default_locale": "en",
+  "probes": [
+    {
+      "name": "event",
+      "tags": ["event", "temporal"],
+      "weight": 1.0,
+      "hypotheses": {
+        "fr": "Cet énoncé décrit un événement factuel qui s'est réellement produit dans le passé ou qui se produit actuellement, avec des preuves vérifiables.",
+        "en": "This statement describes a factual event that actually occurred in the past or is currently happening, with verifiable evidence."
+      }
+    },
+    {
+      "name": "incident",
+      "tags": ["event", "risk", "impact"],
+      "weight": 1.2,
+      "hypotheses": {
+        "fr": "Cet énoncé décrit un incident technique avéré (panne, défaillance, problème opérationnel) qui a réellement affecté un système ou un service.",
+        "en": "This statement describes an actual technical incident (outage, failure, operational problem) that really affected a system or service."
+      }
+    },
+    {
+      "name": "temporal_explicit",
+      "tags": ["temporal", "date"],
+      "weight": 1.1,
+      "hypotheses": {
+        "fr": "Cet énoncé contient une date absolue précise (jour, mois, année) ou une heure exacte, pas une référence vague.",
+        "en": "This statement contains a precise absolute date (day, month, year) or exact time, not a vague reference."
+      }
+    },
+    {
+      "name": "impact",
+      "tags": ["consequence", "severity"],
+      "weight": 1.0,
+      "hypotheses": {
+        "fr": "Cet énoncé décrit des conséquences mesurables et quantifiées d'un événement : nombres d'utilisateurs, durées, montants financiers, ou pourcentages de dégradation.",
+        "en": "This statement describes measurable and quantified consequences of an event: numbers of users, durations, financial amounts, or degradation percentages."
+      }
+    },
+    {
+      "name": "action_human",
+      "tags": ["agent", "action"],
+      "weight": 0.9,
+      "hypotheses": {
+        "fr": "Cet énoncé décrit une action concrète effectuée par une personne nommée ou un rôle humain identifié, pas une possibilité ou une recommandation.",
+        "en": "This statement describes a concrete action performed by a named person or identified human role, not a possibility or recommendation."
+      }
+    },
+    {
+      "name": "org_change",
+      "tags": ["hr", "organization"],
+      "weight": 0.8,
+      "hypotheses": {
+        "fr": "Cet énoncé décrit un changement organisationnel avéré et daté : nomination effective, démission confirmée, promotion annoncée, ou recrutement finalisé.",
+        "en": "This statement describes an actual and dated organizational change: effective appointment, confirmed resignation, announced promotion, or finalized hiring."
+      }
+    },
+    {
+      "name": "future_prediction",
+      "tags": ["temporal", "uncertainty"],
+      "weight": 0.7,
+      "hypotheses": {
+        "fr": "Cet énoncé formule une prédiction, une hypothèse, ou une opinion sur un événement qui pourrait se produire dans le futur, sans certitude de réalisation.",
+        "en": "This statement makes a prediction, hypothesis, or opinion about an event that might happen in the future, without certainty of occurrence."
+      }
+    },
+    {
+      "name": "factual",
+      "tags": ["objectivity", "verifiability"],
+      "weight": 0.7,
+      "hypotheses": {
+        "fr": "Cet énoncé présente des informations objectives et vérifiables immédiatement : mesures précises, configurations techniques confirmées, ou données chiffrées exactes.",
+        "en": "This statement presents immediately objective and verifiable information: precise measurements, confirmed technical configurations, or exact numerical data."
+      }
+    },
+    {
+      "name": "opinion",
+      "tags": ["subjectivity", "judgement"],
+      "weight": 0.7,
+      "hypotheses": {
+        "fr": "Cet énoncé exprime une opinion personnelle, un jugement subjectif, ou une évaluation qualitative non vérifiable, avec des marqueurs comme 'je pense', 'à mon avis', 'génial', 'probablement'.",
+        "en": "This statement expresses a personal opinion, subjective judgement, or unverifiable qualitative assessment, with markers like 'I think', 'in my opinion', 'amazing', 'probably'."
+      }
+    },
+    {
+      "name": "causal",
+      "tags": ["causality", "reasoning"],
+      "weight": 0.8,
+      "hypotheses": {
+        "fr": "Cet énoncé établit une relation de cause à effet explicite et vérifiable avec des connecteurs comme 'à cause de', 'en raison de', 'a provoqué', 'résulte de'.",
+        "en": "This statement establishes an explicit and verifiable cause-effect relationship with connectors like 'because of', 'due to', 'caused by', 'results from'."
+      }
+    },
+    {
+      "name": "planning",
+      "tags": ["temporal", "future"],
+      "weight": 0.7,
+      "hypotheses": {
+        "fr": "Cet énoncé décrit un événement planifié avec une date confirmée dans le futur, comme une maintenance programmée ou un déploiement planifié avec date et heure exactes.",
+        "en": "This statement describes a planned event with a confirmed future date, like scheduled maintenance or a planned deployment with exact date and time."
+      }
+    }
+  ]
+}
