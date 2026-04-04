@@ -11,8 +11,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      checks: write        # requis par dorny/test-reporter pour créer des check runs
-      pull-requests: write # requis pour poster des annotations sur les PRs
 
     steps:
       # ── Checkout ────────────────────────────────────────────────────────────
@@ -42,19 +40,53 @@ jobs:
         env:
           GRADLE_OPTS: "-Dorg.gradle.daemon=false"
 
-      # ── Rapport JUnit (annotations PR + onglet Tests) ───────────────────────
-      - name: Publish JUnit results
-        uses: dorny/test-reporter@v1
+      # ── Résumé JUnit → Job Summary ───────────────────────────────────────────
+      # Parsing natif des XML JUnit via Python (pas de token GitHub requis).
+      - name: JUnit summary
         if: always()
-        with:
-          name: 'JUnit Tests'
-          path: '**/build/test-results/test/*.xml'
-          reporter: java-junit
-          fail-on-error: false   # ne pas casser le build si zéro test trouvé
+        run: |
+          python3 - <<'EOF'
+          import glob, xml.etree.ElementTree as ET, os, sys
+
+          files = glob.glob('**/build/test-results/test/*.xml', recursive=True)
+          total = failed = errors = skipped = 0
+          fail_details = []
+
+          for f in files:
+              try:
+                  root = ET.parse(f).getroot()
+                  total   += int(root.get('tests',    0))
+                  failed  += int(root.get('failures', 0))
+                  errors  += int(root.get('errors',   0))
+                  skipped += int(root.get('skipped',  0))
+                  for tc in root.findall('.//testcase'):
+                      for bad in tc.findall('failure') + tc.findall('error'):
+                          name = f"{tc.get('classname','?')}.{tc.get('name','?')}"
+                          msg  = (bad.text or '').strip()[:200]
+                          fail_details.append(f'- `{name}`: {msg}')
+              except Exception as e:
+                  print(f'Warning: cannot parse {f}: {e}', file=sys.stderr)
+
+          if total == 0 and not files:
+              print('No JUnit XML files found — skipping summary.')
+              sys.exit(0)
+
+          passed = total - failed - errors - skipped
+          icon   = '✅' if (failed + errors) == 0 else '❌'
+
+          summary_path = os.environ.get('GITHUB_STEP_SUMMARY', '')
+          if summary_path:
+              with open(summary_path, 'a') as out:
+                  out.write(f'### {icon} JUnit Tests — {passed}/{total} passed')
+                  out.write(f' ({skipped} skipped, {failed + errors} failed)\n\n')
+                  if fail_details:
+                      out.write('**Échecs :**\n')
+                      out.write('\n'.join(fail_details[:30]) + '\n\n')
+
+          print(f'Tests: {passed}/{total} passed | {failed+errors} failed | {skipped} skipped')
+          EOF
 
       # ── Rapport NER → Job Summary ────────────────────────────────────────────
-      # Le fichier n'existe que si le serveur était disponible pendant les tests.
-      # Sur CI standard il sera absent (test skippé) → message informatif affiché.
       - name: NER report to Job Summary
         if: always()
         run: |
@@ -71,14 +103,13 @@ jobs:
             echo "> \`\`\`" >> $GITHUB_STEP_SUMMARY
           fi
 
-      # ── Artifact : rapport NER (téléchargeable depuis l'onglet Summary) ──────
+      # ── Artifact : rapport NER (uniquement s'il existe) ──────────────────────
       - name: Upload NER report artifact
         uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && hashFiles('build/ner-report.md') != ''
         with:
           name: ner-test-report
           path: build/ner-report.md
-          if-no-files-found: ignore
           retention-days: 30
 
       # ── Artifact : résultats JUnit XML bruts ─────────────────────────────────
