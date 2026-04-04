@@ -9,6 +9,10 @@ jobs:
   build-and-test:
     name: Build & Test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write        # requis par dorny/test-reporter pour créer des check runs
+      pull-requests: write # requis pour poster des annotations sur les PRs
 
     steps:
       # ── Checkout ────────────────────────────────────────────────────────────
@@ -59,11 +63,11 @@ jobs:
           if [ -f "$REPORT" ]; then
             cat "$REPORT" >> $GITHUB_STEP_SUMMARY
           else
-            echo "> ⏭️ Test d'intégration ignoré — serveur NER non disponible en CI." >> $GITHUB_STEP_SUMMARY
+            echo "> ⏭️ Test d'intégration ignoré — modèles ONNX non disponibles en CI." >> $GITHUB_STEP_SUMMARY
             echo ">" >> $GITHUB_STEP_SUMMARY
-            echo "> Lancez localement :" >> $GITHUB_STEP_SUMMARY
+            echo "> Lancez localement avec :" >> $GITHUB_STEP_SUMMARY
             echo "> \`\`\`" >> $GITHUB_STEP_SUMMARY
-            echo "> ./gradlew :radar-nli-toolkit:test -Dner.test.url=http://localhost:8080" >> $GITHUB_STEP_SUMMARY
+            echo "> ./gradlew :radar-nli-toolkit:test -Dner.integration.enabled=true" >> $GITHUB_STEP_SUMMARY
             echo "> \`\`\`" >> $GITHUB_STEP_SUMMARY
           fi
 
