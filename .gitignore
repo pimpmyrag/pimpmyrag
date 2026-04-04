@@ -103,3 +103,6 @@ application-local.yaml
 # ── Fichier de doc TypeScript local ──────────────────────────────────────────
 structure.ts
 
+# ── Scripts one-shot (init repo, etc.) ───────────────────────────────────────
+init_commits.sh
+
