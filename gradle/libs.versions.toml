@@ -1,0 +1,40 @@
+[versions]
+qadrant-client = "1.16.2"
+react_kotlin_ext = "1.2.2"
+reactor_core = "3.6.5"
+coroutine_core = "1.8.1"
+coroutine_reactor = "1.8.1"
+kotlin_stdlib = "1.9.24"
+kotlin_reflect = "1.9.24"
+slf4j = "2.0.13"
+jackson-kotlin-module = "2.17.1"
+kotlin-comp = "2.3.0"
+kmongo = "4.11.0"
+jupiter = "5.10.2"
+spring_boot = "3.3.5"
+onnx_runtime = "1.23.1"
+djl = "0.36.0"
+
+[libraries]
+jackson_module_kotlin = { group = "com.fasterxml.jackson.module", name = "jackson-module-kotlin", version.ref = "jackson-kotlin-module" }
+reactor_kotlin_extensions = { group = "io.projectreactor.kotlin", name = "reactor-kotlin-extensions", version.ref = "react_kotlin_ext" }
+reactor_core = { group = "io.projectreactor", name = "reactor-core", version.ref = "reactor_core" }
+qadrant_client = { group = "io.qdrant", name = "client", version.ref = "qadrant-client" }
+kotlin_allopen_compiler_plugin_embeddable = { group = "org.jetbrains.kotlin", name = "kotlin-allopen-compiler-plugin-embeddable", version.ref = "kotlin-comp" }
+kotlin_build_tools_compat = { group = "org.jetbrains.kotlin", name = "kotlin-build-tools-compat", version.ref = "kotlin-comp" }
+kotlin_scripting_compiler_embeddable = { group = "org.jetbrains.kotlin", name = "kotlin-scripting-compiler-embeddable", version.ref = "kotlin-comp" }
+kotlin_stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin_stdlib" }
+kotlin_reflect = { group = "org.jetbrains.kotlin", name = "kotlin-reflect", version.ref = "kotlin_reflect" }
+kotlinx_coroutines_core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutine_core" }
+kotlinx_coroutines_reactor = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-reactor", version.ref = "coroutine_reactor" }
+spring_boot_autoconfigure = { group = "org.springframework.boot", name = "spring-boot-autoconfigure", version.ref = "spring_boot" }
+spring_boot_starter_webflux = { group = "org.springframework.boot", name = "spring-boot-starter-webflux", version.ref = "spring_boot" }
+spring_boot_starter_validation = { group = "org.springframework.boot", name = "spring-boot-starter-validation", version.ref = "spring_boot" }
+spring_boot_starter_test = { group = "org.springframework.boot", name = "spring-boot-starter-test", version.ref = "spring_boot" }
+junit_jupiter = { group = "org.junit.jupiter", name = "junit-jupiter", version.ref = "jupiter" }
+kmongo = { group = "org.litote.kmongo", name = "kmongo", version.ref = "kmongo" }
+kmongo_coroutine = { group = "org.litote.kmongo", name = "kmongo-coroutine", version.ref = "kmongo" }
+kmongo_property = { group = "org.litote.kmongo", name = "kmongo-property", version.ref = "kmongo" }
+slf4j_simple = { group = "org.slf4j", name = "slf4j-simple", version.ref = "slf4j" }
+onnx_runtime = { group = "com.microsoft.onnxruntime", name = "onnxruntime", version.ref = "onnx_runtime" }
+djl_tokenizers = { group = "ai.djl.huggingface", name = "tokenizers", version.ref = "djl" }

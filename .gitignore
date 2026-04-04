@@ -1,0 +1,105 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# PimpMyRAG — .gitignore
+# Kotlin/Gradle multi-module + Python ML training stack
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Gradle ────────────────────────────────────────────────────────────────────
+.gradle/
+**/build/
+out/
+**/out/
+!gradle/wrapper/gradle-wrapper.jar
+
+# ── IntelliJ IDEA ─────────────────────────────────────────────────────────────
+.idea/
+*.iws
+*.iml
+*.ipr
+!.idea/runConfigurations/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+
+# ── Modèles ONNX & checkpoints PyTorch (trop lourds — gérer via DVC/S3) ──────
+*.onnx
+*.onnx.data
+*.pt
+*.bin
+checkpoint_*.pt
+best_model*.pt
+best_model*.onnx
+best_model*.onnx.data
+
+# ── Données d'entraînement & corpus ──────────────────────────────────────────
+*.bz2
+*.gz
+data/ner/
+data/*.bilou
+data/*.bilou.*
+data/*.jsonl
+data/mapped.*
+training/training_package/train.jsonl
+training/training_package/val.jsonl
+training/training_package/test.jsonl
+training/training_package/dataset.jsonl
+training/training_package/datasetwrong.jsonl
+
+# ── Sorties d'entraînement & artefacts temporaires ───────────────────────────
+training_output/
+training_output_*/
+outputs/
+output/
+tmp_trainer/
+tmp_model_backups/
+v4/
+toreview_llm/
+toreview_llm_mistral/
+toreview_llm_triaged/
+training/training_package/training_output*/
+training/training_package/output/
+training/training_package/timings/
+
+# ── Environnements Python ────────────────────────────────────────────────────
+.venv/
+.venv_clean/
+scripts/lib/
+**/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+.pytest_cache/
+
+# ── Tokenizers téléchargés localement ────────────────────────────────────────
+debertav3-ner/tokenizer_from_hf/
+debertav3-ner/*.onnx
+debertav3-ner/*.onnx.data
+debertav3-ner/debertav3-ner/
+
+# ── Logs & fichiers temporaires ───────────────────────────────────────────────
+*.log
+log.txt
+decode_output.txt
+hs_err_pid*.log
+nohup.out
+
+# ── Docker (artefacts de build locaux) ───────────────────────────────────────
+docker-resources/fine-tunner/
+docker-resources/minilm-coref-runpod/
+
+# ── Secrets & config locale ───────────────────────────────────────────────────
+*.env
+.env.*
+application-local.yml
+application-local.yaml
+
+# ── JVM ──────────────────────────────────────────────────────────────────────
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# ── Fichier de doc TypeScript local ──────────────────────────────────────────
+structure.ts
+

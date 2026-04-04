@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  trainer:
+    build:
+      context: .
+      dockerfile: training/training_package/Dockerfile
+    image: pimpmyrag-trainer:latest
+    container_name: pimpmyrag_trainer
+    # Mount the repository so the container uses your local code and data
+    volumes:
+      - ./:/app:rw
+      # Mount the huggingface cache from the host so models are reused across runs
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface:rw
+      # Output directory on the host (create ./training_output on host)
+      - ./training_output:/app/output:rw
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+    # Use bash to run the script so execution bit on the mounted file is not required
+    entrypoint: ["bash", "/app/docker_run.sh"]
+    # Default command: forwarded args are passed after the service name when using `docker compose run`
+    # This default is kept minimal — prefer `docker compose run --rm trainer -- <args>` to pass your specific files
+    command: ["--train", "/app/data/train.jsonl", "--val", "/app/data/val.jsonl", "--test", "/app/data/test.jsonl", "--epochs", "6", "--batch", "16", "--lr", "2e-5"]
+    stdin_open: true
+    tty: true
+
+# Optional: you can extend this compose file with GPU support on Linux
+# by adding `runtime: nvidia` and the proper CUDA-enabled base image in the Dockerfile.

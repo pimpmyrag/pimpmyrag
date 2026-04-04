@@ -1,0 +1,26 @@
+# Exclure les gros dossiers et fichiers inutiles pour le build Docker
+outputs/
+build/
+*.pt
+*.onnx
+*.onnx.data
+*.log
+*.bz2
+*.zip
+*.tar
+*.tar.gz
+*.bak
+*.tmp
+__pycache__/
+*.egg-info/
+*.pyc
+*.pyo
+*.swp
+.idea/
+.vscode/
+node_modules/
+training_output/
+# Exclure les modèles et checkpoints volumineux
+best_model*
+checkpoint_*
+
