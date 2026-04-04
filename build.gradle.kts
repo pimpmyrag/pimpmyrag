@@ -59,4 +59,8 @@ allprojects {
     tasks.withType<Test> {
         useJUnitPlatform()
     }
+
+    dependencies {
+        "testRuntimeOnly"("org.junit.platform:junit-platform-launcher:1.10.2")
+    }
 }

@@ -32,6 +32,7 @@ spring_boot_starter_webflux = { group = "org.springframework.boot", name = "spri
 spring_boot_starter_validation = { group = "org.springframework.boot", name = "spring-boot-starter-validation", version.ref = "spring_boot" }
 spring_boot_starter_test = { group = "org.springframework.boot", name = "spring-boot-starter-test", version.ref = "spring_boot" }
 junit_jupiter = { group = "org.junit.jupiter", name = "junit-jupiter", version.ref = "jupiter" }
+junit_platform_launcher = { group = "org.junit.platform", name = "junit-platform-launcher", version = "1.10.2" }
 kmongo = { group = "org.litote.kmongo", name = "kmongo", version.ref = "kmongo" }
 kmongo_coroutine = { group = "org.litote.kmongo", name = "kmongo-coroutine", version.ref = "kmongo" }
 kmongo_property = { group = "org.litote.kmongo", name = "kmongo-property", version.ref = "kmongo" }
