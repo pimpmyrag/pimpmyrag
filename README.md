@@ -8,9 +8,7 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.x-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![JVM](https://img.shields.io/badge/JVM-17%2B-ED8B00?logo=openjdk&logoColor=white)](https://adoptium.net)
 
-Framework RAG modulaire Kotlin/JVM avec pipeline NER + UD pour l'extraction
-d'entités et d'eventlets structurés. Conçu pour le traitement de presse
-francophone (et multilingue via XLM-RoBERTa).
+Modular JVM based RAG framework attempt, for deterministic event extraction purpose mainly, but open to other kind of text extractions.
 
 ## Architecture
 
