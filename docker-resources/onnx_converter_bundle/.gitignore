@@ -1,0 +1,14 @@
+# Created by venv; see https://docs.python.org/3/library/venv.html
+*
+
+# ── Exceptions Git LFS : modèles d'inférence versionnés ──────────────────────
+!models/
+!models/bge-m3-mac/
+!models/bge-m3-mac/model_quantized.onnx
+!models/bge-m3-mac/sentencepiece.bpe.model
+!models/bge-m3-mac/tokenizer.json
+!models/bge-m3-mac/tokenizer_config.json
+!models/bge-m3-mac/config.json
+!models/bge-m3-mac/special_tokens_map.json
+!.gitignore
+
