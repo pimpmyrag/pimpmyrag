@@ -28,12 +28,12 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
 
       # ── Build + tests unitaires ─────────────────────────────────────────────
-      # Les tests d'intégration @Tag("integration") sont exclus ici :
-      # le serveur NER n'est pas démarré (modèles ONNX non disponibles en CI).
+      # Les tests @Tag("integration") + @EnabledIfSystemProperty(ner.integration.enabled)
+      # sont ignorés par défaut : les modèles ONNX ne sont pas disponibles en CI.
+      # Pour les activer localement : -Dner.integration.enabled=true
       - name: Build & unit tests
         run: |
           ./gradlew test --continue \
-            -Dner.test.url=http://localhost:8080 \
             -Dner.test.report=${{ github.workspace }}/build/ner-report.md
         env:
           GRADLE_OPTS: "-Dorg.gradle.daemon=false"
