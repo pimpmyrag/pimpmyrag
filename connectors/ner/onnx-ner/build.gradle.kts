@@ -5,7 +5,7 @@ plugins {
 
 
 dependencies {
-    compileOnly(libs.onnx.runtime)
+    implementation(libs.onnx.runtime)
     testCompileOnly(libs.onnx.runtime)   // helper.kt imports OnnxTensor in compile scope
     implementation(libs.djl.tokenizers)
     implementation(projects.ragEngine)

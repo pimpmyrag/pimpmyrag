@@ -28,6 +28,13 @@ dependencies {
     testImplementation(libs.spring.boot.starter.test)
 }
 
+tasks.withType<Test> {
+    useJUnitPlatform()
+    // Expose la racine du projet aux tests d'intégration NER (chemin des modèles ONNX).
+    // Utilisé dans src/test/resources/application.yml : ${ner.model.root}/debertav3-ner/...
+    systemProperty("ner.model.root", rootProject.projectDir.absolutePath)
+}
+
 tasks.withType<Jar> {
     archiveBaseName.set(project.path.substring(1).replace(":", "-"))
 }

@@ -13,17 +13,25 @@ ud:
 onnx:
   ner:
     label:
-      modelPath: "/Users/simon_longuet/IdeaProjects/pimpmyrag/training/training_package/training_output/model_v2.onnx"
-      tokenizerDir: "/Users/simon_longuet/IdeaProjects/pimpmyrag/training/training_package/training_output"
-      maxLen: 256
+
+      # RoBERTa XLM-R BIO — 13 labels coarses (F1=0.8537) — INT8 (75% plus petit, 2.79× plus rapide)
+      modelPath: "/Users/simon_longuet/IdeaProjects/pimpmyrag/training/training_package/training_output/model_v5.onnx"
+      tokenizerDir: "/Users/simon_longuet/IdeaProjects/pimpmyrag/training/training_package/training_output/checkpoint-7800"
+      maxLen: 128
+      maxSeqLen: 128
       useGpu: false
-      intraOpThreads: 4 # Ou Runtime.getRuntime().availableProcessors()
+      useCoreMl: false
+      intraOpThreads: 4
     ud:
-      modelPath: "/Users/simon_longuet/IdeaProjects/pimpmyrag/training/training_package/best_model_v3.onnx"
-      tokenizerDir: "/Users/simon_longuet/IdeaProjects/pimpmyrag/debertav3-ner/tokenizer_from_hf"
-      maxLen: 256
+      # DeBERTa-v3 SpanClassifier — 22 hints fins (Macro F1=0.883) — INT8 valide (218MB)
+      # v4 (Apr 6) > v3 (Apr 2, F1=0.875) — coarse_ids inclus
+      modelPath: "/Users/simon_longuet/IdeaProjects/pimpmyrag/training/training_package/training_output_deberta/best_model_v6.onnx"
+      tokenizerDir: "/Users/simon_longuet/IdeaProjects/pimpmyrag/deberta/tokenizer_export"
+      maxLen: 128
       useGpu: false
-      intraOpThreads: 4 # Ou Runtime.getRuntime().availableProcessors()
+      useCoreMl: false
+      intraOpThreads: 4
+      sentBatchSize: 32
 
 
   embedding:
@@ -44,4 +52,6 @@ logging:
   level:
     org.springframework.web: DEBUG
     rag.connectors.ud.stanza.OnnxSpanNerExtractor: DEBUG
+    rag.connectors.ner.onnx.OnnxBilouEntityExtractor: DEBUG
+    io.axes.classifier.ClassifierController: DEBUG
     io.netty: DEBUG

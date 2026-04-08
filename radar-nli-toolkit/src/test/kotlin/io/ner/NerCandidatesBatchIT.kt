@@ -4,12 +4,15 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import io.axes.classifier.MultiAxisTrainingService
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty
 import org.junit.jupiter.api.fail
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.boot.test.mock.mockito.MockBean
+import org.springframework.context.annotation.Import
 import org.springframework.http.MediaType
 import org.springframework.test.web.reactive.server.WebTestClient
 import org.springframework.test.web.reactive.server.expectBody
@@ -37,7 +40,13 @@ import java.text.Normalizer
     matches   = "true",
     disabledReason = "Nécessite les modèles ONNX locaux. Activez avec -Dner.integration.enabled=true"
 )
+@Import(NerCiTestConfig::class)
 class NerCandidatesBatchIT {
+
+    /** Remplace MultiAxisTrainingService avant le démarrage du contexte,
+     *  évitant l'instanciation de SyntheticDataGenerator (exige LLM_API_KEY). */
+    @MockBean
+    private lateinit var multiAxisTrainingService: MultiAxisTrainingService
 
     @Autowired
     private lateinit var webTestClient: WebTestClient

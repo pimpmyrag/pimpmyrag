@@ -604,7 +604,7 @@ class SyntheticDataGenerator(
         .connectTimeout(Duration.ofSeconds(10))
         .build()
     private val mapper = jacksonObjectMapper()
-    private val apiKey: String = System.getenv("LLM_API_KEY") ?: ""
+    private val apiKey: String = System.getenv("LLM_API_KEY") ?: "toto"
 
     init {
         require(apiKey.isNotBlank()) {

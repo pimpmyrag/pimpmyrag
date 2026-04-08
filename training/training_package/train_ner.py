@@ -53,18 +53,14 @@ except Exception:
 
 
 # ------------------------------------------------------------
-# LABEL DEFINITIONS  — schéma BIO (13 labels)
+# LABEL DEFINITIONS  — schéma BIO (13 labels coarses)
 # ------------------------------------------------------------
-# BIO plutôt que BILOU (25 labels) pour deux raisons :
-#   1. CrossEntropy optimise token par token ; avec BILOU la loss descend
-#      (tokens individuels OK) mais F1 seqeval BILOU strict stagne car il
-#      exige que TOUS les tokens d'un span soient corrects (B + chaque I + L).
-#      → plateau observé à ~32 % dès l'epoch 1.5 malgré loss décroissante.
-#   2. 13 labels au lieu de 25 → convergence ~2× plus rapide.
+# RoBERTa est un tagger COARSE : PER / LOC / ORG / TIME / EVENT / OBJECT.
+# Le raffinement hint_* est géré par le DeBERTa span classifier (train.py).
+# BIO plutôt que BILOU : convergence ~2× plus rapide, F1 seqeval plus stable.
 # Les fichiers .bilou sont lus et convertis à la volée : L-X→I-X, U-X→B-X.
-# Le décodeur Kotlin (decodeBilou) gère B/I/O avec le fix end=i pour I-X.
 # ------------------------------------------------------------
-TYPES = ["PER", "LOC", "OBJECT", "ORG", "TIME", "EVENT"]
+TYPES = ["PER", "LOC", "ORG", "TIME", "EVENT", "OBJECT"]
 
 LABEL_LIST = (
         ["O"] +
@@ -458,10 +454,12 @@ class WeightedTrainer(Trainer):
         labels = inputs.pop("labels")
         outputs = model(**inputs)
         logits = outputs.logits
-        weights = self.class_weights.to(logits.device) if self.class_weights is not None else None
+        # Cast en float32 pour CrossEntropyLoss (DeBERTa peut émettre des Half)
+        logits_f32 = logits.float()
+        weights = self.class_weights.to(device=logits.device, dtype=torch.float32) if self.class_weights is not None else None
         smoothing = getattr(self.args, "label_smoothing_factor", 0.0)
         loss_fct = nn.CrossEntropyLoss(weight=weights, ignore_index=-100, label_smoothing=smoothing)
-        loss = loss_fct(logits.view(-1, model.config.num_labels), labels.view(-1))
+        loss = loss_fct(logits_f32.view(-1, model.config.num_labels), labels.view(-1))
         return (loss, outputs) if return_outputs else loss
 
 
@@ -501,7 +499,7 @@ def main():
         help="Clamp max des poids de classe (défaut: 10.0).")
     parser.add_argument("--label_smoothing", type=float, default=0.05,
         help="Label smoothing factor pour CrossEntropyLoss (défaut: 0.05). "
-             "0.1 bloque la convergence BILOU à loss~2.46 (plancher artificiciel).")
+             "0.1 bloque la convergence BILOU à loss~2.46 (plancher artificiel).")
     args = parser.parse_args()
 
     # Mode mini-training : override les paramètres pour un debug rapide
@@ -557,8 +555,9 @@ def main():
         raise RuntimeError("Aucune phrase valide après preprocessing des pieces. Vérifie ton fichier BILOU.")
 
     # ── Oversampling des labels faibles ────────────────────────────────────────
-    # OBJECT (947 entités) est 4.6× moins représenté que PER → ×4 total (3 copies extra)
-    # EVENT (1670 entités) est 2.6× moins représenté       → ×2 total (1 copie extra)
+    # Avec les labels coarses (PER/LOC/ORG/TIME/EVENT/OBJECT) mappés depuis hint_* :
+    #   OBJECT est sous-représenté (outils, armes, aliments... petits groupes hint_*)
+    #   EVENT est aussi plus rare que PER
     _event_docs = [
         d for d in processed_docs
         if any(lbl.split("-")[-1] == "EVENT" for lbl in d["labels"] if lbl != "O")
@@ -612,13 +611,13 @@ def main():
     print(f"[INFO] steps/epoch={_steps_per_epoch} | total_steps={_total_steps} | warmup_steps={_warmup_steps}")
 
     # ── Calcul des poids de classe ─────────────────────────────────────────────
-    # Objectif : compenser le déséquilibre BILOU (U-* >> B/I/L) et les classes rares
+    # Labels coarses : O / B-PER / I-PER / ... / B-OBJECT / I-OBJECT
     # Stratégie :
     #   1. Inverse-frequency weighting depuis le training set tokenisé
-    #   2. Poids fixe très bas pour O (il domine ~85 % des tokens)
-    #   3. Boost x bilou_boost sur B/I/L → force les spans multi-tokens
+    #   2. Poids fixe très bas pour O
+    #   3. Boost x bilou_boost sur B/I → force les spans multi-tokens
     #   4. Boost supplémentaire sur OBJECT et EVENT (sous-représentés)
-    #   5. Clamp [0.05, weight_clamp_max] pour éviter les extrêmes
+    #   5. Clamp [0.05, weight_clamp_max]
     label_counts = Counter()
     for example in train_tok:
         lbl_ids = example["labels"]
@@ -633,20 +632,17 @@ def main():
 
     raw_weights = []
     for i, label_name in enumerate(LABEL_LIST):
-        count  = label_counts.get(i, 1)   # éviter division par zéro
+        count  = label_counts.get(i, 1)
         w      = total_tokens / (num_labels * count)   # inverse-fréquence
 
         prefix = label_name.split("-")[0] if "-" in label_name else ""
-        etype  = label_name.split("-")[1] if "-" in label_name else ""
+        etype  = label_name.split("-", 1)[1] if "-" in label_name else ""
 
-        # O : poids très bas (on ne veut pas que O domine la loss)
         if label_name == "O":
             w = args.class_weight_o
         else:
-            # Boost B/I/L pour favoriser les spans multi-tokens
             if prefix in ("B", "I", "L"):
                 w *= args.bilou_boost
-            # Boost entités sous-représentées
             if etype == "OBJECT":
                 w *= args.entity_boost_object
             if etype == "EVENT":

@@ -2,10 +2,18 @@ import os
 # reduce MPS upper watermark to avoid premature OOM (recommended in PyTorch message)
 os.environ.setdefault('PYTORCH_MPS_HIGH_WATERMARK_RATIO', '0.0')
 
-import json, torch, argparse, time, statistics, random
+import json
+import torch
+import argparse
+import time
+import statistics
+import random
+from collections import Counter
+from pathlib import Path
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
-from dataset import SpanDataset, collate_fn
+import dataset as dataset_module
+from dataset import SpanDataset, collate_fn, LABELS
 from model import SpanClassifier
 from transformers import AutoTokenizer
 from sklearn.metrics import classification_report, f1_score
@@ -28,6 +36,9 @@ _DEFAULT_TOKENIZER_PATH = os.path.join(
     "..", "..", "debertav3-ner", "tokenizer_from_hf"
 )
 TOKENIZER_PATH = os.environ.get("TOKENIZER_PATH", _DEFAULT_TOKENIZER_PATH)
+
+ID2LABEL = {v: k for k, v in LABELS.items()}
+
 
 def _cleanup_hf_cache(model_name):
     """Attempt to remove cached snapshots for the given HF model to force a fresh download."""
@@ -57,7 +68,7 @@ def load_tokenizer_with_retries(model_name, use_fast_prefer=False):
         strategies.append({'use_fast': True, 'note': 'fast tokenizer preferred'})
     strategies.append({'use_fast': False, 'note': 'slow sentencepiece tokenizer (recommended for this model)'})
     strategies.append({'use_fast': False, 'cleanup': True, 'note': 'clean HF cache and retry slow tokenizer'})
-    strategies.append({'use_fast': True, 'note': 'fallback to fast tokenizer (may be less accurate)'} )
+    strategies.append({'use_fast': True, 'note': 'fallback to fast tokenizer (may be less accurate)'})
 
     for strat in strategies:
         try:
@@ -86,7 +97,7 @@ def load_tokenizer_with_retries(model_name, use_fast_prefer=False):
         "4) If using a container, avoid mounting an old host HF cache; let container download fresh files.",
         "5) As a last resort you can try use_fast=True to fall back to the fast tokenizer (already attempted).",
         "--- End diagnostics ---",
-    ]
+        ]
     raise RuntimeError("\n".join(msg_lines)) from last_exc
 
 
@@ -100,17 +111,73 @@ def _summary_stats(lst):
     }
 
 
-def run_epoch(loader, model, optimizer, device, args, training=False, log_interval=50, epoch_num=None):
-    """Run one epoch and collect detailed timing logs.
+def compute_label_metrics(y_true, y_pred):
+    """
+    Retourne:
+      - macro_f1
+      - micro_f1
+      - per_label_f1: dict[label_name] = f1
+      - report_dict: classification_report(..., output_dict=True)
+      - report_text: classification_report(..., string)
+    """
+    if not y_true or not y_pred:
+        empty_f1 = {label: 0.0 for label in LABELS.keys()}
+        return 0.0, 0.0, empty_f1, {}, "Aucune prédiction / aucun label."
 
-    Returns: (mean_loss, f1, timing_stats)
-    timing_stats is a dict with lists of times in seconds for: data, prep, forward, loss, backward, optim, total
+    label_ids = list(range(len(LABELS)))
+    label_names = [ID2LABEL[i] for i in label_ids]
+
+    report_dict = classification_report(
+        y_true,
+        y_pred,
+        labels=label_ids,
+        target_names=label_names,
+        digits=3,
+        output_dict=True,
+        zero_division=0
+    )
+
+    report_text = classification_report(
+        y_true,
+        y_pred,
+        labels=label_ids,
+        target_names=label_names,
+        digits=3,
+        zero_division=0
+    )
+
+    macro_f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
+    micro_f1 = f1_score(y_true, y_pred, average="micro", zero_division=0)
+
+    per_label_f1 = {
+        label: report_dict.get(label, {}).get("f1-score", 0.0)
+        for label in label_names
+    }
+
+    return macro_f1, micro_f1, per_label_f1, report_dict, report_text
+
+
+def run_epoch(loader, model, optimizer, device, args, training=False, log_interval=50, epoch_num=None):
+    """
+    Run one epoch and collect detailed timing logs.
+
+    Returns:
+      (mean_loss, metrics, timing_stats)
+
+    metrics = {
+        "macro_f1": float,
+        "micro_f1": float,
+        "per_label_f1": dict,
+        "report_dict": dict,
+        "report_text": str,
+        "all_labels": list[int],
+        "all_preds": list[int],
+    }
     """
     accum_steps = max(1, int(getattr(args, 'accum_steps', 1)))
 
     if training:
         model.train()
-        # ensure grads are zeroed before starting accumulation
         optimizer.zero_grad()
     else:
         model.eval()
@@ -131,14 +198,17 @@ def run_epoch(loader, model, optimizer, device, args, training=False, log_interv
     it = iter(loader)
     batch_idx = 0
     t_epoch_start = time.perf_counter()
+
     # optional per-batch debug for first few batches
     debug_per_batch = []
+
     while True:
         t0 = time.perf_counter()
         try:
             batch = next(it)
         except StopIteration:
             break
+
         t_after_load = time.perf_counter()
         data_times.append(t_after_load - t0)
 
@@ -147,9 +217,11 @@ def run_epoch(loader, model, optimizer, device, args, training=False, log_interv
         input_ids = batch["input_ids"].to(device)
         if input_ids.dtype != torch.long:
             input_ids = input_ids.long()
+
         att = batch["attention_mask"].to(device)
         if att.dtype != torch.long:
             att = att.long()
+
         spans = batch["spans"]
         labels = batch.get("labels")
 
@@ -164,57 +236,61 @@ def run_epoch(loader, model, optimizer, device, args, training=False, log_interv
                     if random.random() < coarse_noise_rate:
                         sp['coarse_id'] = random.randint(0, 5)
 
-
         if labels is not None and labels.numel() > 0:
             labels = labels.to(device)
             if labels.dtype != torch.long:
                 labels = labels.long()
+
         t_prep_end = time.perf_counter()
         prep_times.append(t_prep_end - t_prep_start)
 
-        # forward
-        t_fwd_start = time.perf_counter()
-        logits = model({
-            "input_ids": input_ids,
-            "attention_mask": att,
-            "spans": spans
-        })
-        t_fwd_end = time.perf_counter()
-        forward_times.append(t_fwd_end - t_fwd_start)
+        with torch.set_grad_enabled(training):
+            # forward
+            t_fwd_start = time.perf_counter()
+            logits = model({
+                "input_ids": input_ids,
+                "attention_mask": att,
+                "spans": spans
+            })
+            t_fwd_end = time.perf_counter()
+            forward_times.append(t_fwd_end - t_fwd_start)
 
-        # loss
-        t_loss_start = time.perf_counter()
-        loss_fn = batch.get("loss_fn")
-        if callable(loss_fn) and labels is not None and labels.numel() > 0:
-            # Align logits and labels if mismatch occurs (some spans may have been skipped by model)
-            if logits.numel() == 0:
-                loss = torch.tensor(0.0, device=device)
+            # loss
+            t_loss_start = time.perf_counter()
+            loss_fn = batch.get("loss_fn")
+
+            if callable(loss_fn) and labels is not None and labels.numel() > 0:
+                # S'assurer que le weight de la loss est sur le même device que les logits
+                if hasattr(loss_fn, 'weight') and loss_fn.weight is not None:
+                    if loss_fn.weight.device != logits.device:
+                        loss_fn.weight = loss_fn.weight.to(logits.device)
+
+                if logits.numel() == 0:
+                    loss = torch.tensor(0.0, device=device)
+                else:
+                    num_logits = logits.size(0)
+                    num_labels = labels.numel()
+                    if num_logits != num_labels:
+                        print(f"⚠️ MISMATCH logits ({num_logits}) vs labels ({num_labels}) - truncating to min and logging")
+                        m = min(num_logits, num_labels)
+                        logits = logits[:m]
+                        labels = labels[:m]
+
+                    # apply gradient accumulation: scale loss
+                    loss = loss_fn(logits, labels) / accum_steps
             else:
-                # logits shape: (num_spans, num_labels)
-                num_logits = logits.size(0)
-                num_labels = labels.numel()
-                if num_logits != num_labels:
-                    print(f"⚠️ MISMATCH logits ({num_logits}) vs labels ({num_labels}) - truncating to min and logging")
-                    # truncate labels to match logits (prefer to compute loss on available logits)
-                    m = min(num_logits, num_labels)
-                    logits = logits[:m]
-                    labels = labels[:m]
-                # apply gradient accumulation: scale loss
-                loss = loss_fn(logits, labels) / accum_steps
-        else:
-            loss = torch.tensor(0.0, device=device)
-        t_loss_end = time.perf_counter()
-        loss_times.append(t_loss_end - t_loss_start)
+                loss = torch.tensor(0.0, device=device)
 
-        # backward + optim (with accumulation)
-        t_back_start = time.perf_counter()
-        if training:
-            loss.backward()
-        t_back_end = time.perf_counter()
-        backward_times.append(t_back_end - t_back_start)
+            t_loss_end = time.perf_counter()
+            loss_times.append(t_loss_end - t_loss_start)
 
-        t_opt_start = None
-        t_opt_end = None
+            # backward + optim (with accumulation)
+            t_back_start = time.perf_counter()
+            if training:
+                loss.backward()
+            t_back_end = time.perf_counter()
+            backward_times.append(t_back_end - t_back_start)
+
         if training and ((batch_idx + 1) % accum_steps == 0):
             t_opt_start = time.perf_counter()
             optimizer.step()
@@ -229,12 +305,13 @@ def run_epoch(loader, model, optimizer, device, args, training=False, log_interv
 
         # collect preds/labels
         if logits.numel() > 0:
-            preds = logits.argmax(dim=-1).cpu().numpy()
+            preds = logits.argmax(dim=-1).detach().cpu().numpy()
             all_preds.extend(preds.tolist())
-        if labels is not None and labels.numel() > 0:
-            all_labels.extend(labels.cpu().numpy().tolist())
 
-        losses.append(loss.item() * (accum_steps) if isinstance(loss, torch.Tensor) else float(loss))
+        if labels is not None and labels.numel() > 0:
+            all_labels.extend(labels.detach().cpu().numpy().tolist())
+
+        losses.append(loss.item() * accum_steps if isinstance(loss, torch.Tensor) else float(loss))
 
         # per-batch debug info (first 5 batches)
         if batch_idx < 5:
@@ -250,8 +327,8 @@ def run_epoch(loader, model, optimizer, device, args, training=False, log_interv
             })
 
         batch_idx += 1
+
         if batch_idx % log_interval == 0:
-            # print intermediate stats
             s_data = _summary_stats(data_times)
             s_prep = _summary_stats(prep_times)
             s_fwd = _summary_stats(forward_times)
@@ -259,7 +336,11 @@ def run_epoch(loader, model, optimizer, device, args, training=False, log_interv
             s_back = _summary_stats(backward_times)
             s_opt = _summary_stats(optim_times)
             s_tot = _summary_stats(total_times)
-            print(f"[{'TRAIN' if training else 'EVAL'}] batch {batch_idx} | batches so far {batch_idx} | data mean {s_data['mean']:.3f}s prep {s_prep['mean']:.3f}s fwd {s_fwd['mean']:.3f}s loss {s_loss['mean']:.3f}s back {s_back['mean']:.3f}s opt {s_opt['mean']:.3f}s total {s_tot['mean']:.3f}s")
+            print(
+                f"[{'TRAIN' if training else 'EVAL'}] batch {batch_idx} | batches so far {batch_idx} | "
+                f"data mean {s_data['mean']:.3f}s prep {s_prep['mean']:.3f}s fwd {s_fwd['mean']:.3f}s "
+                f"loss {s_loss['mean']:.3f}s back {s_back['mean']:.3f}s opt {s_opt['mean']:.3f}s total {s_tot['mean']:.3f}s"
+            )
 
     # final step if leftover grads
     if training and (batch_idx % accum_steps != 0):
@@ -272,7 +353,6 @@ def run_epoch(loader, model, optimizer, device, args, training=False, log_interv
     t_epoch_end = time.perf_counter()
     epoch_time = t_epoch_end - t_epoch_start
 
-    # summary
     timing_stats = {
         'data_times': data_times,
         'prep_times': prep_times,
@@ -286,21 +366,43 @@ def run_epoch(loader, model, optimizer, device, args, training=False, log_interv
         'per_batch_debug': debug_per_batch
     }
 
-    f1 = 0.0
     try:
-        f1 = f1_score(all_labels, all_preds, average="macro") if all_labels and all_preds else 0.0
+        macro_f1, micro_f1, per_label_f1, report_dict, report_text = compute_label_metrics(all_labels, all_preds)
     except Exception:
-        f1 = 0.0
+        macro_f1, micro_f1 = 0.0, 0.0
+        per_label_f1 = {label: 0.0 for label in LABELS.keys()}
+        report_dict = {}
+        report_text = "Erreur lors du calcul du classification_report."
+
+    metrics = {
+        "macro_f1": macro_f1,
+        "micro_f1": micro_f1,
+        "per_label_f1": per_label_f1,
+        "report_dict": report_dict,
+        "report_text": report_text,
+        "all_labels": all_labels,
+        "all_preds": all_preds,
+    }
 
     # optionally write timings to a file for later analysis
     if args.timings_out:
         outdir = args.timings_out
         os.makedirs(outdir, exist_ok=True)
+
         fname = os.path.join(outdir, f"timings_epoch_{epoch_num if epoch_num is not None else 'unknown'}.json")
         with open(fname, 'w', encoding='utf-8') as fh:
             json.dump(timing_stats, fh, ensure_ascii=False, indent=2)
 
-    return np.mean(losses) if losses else 0.0, f1, timing_stats
+        metrics_fname = os.path.join(outdir, f"metrics_epoch_{epoch_num if epoch_num is not None else 'unknown'}.json")
+        with open(metrics_fname, 'w', encoding='utf-8') as fh:
+            json.dump({
+                "macro_f1": macro_f1,
+                "micro_f1": micro_f1,
+                "per_label_f1": per_label_f1,
+                "report_dict": report_dict
+            }, fh, ensure_ascii=False, indent=2)
+
+    return np.mean(losses) if losses else 0.0, metrics, timing_stats
 
 
 def main():
@@ -308,9 +410,13 @@ def main():
     parser.add_argument("--train", required=True)
     parser.add_argument("--val", required=True)
     parser.add_argument("--test", required=True)
-    parser.add_argument("--tokenizer-path", type=str, default=None,
+    parser.add_argument(
+        "--tokenizer-path",
+        type=str,
+        default=None,
         help="Chemin vers le tokenizer local (fast tokenizer DeBERTa). "
-             "Défaut : variable d'env TOKENIZER_PATH ou chemin relatif ../../debertav3-ner/tokenizer_from_hf")
+             "Défaut : variable d'env TOKENIZER_PATH ou chemin relatif ../../debertav3-ner/tokenizer_from_hf"
+    )
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--lr", type=float, default=2e-5)
@@ -318,13 +424,33 @@ def main():
     parser.add_argument("--num-workers", type=int, default=0, help="DataLoader num_workers (set >0 for parallel data loading)")
     parser.add_argument("--timings-out", type=str, default=None, help="If set, write per-epoch timing JSON files to this directory")
     parser.add_argument("--accum-steps", type=int, default=1, help="Gradient accumulation steps to lower peak memory usage")
-    parser.add_argument("--device", choices=["cpu","mps","cuda"], default=None, help="Force device: 'cpu', 'mps' or 'cuda'. If absent, auto-detect.")
+    parser.add_argument("--device", choices=["cpu", "mps", "cuda"], default=None, help="Force device: 'cpu', 'mps' or 'cuda'. If absent, auto-detect.")
     parser.add_argument("--resume", type=str, default=None, help="Path to a checkpoint file to resume training from")
     parser.add_argument("--start-epoch", type=int, default=None, help="Force start epoch when resuming from a plain model state_dict")
-    parser.add_argument("--coarse-noise", type=float, default=0.10,
+    parser.add_argument(
+        "--coarse-noise",
+        type=float,
+        default=0.10,
         help="Taux de bruit sur le coarse_id pendant l'entraînement (0.0 = désactivé, 0.10 = 10%%). "
              "Simule les erreurs du modèle NER coarse à l'inférence pour rendre le SpanClassifier robuste. "
-             "Uniquement appliqué pendant le training, pas l'évaluation.")
+             "Uniquement appliqué pendant le training, pas l'évaluation."
+    )
+    parser.add_argument(
+        "--class-weights",
+        choices=["none", "auto"],
+        default="auto",
+        help="Pondération des classes dans la CrossEntropyLoss. "
+             "'auto' (défaut) : poids inverse-fréquence calculés depuis --train. "
+             "'none' : pas de pondération (comportement historique)."
+    )
+    parser.add_argument(
+        "--qty-weight",
+        type=float,
+        default=0.60,
+        help="Facteur multiplicatif appliqué au poids de hint_quantity APRÈS calcul inverse-fréquence "
+             "(défaut: 0.35). Réduit la sur-représentation de hint_quantity dans la famille OBJECT. "
+             "Ignoré si --class-weights=none."
+    )
     args = parser.parse_args()
 
     # allow overriding device from CLI to force CPU (useful when MPS leaks memory)
@@ -332,6 +458,7 @@ def main():
         device = args.device
     else:
         device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+
     print("✅ Using device:", device)
 
     try:
@@ -348,14 +475,83 @@ def main():
         ) from e
 
     train_data = SpanDataset(args.train, tokenizer)
-    val_data   = SpanDataset(args.val, tokenizer)
-    test_data  = SpanDataset(args.test, tokenizer)
+    val_data = SpanDataset(args.val, tokenizer)
+    test_data = SpanDataset(args.test, tokenizer)
+
+    # ── Class weights ──────────────────────────────────────────────────────────
+    if args.class_weights == "auto":
+        print("\n⚖️  Calcul des class weights (inverse-fréquence) depuis le training set…")
+        raw_train = [json.loads(l) for l in Path(args.train).open(encoding="utf-8") if l.strip()]
+        counts: Counter = Counter()
+        for row in raw_train:
+            for sp in row.get("spans", []):
+                lbl = sp.get("label")
+                if lbl in LABELS:
+                    counts[lbl] += 1
+
+        N = sum(counts.values())
+        C = len(LABELS)  # 22
+        weights = torch.ones(C, dtype=torch.float32)
+
+        for label, idx in LABELS.items():
+            n_i = counts.get(label, 0)
+            if n_i > 0:
+                weights[idx] = N / (C * n_i)
+            # labels absents du training → poids 1.0 (neutre)
+
+        # Normalisation : moyenne = 1.0 (conserve l'échelle globale de la loss)
+        weights = weights / weights.mean()
+
+        # Réduction supplémentaire de hint_quantity
+        qty_idx = LABELS["hint_quantity"]   # 21
+        weights[qty_idx] *= args.qty_weight
+
+        # Re-normalisation finale
+        weights = weights / weights.mean()
+
+        dataset_module.CLASS_WEIGHTS = weights
+
+        # Affichage pour traçabilité
+        idx_to_label = {v: k for k, v in LABELS.items()}
+        print(f"  {'label':<25} {'count':>7}  {'weight':>8}")
+        print(f"  {'-'*45}")
+        for idx in range(C):
+            lbl = idx_to_label[idx]
+            cnt = counts.get(lbl, 0)
+            w = weights[idx].item()
+            marker = "  ← qty_weight applied" if idx == qty_idx else ""
+            print(f"  {lbl:<25} {cnt:>7}  {w:>8.4f}{marker}")
+        print()
+    else:
+        print("⚖️  --class-weights=none : CrossEntropyLoss sans pondération.")
+        dataset_module.CLASS_WEIGHTS = None
 
     # DataLoader: allow controlling workers and pin_memory
     pin_mem = True if device == "cuda" else False
-    train_loader = DataLoader(train_data, batch_size=args.batch, shuffle=True, collate_fn=collate_fn, num_workers=args.num_workers, pin_memory=pin_mem)
-    val_loader   = DataLoader(val_data, batch_size=args.batch, shuffle=False, collate_fn=collate_fn, num_workers=args.num_workers, pin_memory=pin_mem)
-    test_loader  = DataLoader(test_data, batch_size=args.batch, shuffle=False, collate_fn=collate_fn, num_workers=args.num_workers, pin_memory=pin_mem)
+    train_loader = DataLoader(
+        train_data,
+        batch_size=args.batch,
+        shuffle=True,
+        collate_fn=collate_fn,
+        num_workers=args.num_workers,
+        pin_memory=pin_mem
+    )
+    val_loader = DataLoader(
+        val_data,
+        batch_size=args.batch,
+        shuffle=False,
+        collate_fn=collate_fn,
+        num_workers=args.num_workers,
+        pin_memory=pin_mem
+    )
+    test_loader = DataLoader(
+        test_data,
+        batch_size=args.batch,
+        shuffle=False,
+        collate_fn=collate_fn,
+        num_workers=args.num_workers,
+        pin_memory=pin_mem
+    )
 
     model = SpanClassifier(MODEL_NAME, num_labels=22, num_coarse=6, coarse_embed_dim=128).to(device)
     # Ensure model parameters are float32 to avoid dtype mismatch with inputs
@@ -366,8 +562,10 @@ def main():
     # checkpointing / resume support
     best_val_f1 = 0.0
     start_epoch = 1
+
     # make sure device mapping for checkpoint load is correct
     torch_device = torch.device(device)
+
     if getattr(args, 'resume', None):
         resume_path = args.resume
     else:
@@ -378,6 +576,7 @@ def main():
         if os.path.exists(resume_path):
             print(f"⤴️  Loading checkpoint from {resume_path}")
             ckpt = torch.load(resume_path, map_location=torch_device)
+
             # ckpt may be a state_dict or a dict containing keys
             if isinstance(ckpt, dict) and 'model_state' in ckpt:
                 model.load_state_dict(ckpt['model_state'])
@@ -385,6 +584,7 @@ def main():
                     optimizer.load_state_dict(ckpt.get('optim_state', {}))
                 except Exception:
                     print("⚠️ Unable to restore optimizer state fully; continuing with fresh optimizer.")
+
                 best_val_f1 = ckpt.get('best_val_f1', 0.0)
                 start_epoch = int(ckpt.get('epoch', 0)) + 1
                 print(f"Resuming from epoch {start_epoch} with best_val_f1={best_val_f1}")
@@ -407,12 +607,47 @@ def main():
     print("🚀 Starting training...")
 
     for epoch in range(start_epoch, args.epochs + 1):
-        train_loss, train_f1, train_timing = run_epoch(train_loader, model, optimizer, device, args, training=True, log_interval=args.log_interval, epoch_num=epoch)
-        val_loss, val_f1, val_timing = run_epoch(val_loader, model, optimizer, device, args, training=False, log_interval=args.log_interval, epoch_num=epoch)
+        train_loss, train_metrics, train_timing = run_epoch(
+            train_loader,
+            model,
+            optimizer,
+            device,
+            args,
+            training=True,
+            log_interval=args.log_interval,
+            epoch_num=epoch
+        )
+
+        val_loss, val_metrics, val_timing = run_epoch(
+            val_loader,
+            model,
+            optimizer,
+            device,
+            args,
+            training=False,
+            log_interval=args.log_interval,
+            epoch_num=epoch
+        )
 
         print(f"\n📅 Epoch {epoch}")
-        print(f"   Train loss = {train_loss:.4f} | Train F1 = {train_f1:.4f} | epoch time {train_timing['epoch_time']:.2f}s | batches {train_timing['batches']}")
-        print(f"   Val   loss = {val_loss:.4f} | Val   F1 = {val_f1:.4f} | epoch time {val_timing['epoch_time']:.2f}s | batches {val_timing['batches']}")
+        print(
+            f"   Train loss = {train_loss:.4f} | "
+            f"Train Macro F1 = {train_metrics['macro_f1']:.4f} | "
+            f"Train Micro F1 = {train_metrics['micro_f1']:.4f} | "
+            f"epoch time {train_timing['epoch_time']:.2f}s | batches {train_timing['batches']}"
+        )
+        print(
+            f"   Val   loss = {val_loss:.4f} | "
+            f"Val   Macro F1 = {val_metrics['macro_f1']:.4f} | "
+            f"Val   Micro F1 = {val_metrics['micro_f1']:.4f} | "
+            f"epoch time {val_timing['epoch_time']:.2f}s | batches {val_timing['batches']}"
+        )
+
+        print("\n[Métriques par label - TRAIN]")
+        print(train_metrics["report_text"])
+
+        print("[Métriques par label - VAL]")
+        print(val_metrics["report_text"])
 
         # save last checkpoint
         ckpt_last = {
@@ -423,8 +658,9 @@ def main():
         }
         torch.save(ckpt_last, 'checkpoint_last.pt')
 
-        if val_f1 > best_val_f1:
-            best_val_f1 = val_f1
+        if val_metrics["macro_f1"] > best_val_f1:
+            best_val_f1 = val_metrics["macro_f1"]
+
             # save best full checkpoint
             ckpt_best = {
                 'epoch': epoch,
@@ -433,11 +669,13 @@ def main():
                 'best_val_f1': best_val_f1
             }
             torch.save(ckpt_best, 'checkpoint_best.pt')
+
             # also save legacy best_model.pt for compatibility
             torch.save(model.state_dict(), 'best_model.pt')
             print("✅ New best model saved as checkpoint_best.pt / best_model.pt")
 
     print("\n✅ Training finished. Loading best model for test evaluation...")
+
     # load best checkpoint if exists
     best_path = 'checkpoint_best.pt' if os.path.exists('checkpoint_best.pt') else ('best_model.pt' if os.path.exists('best_model.pt') else None)
     if best_path:
@@ -454,32 +692,39 @@ def main():
     test_gold = []
 
     model.eval()
-    for batch in test_loader:
-        input_ids = batch["input_ids"].to(device)
-        if input_ids.dtype != torch.long:
-            input_ids = input_ids.long()
-        att = batch["attention_mask"].to(device)
-        if att.dtype != torch.long:
-            att = att.long()
-        spans = batch["spans"]
-        labels = batch["labels"].to(device)
-        if labels.dtype != torch.long:
-            labels = labels.long()
+    with torch.no_grad():
+        for batch in test_loader:
+            input_ids = batch["input_ids"].to(device)
+            if input_ids.dtype != torch.long:
+                input_ids = input_ids.long()
 
-        logits = model({
-            "input_ids": input_ids,
-            "attention_mask": att,
-            "spans": spans
-        })
+            att = batch["attention_mask"].to(device)
+            if att.dtype != torch.long:
+                att = att.long()
 
-        preds = logits.argmax(dim=-1).cpu().numpy()
-        test_preds.extend(preds.tolist())
-        test_gold.extend(labels.cpu().numpy().tolist())
+            spans = batch["spans"]
+            labels = batch["labels"].to(device)
+            if labels.dtype != torch.long:
+                labels = labels.long()
+
+            logits = model({
+                "input_ids": input_ids,
+                "attention_mask": att,
+                "spans": spans
+            })
+
+            preds = logits.argmax(dim=-1).cpu().numpy()
+            test_preds.extend(preds.tolist())
+            test_gold.extend(labels.cpu().numpy().tolist())
+
+    test_macro_f1, test_micro_f1, test_per_label_f1, test_report_dict, test_report_text = compute_label_metrics(
+        test_gold, test_preds
+    )
 
     print("\n🎯 FINAL TEST RESULTS")
-    print(classification_report(test_gold, test_preds, digits=3))
-    print(f"Macro F1: {f1_score(test_gold, test_preds, average='macro'):.4f}")
-    print(f"Micro F1: {f1_score(test_gold, test_preds, average='micro'):.4f}")
+    print(test_report_text)
+    print(f"Macro F1: {test_macro_f1:.4f}")
+    print(f"Micro F1: {test_micro_f1:.4f}")
 
 
 if __name__ == '__main__':
