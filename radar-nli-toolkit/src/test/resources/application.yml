@@ -1,0 +1,54 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Configuration Spring Boot pour les tests d'intégration NER
+#
+# ${ner.model.root} est injecté via la propriété système définie dans
+# build.gradle.kts → tasks.withType<Test> { systemProperty("ner.model.root", ...) }
+# ─────────────────────────────────────────────────────────────────────────────
+
+onnx:
+  ner:
+    # ── NerExtractorFromUD (DeBERTa, best_model-v2.onnx) ─────────────────────
+    # Ce bean est chargé pour de vrai par OnnxNerAutoConfiguration.
+    # Le modèle (best_model-v2.onnx) doit être récupéré via Git LFS.
+    ud:
+      # FP16 original — plus rapide que INT8 sur Apple Silicon via CoreML
+      # INT8 (best_model-v2-int8.onnx, 218 MB) : utile pour CI/serveur x86 uniquement
+      modelPath:    "${ner.model.root}/debertav3-ner/best_model-v2.onnx"
+      tokenizerDir: "${ner.model.root}/debertav3-ner/tokenizer_from_hf"
+      maxLen: 256
+      useGpu: false
+      useCoreMl: false   # désactivé en test (runner Linux/CI sans CoreML)
+      intraOpThreads: 4
+      maxLen: 256
+      useGpu: false
+      intraOpThreads: 4
+
+    # ── NerExtractor BILOU (XLM-RoBERTa) ─────────────────────────────────────
+    # Stubbed via @Primary NerExtractor dans NerCiTestConfig.
+    # OnnxLabelNerAutoConfiguration est court-circuité (@ConditionalOnMissingBean)
+    # → les chemins ci-dessous ne sont jamais utilisés à l'exécution.
+    label:
+      modelPath:    "stub-not-loaded"
+      tokenizerDir: "stub-not-loaded"
+
+  # ── Embedder (BGE-M3) ──────────────────────────────────────────────────────
+  # Stubbed via @Primary Embedder dans NerCiTestConfig.
+  # OnnxEmbeddingAutoConfiguration est court-circuité (@ConditionalOnMissingBean).
+  embedding:
+    modelPath:    "stub-not-loaded"
+    tokenizerDir: "stub-not-loaded"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UD parser (Stanza) — non utilisé en test (UDParser stubbed)
+# ─────────────────────────────────────────────────────────────────────────────
+ud:
+  client:
+    host: localhost
+    port: 8000
+
+logging:
+  level:
+    root: WARN
+    rag.connectors.ud.stanza: INFO
+    io.ner: INFO
+

@@ -273,7 +273,7 @@ fun buildEntityCandidates(
 
         // ── NER coarse et hint ──────────────────────────────────────────────
         val nerCoarse = NerCoarseType.from(entity.type)
-        val classified = hintBySpan[eStart to eEnd]
+        val classified = hintBySpan[eStart to eEnd] ?: return@mapNotNull null
         val nerHint    = classified?.label ?: coarseToHint(nerCoarse)
 
         // ── Récupération des infos UD depuis metadata (mergeNerLabelWithUD) ─

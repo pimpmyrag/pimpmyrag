@@ -41,6 +41,12 @@ _COARSE_DEFAULT = 5  # OBJECT — fallback conservateur
 # module-global tokenizer (will be set in SpanDataset.__init__)
 TOKENIZER = None
 
+# module-global class weights tensor (shape: [22], dtype float32).
+# None → CrossEntropyLoss sans poids (comportement actuel).
+# Peut être calculé automatiquement depuis les fréquences du training (voir train.py --class-weights auto)
+# ou positionné manuellement depuis l'extérieur avant l'appel à DataLoader.
+CLASS_WEIGHTS = None
+
 class SpanDataset(Dataset):
     def __init__(self, path, tokenizer):
         # load lines safely
@@ -232,5 +238,7 @@ def collate_fn(batch):
         'attention_mask': attention_mask,
         'spans': spans_tokenized,
         'labels': labels_tensor,
-        'loss_fn': torch.nn.CrossEntropyLoss()
+        # CLASS_WEIGHTS est sur CPU ; le déplacement sur le bon device se fait
+        # au moment du calcul de la loss (logits.device résolu dans run_epoch).
+        'loss_fn': torch.nn.CrossEntropyLoss(weight=CLASS_WEIGHTS.clone() if CLASS_WEIGHTS is not None else None)
     }

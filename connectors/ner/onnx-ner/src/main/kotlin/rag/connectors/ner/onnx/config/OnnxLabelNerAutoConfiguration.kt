@@ -16,8 +16,11 @@ class OnnxLabelNerAutoConfiguration {
     @ConditionalOnMissingBean
     fun onnxNer(config: OnnxLabelNerConfig): NerExtractor {
         return OnnxBilouEntityExtractor(
-            modelPath = config.modelPath,
-            tokenizerDir = config.tokenizerDir,
+            modelPath      = config.modelPath,
+            tokenizerDir   = config.tokenizerDir,
+            maxSeqLen      = config.maxSeqLen,
+            useCoreMl      = config.useCoreMl,
+            intraOpThreads = config.intraOpThreads,
         )
     }
 }

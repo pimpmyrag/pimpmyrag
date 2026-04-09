@@ -18,5 +18,11 @@ data class OnnxLabelNerConfig(
     @DefaultValue("0")
     val gpuDeviceId: Int,
     val intraOpThreads: Int = Runtime.getRuntime().availableProcessors(),
-    val interOpThreads: Int = 1
+    val interOpThreads: Int = 1,
+    @DefaultValue("128")
+    val maxSeqLen: Int = 128,
+    @DefaultValue("false")
+    val useCoreMl: Boolean = false,
+    @DefaultValue("8")
+    val batchSize: Int = 8,
 )

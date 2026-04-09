@@ -15,8 +15,11 @@ class OnnxNerAutoConfiguration {
     @ConditionalOnMissingBean
     fun onnxNerUd(config: OnnxNerConfig): NerExtractorFromUD {
         return OnnxSpanNerExtractor(
-            modelPath = config.modelPath,
-            tokenizerDir = config.tokenizerDir,
+            modelPath      = config.modelPath,
+            tokenizerDir   = config.tokenizerDir,
+            useCoreMl      = config.useCoreMl,
+            intraOpThreads = config.intraOpThreads,
+            sentBatchSize  = config.sentBatchSize,
         )
     }
 }

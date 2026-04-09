@@ -1,5 +1,9 @@
 package io.axes.classifier
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
+import org.slf4j.LoggerFactory
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
@@ -11,6 +15,7 @@ import rag.connectors.ud.stanza.OnnxSpanNerExtractor
 import rag.connectors.ud.stanza.SimpleEntityModel
 import rag.connectors.ud.stanza.buildEntityCandidates
 import rag.connectors.ud.stanza.mergeNerLabelWithUD
+import rag.connectors.ud.stanza.mergeNerLabelWithUDV2
 import rag.engine.Embedder
 import rag.engine.NerExtractor
 import rag.engine.NerExtractorFromUD
@@ -29,6 +34,7 @@ class ClassifierController(
     private val udParser: UDParser,
     private val multiAxisTrainingService: MultiAxisTrainingService
 ) {
+    private val log = LoggerFactory.getLogger(ClassifierController::class.java)
     private var classifier: MultiClassEventClassifier? = null
     private var multiClassClassifier: MultiClassEventClassifier? = null
     private var multiAxisClassifier: MultiAxisTextClassifier? = null
@@ -195,37 +201,48 @@ class ClassifierController(
 
     private fun extractCandidatesBatchInternal(texts: List<String>): List<EntityCandidatesResponse> {
         val spanNer = nerExtractor as? OnnxSpanNerExtractor
+        val t0 = System.nanoTime()
+        fun ms(t: Long) = (System.nanoTime() - t) / 1_000_000L
 
-        // ── Étape 1 : UD — 1 seul appel pour tout le batch ──────────────────
         val ragDocs = texts.map { it.toRagDocuments() }
-        val udDocs  = udParser.parse(ragDocs)                          // List<UDDocument>
 
-        // ── Étape 2 : NER-label — 1 seule inférence ONNX BILOU ──────────────
-        val nerByDoc: List<List<Entity>> = nerLabelExtractor.extractNer(ragDocs)
-
-        // ── Étape 3 : merge NER label × UD (par doc, pur calcul) ────────────
-        val enrichedByDoc: List<List<Entity>> = nerByDoc.zip(udDocs).map { (entities, udDoc) ->
-            mergeNerLabelWithUD(entities, udDoc)
+        // ── Étapes 1+2 en parallèle : UD et BILOU sont indépendants ──────────
+        val tPar1 = System.nanoTime()
+        val (udDocs, nerByDoc) = runBlocking(Dispatchers.IO) {
+            val deferredUd    = async { udParser.parse(ragDocs) }
+            val deferredBilou = async { nerLabelExtractor.extractNer(ragDocs) }
+            deferredUd.await() to deferredBilou.await()
         }
+        log.debug("[pipeline] UD+BILOU //      ms={}", ms(tPar1))
 
-        // ── Étape 4 : SpanNER Pipeline A — 1 seule inférence ONNX span ──────
-        val fromNerByDoc: List<List<SimpleEntityModel>> =
-            spanNer?.extractFromCandidates(udDocs, enrichedByDoc)
-                ?: udDocs.map { emptyList() }
+        // ── Étape 3 : merge (pur calcul) ─────────────────────────────────────
+        val tMerge = System.nanoTime()
+        val enrichedByDoc = nerByDoc.zip(udDocs).map { (entities, udDoc) ->
+            mergeNerLabelWithUDV2(entities, udDoc)
+        }
+        log.debug("[pipeline] merge NER×UD     ms={}", ms(tMerge))
 
-        // ── Étape 5 : SpanNER Pipeline B (fallback UD) — 1 seule inférence ──
-        val fromUdByDoc: List<List<SimpleEntityModel>> =
-            spanNer?.extractSimple(udDocs)
-                ?: udDocs.map { emptyList() }
+        // ── Étapes 4+5 en parallèle : SpanNER A et B sont indépendants ───────
+        val tPar2 = System.nanoTime()
+        val (fromNerByDoc, fromUdByDoc) = runBlocking(Dispatchers.IO) {
+            val deferredA = async {
+                spanNer?.extractFromCandidates(udDocs, enrichedByDoc) ?: udDocs.map { emptyList<SimpleEntityModel>() }
+            }
+            val deferredB = async {
+                spanNer?.extractSimple(udDocs) ?: udDocs.map { emptyList<SimpleEntityModel>() }
+            }
+            deferredA.await() to deferredB.await()
+        }
+        log.debug("[pipeline] SpanNER A+B //   ms={}", ms(tPar2))
 
-        // ── Étape 6 : assemblage par document ────────────────────────────────
-        return texts.indices.map { i ->
-            val text      = texts[i]
-            val udDoc     = udDocs[i]
-            val enriched  = enrichedByDoc[i]
-            val fromNer   = fromNerByDoc[i]
-            val fromUd    = fromUdByDoc[i]
-
+        // ── Étape 6 : assemblage ──────────────────────────────────────────────
+        val tAssemble = System.nanoTime()
+        val result = texts.indices.map { i ->
+            val text     = texts[i]
+            val udDoc    = udDocs[i]
+            val enriched = enrichedByDoc[i]
+            val fromNer  = fromNerByDoc[i]
+            val fromUd   = fromUdByDoc[i]
             try {
                 val candidatesA   = buildEntityCandidates(enriched, fromNer, udDoc)
                 val coveredRanges = candidatesA.map { it.span.start until it.span.end }
@@ -234,18 +251,18 @@ class ClassifierController(
                 }
                 val candidatesB = udOnly.mapNotNull { buildCandidateFromSimple(it, udDoc) }
                 val candidates  = (candidatesA + candidatesB).sortedBy { it.span.start }
-
-                EntityCandidatesResponse(
-                    text       = text,
-                    count      = candidates.size,
-                    candidates = candidates.map { it.toDto() }
-                )
+                EntityCandidatesResponse(text = text, count = candidates.size,
+                    candidates = candidates.map { it.toDto() })
             } catch (e: Exception) {
                 println("❌ batch[doc=$i] ERROR [${e.javaClass.simpleName}]: ${e.message}")
                 EntityCandidatesResponse(text = text, count = 0, candidates = emptyList())
             }
         }
+        log.debug("[pipeline] assemblage       ms={}", ms(tAssemble))
+        log.debug("[pipeline] TOTAL            batchSize={}  ms={}", texts.size, ms(t0))
+        return result
     }
+
 
     private fun extractCandidatesInternal(request: ExtractRequest): EntityCandidatesResponse {
 
@@ -291,13 +308,23 @@ class ClassifierController(
         val sentence = udDoc.sentences.firstOrNull { s -> s.start <= simple.start && s.end >= simple.end }
 
         val nerCoarse = when {
-            simple.label.name.contains("PERSON")                              -> NerCoarseType.PER
-            simple.label.name.run { contains("ORG") || contains("GROUP") || contains("NORP") || contains("GPE") } -> NerCoarseType.ORG
-            simple.label.name.run { contains("LOC") || contains("FAC") }     -> NerCoarseType.LOC
-            simple.label.name.run { contains("TIME") || contains("QUANTITY") } -> NerCoarseType.TIME
-            simple.label.name.contains("EVENT")                              -> NerCoarseType.EVENT
-            else                                                              -> NerCoarseType.OBJECT
+            simple.label.name.contains("PERSON") -> NerCoarseType.PER
+            simple.label.name.contains("GROUP")  -> NerCoarseType.PER
+            simple.label.name.contains("NORP")   -> NerCoarseType.PER
+
+            simple.label.name.contains("GPE")    -> NerCoarseType.LOC
+            simple.label.name.contains("LOC")    -> NerCoarseType.LOC
+            simple.label.name.contains("FAC")    -> NerCoarseType.LOC
+            simple.label.name.contains("INFRA")  -> NerCoarseType.LOC
+
+            simple.label.name.contains("ORG")    -> NerCoarseType.ORG
+
+            simple.label.name.contains("TIME")   -> NerCoarseType.TIME
+            simple.label.name.contains("EVENT")  -> NerCoarseType.EVENT
+
+            else -> NerCoarseType.OBJECT
         }
+
 
         return EntityCandidate(
             text         = simple.text,

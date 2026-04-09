@@ -17,6 +17,12 @@ data class OnnxNerConfig(
     val useGpu: Boolean,
     @DefaultValue("0")
     val gpuDeviceId: Int,
+    /** CoreML EP : Apple Neural Engine + GPU (Mac uniquement, ignoré ailleurs). */
+    @DefaultValue("false")
+    val useCoreMl: Boolean,
     val intraOpThreads: Int = Runtime.getRuntime().availableProcessors(),
-    val interOpThreads: Int = 1
+    val interOpThreads: Int = 1,
+    /** Nombre de phrases UDSentence regroupées en un seul appel ONNX. */
+    @DefaultValue("8")
+    val sentBatchSize: Int = 8,
 )
