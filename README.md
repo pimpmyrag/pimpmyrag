@@ -6,7 +6,7 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/pimpmyrag/pimpmyrag/pulls)
 [![GitHub Stars](https://img.shields.io/github/stars/pimpmyrag/pimpmyrag?style=social)](https://github.com/pimpmyrag/pimpmyrag/stargazers)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.x-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
-[![JVM](https://img.shields.io/badge/JVM-17%2B-ED8B00?logo=openjdk&logoColor=white)](https://adoptium.net)
+[![JVM](https://img.shields.io/badge/JVM-21%2B-ED8B00?logo=openjdk&logoColor=white)](https://adoptium.net)
 
 Modular JVM based RAG framework attempt, for deterministic event extraction purpose mainly, but open to other kind of text extractions.
 
