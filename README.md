@@ -39,8 +39,8 @@ pimpmyrag/
 
 ## Prérequis
 
-- JDK 17+
-- Gradle 8+
+- JDK 21+
+- Gradle 9+
 - Python 3.11+ (pour `training/`)
 - Docker (services UD, Infinity, Qdrant, MongoDB)
 
@@ -60,14 +60,14 @@ docker-compose up -d          # Démarre MongoDB, Qdrant, Infinity, UD parser
 ## Pipeline NER (2 niveaux)
 
 ```
-Texte → XLM-RoBERTa BILOU → coarse (PER/LOC/ORG/TIME/EVENT/OBJECT)
+Texte → XLM-RoBERTa BIO → coarse (PER/LOC/ORG/TIME/EVENT/OBJECT)
       → mergeNerLabelWithUD → raffinement span + split rôle/nom
       → DeBERTa-v3 SpanClassifier → 22 labels fin-grained
       → EntityCandidate { text, lemma, nerType, nerHint, headDeprel,
                           hopFromTrigger, feats, … }
 ```
 
-**Résultats courants (POC v0, 6k phrases)** : 78% — cible 15k : ~90%
+**Résultats courants (POC v0, 11k phrases)** : 87% — cible 15k : ~90%
 
 ## Pipeline Eventlet (en cours)
 
