@@ -1,0 +1,7 @@
+.gitignore	34 bytes
+README.md	1031 bytes
+collect_news_sentences.py	6488 bytes
+feeds_eu_rss_high_quality_v2.json	9500 bytes
+opml_to_feeds_json.py	2393 bytes
+requirements.txt	113 bytes
+run.sh	587 bytes

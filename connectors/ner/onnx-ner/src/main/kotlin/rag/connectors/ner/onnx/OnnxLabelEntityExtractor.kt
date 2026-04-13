@@ -25,6 +25,7 @@ class OnnxBilouEntityExtractor(
 	private val maxSeqLen: Int = 128,
 	private val useCoreMl: Boolean = false,
 	private val intraOpThreads: Int = Runtime.getRuntime().availableProcessors(),
+	private val labelToId: Map<String, Int> = labelNames.withIndex().associate { it.value to it.index }
 ) : AutoCloseable, NerExtractor {
 
 	private val log = LoggerFactory.getLogger(OnnxBilouEntityExtractor::class.java)
@@ -183,6 +184,9 @@ class OnnxBilouEntityExtractor(
 	private fun mergeConsecutive(entities: List<Entity>, fullText: String): List<Entity> {
 		if (entities.isEmpty()) return entities
 
+		fun confOf(e: Entity): Float? = (e.metadata["confidence"] as? Number)?.toFloat()
+		fun confMinOf(e: Entity): Float? = (e.metadata["confidenceMin"] as? Number)?.toFloat()
+
 		val result = mutableListOf<Entity>()
 		var current = entities[0]
 
@@ -196,24 +200,28 @@ class OnnxBilouEntityExtractor(
 			val gapIsBlank = curEnd >= 0 && nextStart >= curEnd &&
 					fullText.substring(curEnd, nextStart).isBlank()
 
-			// ⚠️ on ne merge jamais les PER coarse
 			val mergeAllowedType = current.type != "per"
-
 			val canMerge = sameType && gapIsBlank && mergeAllowedType
 
-			if (log.isDebugEnabled && sameType && gapIsBlank && !mergeAllowedType) {
-				log.debug(
-					"[BILOU] merge skipped for PER coarse: current='{}' next='{}'",
-					current.text, next.text
-				)
-			}
-
 			if (canMerge) {
-				val merged = fullText.substring(curStart, nextEnd)
+				val mergedText = fullText.substring(curStart, nextEnd)
+
+				val c1 = confOf(current)
+				val c2 = confOf(next)
+				val mergedConf = listOfNotNull(c1, c2).minOrNull() // conservateur
+
+				val m1 = confMinOf(current)
+				val m2 = confMinOf(next)
+				val mergedConfMin = listOfNotNull(m1, m2).minOrNull() ?: mergedConf
+
 				val mergedEntity = Entity(
-					text = merged,
+					text = mergedText,
 					type = current.type,
-					span = Span(curStart, nextEnd, emptyList())
+					span = Span(curStart, nextEnd, emptyList()),
+					metadata = buildMap {
+						if (mergedConf != null) put("confidence", mergedConf)
+						if (mergedConfMin != null) put("confidenceMin", mergedConfMin)
+					}
 				)
 				current = sanitizeEntitySpan(mergedEntity, fullText) ?: mergedEntity
 			} else {
@@ -247,11 +255,8 @@ class OnnxBilouEntityExtractor(
 				continue
 			}
 
-			val labelIdx = argmax(seq[i])
-			val raw = labelNames.getOrElse(labelIdx) {
-				log.error("[BILOU] labelIdx={} hors bornes pour labelNames.size={}", labelIdx, labelNames.size)
-				"O"
-			}
+			val (labelIdx, pLabel) = argmaxWithProb(seq[i])
+			val raw = labelNames.getOrElse(labelIdx) { "O" }
 
 			if (raw == "O") {
 				i++
@@ -266,15 +271,22 @@ class OnnxBilouEntityExtractor(
 			}
 
 			val (tag, type) = parts
+			val typeLower = type.lowercase()
 
 			when (tag) {
+				// Si tu ajoutes un jour U-xxx dans labelNames, ça marchera
 				"U" -> {
 					val (cs, ce) = span
 					if (cs in 0..text.length && ce in 0..text.length && cs < ce) {
 						out += Entity(
 							text = text.substring(cs, ce),
-							type = type.lowercase(),
-							span = Span(cs, ce, emptyList())
+							type = typeLower,
+							span = Span(cs, ce, emptyList()),
+							metadata = mapOf(
+								"confidence" to pLabel,
+								"confidenceMin" to pLabel,
+								"label" to raw
+							)
 						)
 					}
 					i++
@@ -283,6 +295,10 @@ class OnnxBilouEntityExtractor(
 				"B" -> {
 					val start = i
 					var end = i
+
+					val confs = mutableListOf<Float>()
+					confs += pLabel // proba du B sur le premier token
+
 					i++
 
 					while (i < seq.size) {
@@ -292,19 +308,25 @@ class OnnxBilouEntityExtractor(
 							continue
 						}
 
-						val nextIdx = argmax(seq[i])
+						val (nextIdx, nextProb) = argmaxWithProb(seq[i])
 						val nextLab = labelNames.getOrElse(nextIdx) { "O" }
 
+						// BIO : on accepte I-type
 						if (nextLab == "I-$type") {
 							end = i
+							confs += nextProb
 							i++
 							continue
 						}
+
+						// BILOU : si tu ajoutes L-type, ce bloc marchera aussi
 						if (nextLab == "L-$type") {
 							end = i
+							confs += nextProb
 							i++
 							break
 						}
+
 						break
 					}
 
@@ -314,16 +336,25 @@ class OnnxBilouEntityExtractor(
 						val cs = s.first
 						val ce = e.second
 						if (cs in 0..text.length && ce in 0..text.length && cs < ce) {
+							val confAvg = (confs.sum() / confs.size)
+							val confMin = confs.minOrNull() ?: confAvg
+
 							out += Entity(
 								text = text.substring(cs, ce),
-								type = type.lowercase(),
-								span = Span(cs, ce, emptyList())
+								type = typeLower,
+								span = Span(cs, ce, emptyList()),
+								metadata = mapOf(
+									"confidence" to confAvg,
+									"confidenceMin" to confMin,
+									"labelsUsed" to listOf(raw) // optionnel, debug
+								)
 							)
 						}
 					}
 				}
 
 				else -> {
+					// I / L sans B : on ignore (artefact)
 					i++
 				}
 			}
@@ -451,5 +482,35 @@ class OnnxBilouEntityExtractor(
 	override fun close() {
 		tokenizer.close()
 		session.close()
+	}
+
+	private fun logSumExp(logits: FloatArray): Double {
+		var max = logits[0].toDouble()
+		for (i in 1 until logits.size) {
+			val v = logits[i].toDouble()
+			if (v > max) max = v
+		}
+		var sum = 0.0
+		for (i in logits.indices) {
+			sum += kotlin.math.exp(logits[i].toDouble() - max)
+		}
+		return max + kotlin.math.ln(sum)
+	}
+
+	private fun probOf(logits: FloatArray, idx: Int): Float {
+		val lse = logSumExp(logits)
+		return kotlin.math.exp(logits[idx].toDouble() - lse).toFloat()
+	}
+
+	private fun argmaxWithProb(logits: FloatArray): Pair<Int, Float> {
+		var best = 0
+		var max = logits[0]
+		for (i in 1 until logits.size) {
+			if (logits[i] > max) {
+				max = logits[i]
+				best = i
+			}
+		}
+		return best to probOf(logits, best)
 	}
 }

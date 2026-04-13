@@ -57,6 +57,8 @@ data class EntityCandidate(
     /** Texte exact tel qu'il apparaît dans le document (span raffiné UD). */
     val text: String,
 
+    val confidence: Float,
+
     /**
      * Forme canonique : lemme de la tête syntaxique si disponible,
      * sinon texte de surface en minuscules.
@@ -273,8 +275,26 @@ fun buildEntityCandidates(
 
         // ── NER coarse et hint ──────────────────────────────────────────────
         val nerCoarse = NerCoarseType.from(entity.type)
-        val classified = hintBySpan[eStart to eEnd] ?: return@mapNotNull null
-        val nerHint    = classified?.label ?: coarseToHint(nerCoarse)
+        // Cherche un match exact (start,end) dans les spans classifiés.
+        // Si absent, on tente un fallback approximatif : choisir le span classifié
+        // qui chevauche le plus (max overlap) — utile quand le SpanClassifier
+        // a classifié un sous-span (p.ex. 'République') alors que l'entité
+        // enrichie est plus longue ('place de la République').
+        val exact = hintBySpan[eStart to eEnd]
+        val classified = exact ?: run {
+            // trouver le SimpleEntityModel qui maximise l'intersection char
+            var best: SimpleEntityModel? = null
+            var bestOverlap = 0
+            for (s in classifiedSpans) {
+                val overlap = minOf(eEnd, s.end) - maxOf(eStart, s.start)
+                if (overlap > 0 && overlap > bestOverlap) {
+                    best = s
+                    bestOverlap = overlap
+                }
+            }
+            best
+        } ?: return@mapNotNull null
+        val nerHint    = classified.label
 
         // ── Récupération des infos UD depuis metadata (mergeNerLabelWithUD) ─
         val meta       = entity.metadata
@@ -328,21 +348,66 @@ fun buildEntityCandidates(
             number       = number,
             feats        = head?.feats,
             sentenceSpan = sentenceSpan,
+            confidence   = meta["confidenceMin"] as Float
         )
-    }
+    }.pruneKeepLongestSameHint()
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers privés
-// ─────────────────────────────────────────────────────────────────────────────
+fun List<EntityCandidate>.pruneKeepLongestSameHint(): List<EntityCandidate> {
+    fun len(c: EntityCandidate) = c.span.end - c.span.start
+    fun sameSentence(a: EntityCandidate, b: EntityCandidate) = a.sentenceSpan == b.sentenceSpan
+    fun overlap(a: EntityCandidate, b: EntityCandidate) =
+        a.span.start < b.span.end && b.span.start < a.span.end
 
-/** Dérive un [EntityType] hint depuis le type NER coarse (utilisé comme fallback). */
-private fun coarseToHint(t: NerCoarseType): EntityType = when (t) {
-    NerCoarseType.PER     -> EntityType.HINT_PERSON_NAME
-    NerCoarseType.LOC     -> EntityType.HINT_LOC_GENERIC
-    NerCoarseType.ORG     -> EntityType.HINT_ORG_NAME
-    NerCoarseType.TIME    -> EntityType.HINT_TIME_DATE
-    NerCoarseType.EVENT   -> EntityType.HINT_EVENT_NOMINAL
-    NerCoarseType.OBJECT,
-    NerCoarseType.UNKNOWN -> EntityType.HINT_OBJECT_GENERIC
+    // (optionnel) petit garde-fou : éviter de garder un span qui couvre quasi toute la phrase
+    fun isProbablyRunaway(c: EntityCandidate): Boolean {
+        val sentLen = c.sentenceSpan.last - c.sentenceSpan.first
+        val spanLen = len(c)
+        return sentLen > 0 && spanLen > (sentLen * 0.85) // 85% de la phrase => suspect
+    }
+
+    val kept = mutableListOf<EntityCandidate>()
+
+    // Tri : d’abord par start, puis du plus long au plus court
+    val sorted = this.sortedWith(compareBy<EntityCandidate>({ it.span.start }, { -len(it) }))
+
+    for (c in sorted) {
+        // Si candidate runaway, tu peux soit la drop, soit la mettre en dernier recours
+        if (isProbablyRunaway(c)) continue
+
+        // Cherche un kept qui est (même phrase + même hint + overlap)
+        val idx = kept.indexOfFirst { k ->
+            sameSentence(k, c) && k.nerHint == c.nerHint && overlap(k, c)
+        }
+
+        if (idx == -1) {
+            kept += c
+        } else {
+            val k = kept[idx]
+            // On utilise la confidence pour départager :
+            // - si le nouveau span est plus long, on le garde seulement s'il a
+            //   au moins autant de confiance que le gardé
+            // - si même longueur, on choisit la plus haute confidence
+            val lenC = len(c)
+            val lenK = len(k)
+            val confC = c.confidence
+            val confK = k.confidence
+
+            when {
+                lenC > lenK -> {
+                    if (confC >= confK) kept[idx] = c
+                    // sinon on conserve l'ancien (plus petit mais plus sûr)
+                }
+                lenC < lenK -> {
+                    // le gardé est déjà plus long -> ne rien faire sauf si confC >> confK
+                    // (optionnel : on peut remplacer si confC dépasse confK par un seuil)
+                }
+                else -> { // lenC == lenK
+                    if (confC > confK) kept[idx] = c
+                }
+            }
+        }
+    }
+
+    return kept.sortedBy { it.span.start }
 }
