@@ -1,0 +1,30 @@
+{
+  "input": "/Users/simon_longuet/IdeaProjects/pimpmyrag/training/press_fetcher_v2_high_quality_venv/sentences_50k.jsonl",
+  "lines_processed": 6866,
+  "total_spans": 18331,
+  "errors": 0,
+  "labels": {
+    "hint_person_name": 1879,
+    "hint_person_role": 1813,
+    "hint_group_role": 1380,
+    "hint_event_named": 1207,
+    "hint_time_duration": 805,
+    "hint_substance": 599,
+    "hint_weapon": 446,
+    "hint_event_nominal": 1661,
+    "hint_vehicle": 1149,
+    "hint_object_name": 947,
+    "hint_time_date": 852,
+    "hint_loc_generic": 978,
+    "hint_food": 435,
+    "hint_infra": 748,
+    "hint_quantity": 1062,
+    "hint_norp": 155,
+    "hint_object_generic": 382,
+    "hint_org_name": 548,
+    "hint_gpe": 242,
+    "hint_fac_name": 413,
+    "hint_time_clock": 214,
+    "hint_tool": 416
+  }
+}

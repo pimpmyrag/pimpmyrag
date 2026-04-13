@@ -45,8 +45,6 @@ enum class EntityType {
 // SPAN FILTER
 // ------------------------------------------------------------
 
-fun shouldClassify(tok: UDToken) =
-    tok.upos == UPOS.NOUN || tok.upos == UPOS.PROPN
 // PRON exclu : les pronoms (Il, le, sa…) ne doivent pas être des entités NER standalone.
 
 data class SimpleEntityModel(
@@ -57,6 +55,9 @@ data class SimpleEntityModel(
     val tokens: List<UDToken>,
     val isHint: Boolean
 )
+
+private const val COARSE_UNKNOWN: Long = -1L
+private val ALL_COARSE_IDS = longArrayOf(0L, 1L, 2L, 3L, 4L, 5L)
 
 // ------------------------------------------------------------
 // EXTRACTEUR
@@ -226,10 +227,11 @@ class OnnxSpanNerExtractor(
                 }
                 if (starts.isEmpty()) continue
 
+
                 val coarseArr = LongArray(validCands.size) { i ->
-                    val head = findHead(validCands[i].span.tokens)
-                    head?.let { uposToCoarseId(it) } ?: 5L
+                    COARSE_UNKNOWN // car ici, c’est UD-only => coarse non fiable
                 }
+
 
                 allSentInfos += SentInfo(
                     docIdx = docIdx,
@@ -272,15 +274,45 @@ class OnnxSpanNerExtractor(
             val allCoarseIds = mutableListOf<Long>()
             val allCandRefs = mutableListOf<Pair<Int, Int>>() // (chunkIdx, candIdx)
 
+            data class Ref(val chunkIdx: Int, val candIdx: Int)
+
+            data class RowRef(val ref: Ref, val coarseId: Long)
+
+            val allRowRefs = mutableListOf<RowRef>()
+
+
             chunk.forEachIndexed { b, si ->
                 for (i in si.starts.indices) {
-                    allSpanStarts += si.starts[i]
-                    allSpanEnds += si.ends[i]
-                    allBatchIdx += b.toLong()
-                    allCoarseIds += si.coarseArr[i]
-                    allCandRefs += b to i
+                    val ref = Ref(b, i)
+                    val coarse = si.coarseArr[i]
+
+                    if (hasCoarseInput) {
+                        if (coarse == COARSE_UNKNOWN) {
+                            // marginalisation: 6 passes
+                            for (c in ALL_COARSE_IDS) {
+                                allSpanStarts += si.starts[i]
+                                allSpanEnds += si.ends[i]
+                                allBatchIdx += b.toLong()
+                                allCoarseIds += c
+                                allRowRefs += RowRef(ref, c)
+                            }
+                        } else {
+                            allSpanStarts += si.starts[i]
+                            allSpanEnds += si.ends[i]
+                            allBatchIdx += b.toLong()
+                            allCoarseIds += coarse
+                            allRowRefs += RowRef(ref, coarse)
+                        }
+                    } else {
+                        // si le modèle ne prend pas coarse_ids, comportement inchangé (une seule passe)
+                        allSpanStarts += si.starts[i]
+                        allSpanEnds += si.ends[i]
+                        allBatchIdx += b.toLong()
+                        allRowRefs += RowRef(ref, COARSE_UNKNOWN)
+                    }
                 }
             }
+
 
             val inputIdsT = OnnxTensor.createTensor(
                 env,
@@ -324,12 +356,27 @@ class OnnxSpanNerExtractor(
                 n, maxLen, allCandRefs.size, (System.nanoTime() - tInfer) / 1_000_000L
             )
 
-            for (i in rows.indices) {
-                val l = rows[i]
-                if (l.isEmpty()) continue
+            // 1) Accumule les logits par candidat original (Ref)
+            val sumByRef = mutableMapOf<Ref, FloatArray>()
+            val countByRef = mutableMapOf<Ref, Int>()
 
-                val idx = l.indices.maxBy { l[it] }
-                val raw = if (l.size == labelNames.size + 1) {
+            for (r in rows.indices) {
+                val logits = rows[r]
+                if (logits.isEmpty()) continue
+
+                val ref = allRowRefs[r].ref
+                val acc = sumByRef.getOrPut(ref) { FloatArray(logits.size) }
+                for (j in logits.indices) acc[j] += logits[j]
+                countByRef[ref] = (countByRef[ref] ?: 0) + 1
+            }
+
+            // 2) Décodage final par Ref, sur logits moyennés
+            for ((ref, sum) in sumByRef) {
+                val cnt = countByRef[ref] ?: 1
+                for (j in sum.indices) sum[j] /= cnt.toFloat()
+
+                val idx = sum.indices.maxBy { sum[it] }
+                val raw = if (sum.size == labelNames.size + 1) {
                     if (idx == 0) "O" else labelNames[idx - 1]
                 } else {
                     labelNames[idx]
@@ -337,22 +384,15 @@ class OnnxSpanNerExtractor(
 
                 if (raw == "O") continue
 
-                val (chunkIdx, ciIdx) = allCandRefs[i]
-                val si = chunk[chunkIdx]
-                val cand = si.validCands[ciIdx]
+                val si = chunk[ref.chunkIdx]
+                val cand = si.validCands[ref.candIdx]
+
                 val txt = si.sentenceText.substring(
                     cand.span.start - si.sent.start,
                     cand.span.end - si.sent.start
                 )
 
                 val decoded = decodeLabel(raw)
-
-                if (txt.equals("police", ignoreCase = true)) {
-                    log.debug(
-                        "DEBUG police [extractSimple] raw={} decoded={}  coarseId={}",
-                        raw, decoded, si.coarseArr[ciIdx]
-                    )
-                }
 
                 result.getOrPut(si.docIdx) { mutableListOf() } += SimpleEntityModel(
                     text = txt,
@@ -610,26 +650,6 @@ class OnnxSpanNerExtractor(
         return docs.indices.map { result[it]?.toList() ?: emptyList() }
     }
 
-    // ------------------------------------------------------------
-    // HELPERS — coarse_ids
-    // Indices : 0=PER  1=LOC  2=ORG  3=TIME  4=EVENT  5=OBJECT
-    // ------------------------------------------------------------
-
-//    /**
-//     * Fallback conservateur quand le SpanClassifier renvoie "O".
-//     *
-//     * IMPORTANT :
-//     * - on ne doit PAS réduire toute la famille PER à PERSON_NAME
-//     * - pour les humains / collectifs, GROUP_ROLE est le fallback le moins faux
-//     */
-//    private fun coarseNerTypeToEntityType(nerType: String): EntityType = when (nerType.lowercase()) {
-//        "loc", "gpe", "fac", "infra" -> EntityType.HINT_LOC_GENERIC
-//        "org", "org_name" -> EntityType.HINT_ORG_NAME
-//        "time", "date" -> EntityType.HINT_TIME_DATE
-//        "event", "event_named", "event_nominal" -> EntityType.HINT_EVENT_NOMINAL
-//        "object" -> EntityType.HINT_OBJECT_GENERIC
-//        else -> EntityType.HINT_OBJECT_GENERIC
-//    }
 
     /**
      * Coarse id depuis le type NER coarse (chaîne lowercase produite par le BIO extractor
@@ -662,11 +682,10 @@ class OnnxSpanNerExtractor(
      * - sinon fallback neutre OBJECT
      */
     private fun uposToCoarseId(tok: UDToken): Long {
-        val lex = ((tok.lemma ?: tok.text).lowercase()).trim()
 
-        return when {
-            tok.upos == UPOS.PRON -> 0L
-            tok.upos == UPOS.PROPN -> 5L
+        return when (tok.upos) {
+            UPOS.PRON -> 0L
+            UPOS.PROPN -> 5L
             else -> 5L
         }
     }
@@ -704,13 +723,6 @@ class OnnxSpanNerExtractor(
         if (ts == null || te == null) return null
         if (ts >= te) return null
         return ts to te
-    }
-
-    private fun tensor2d(arr: LongArray): OnnxTensor {
-        val buf = LongBuffer.allocate(arr.size)
-        buf.put(arr)
-        buf.flip()
-        return OnnxTensor.createTensor(env, buf, longArrayOf(1, arr.size.toLong()))
     }
 
     private fun to2D(v: Any?): Array<FloatArray> =

@@ -1,0 +1,8 @@
+transformers>=4.40.0
+datasets
+sentencepiece
+huggingface-hub
+onnxruntime
+torch
+numpy
+

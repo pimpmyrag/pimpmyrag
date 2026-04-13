@@ -225,13 +225,12 @@ class ClassifierController(
         // ── Étapes 4+5 en parallèle : SpanNER A et B sont indépendants ───────
         val tPar2 = System.nanoTime()
         val (fromNerByDoc, fromUdByDoc) = runBlocking(Dispatchers.IO) {
-            val deferredA = async {
-                spanNer?.extractFromCandidates(udDocs, enrichedByDoc) ?: udDocs.map { emptyList<SimpleEntityModel>() }
-            }
-            val deferredB = async {
-                spanNer?.extractSimple(udDocs) ?: udDocs.map { emptyList<SimpleEntityModel>() }
-            }
-            deferredA.await() to deferredB.await()
+            val fromNerByDoc = spanNer?.extractFromCandidates(udDocs, enrichedByDoc)
+                ?: udDocs.map { emptyList() }
+
+            val fromUdByDoc = spanNer?.extractSimple(udDocs)
+                ?: udDocs.map { emptyList() }
+            fromNerByDoc to fromUdByDoc
         }
         log.debug("[pipeline] SpanNER A+B //   ms={}", ms(tPar2))
 
@@ -250,6 +249,7 @@ class ClassifierController(
                     coveredRanges.none { r -> simple.start < r.last + 1 && simple.end > r.first }
                 }
                 val candidatesB = udOnly.mapNotNull { buildCandidateFromSimple(it, udDoc) }
+                // Inclure les candidats fallback issus du pipeline UD (candidatesB)
                 val candidates  = (candidatesA + candidatesB).sortedBy { it.span.start }
                 EntityCandidatesResponse(text = text, count = candidates.size,
                     candidates = candidates.map { it.toDto() })
@@ -342,6 +342,7 @@ class ClassifierController(
             number       = head.feats?.number,
             feats        = head.feats,
             sentenceSpan = sentence?.let { it.start until it.end } ?: (simple.start until simple.end),
+            confidence   =  0.5f
         )
     }
 
