@@ -1,0 +1,375 @@
+"""
+build_svo_silver.py
+====================
+Construit un dataset silver SVO + pronoms à partir du dataset NER existant.
+
+Entrée  : train_v2.jsonl / val_v2.jsonl / test_v2.jsonl
+          (format : {"id": ..., "text": ..., "spans": [{"label", "start", "end", "text"}, ...]})
+
+Sortie  : train_svo_silver.jsonl  (même format, nouveaux labels svo_* + pron_*)
+
+Labels produits
+───────────────
+  svo_verb      – verbe principal + ses auxiliaires (span char-level)
+  svo_subject   – sujet grammatical (NP, sans relative enchâssée)
+  svo_object    – objet direct
+  svo_iobj      – objet indirect / oblique
+  pron_subj     – pronom sujet   (avec features : person, number, gender)
+  pron_obj      – pronom objet
+
+Métadonnées par span
+────────────────────
+  voice       : "ACTIVE" | "PASSIVE"
+  head_lemma  : lemme du mot tête du span
+  head_upos   : POS universel du mot tête
+  # pronoms seulement :
+  pron_person : "1" | "2" | "3"
+  pron_number : "Sing" | "Plur"
+  pron_gender : "Masc" | "Fem" | null
+
+Usage
+─────
+  python build_svo_silver.py [--input train_v2.jsonl] [--output train_svo_silver.jsonl]
+                             [--split all|train|val|test] [--gpu]
+"""
+
+import argparse
+import json
+import sys
+from collections import Counter
+from pathlib import Path
+
+import stanza
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Constantes
+# ─────────────────────────────────────────────────────────────────────────────
+
+SUBJ_DEPRELS  = {"nsubj", "nsubj:pass", "csubj", "csubj:pass"}
+OBJ_DEPRELS   = {"obj", "ccomp", "xcomp"}
+IOBJ_DEPRELS  = {"iobj", "obl"}
+AUX_DEPRELS   = {"aux", "aux:pass", "cop"}
+
+# Sous-arbres exclus du span NP pour éviter les relatives longues
+EXCLUDE_FROM_NP = {"relcl", "acl", "advcl", "ccomp", "xcomp", "parataxis"}
+
+# Pronoms personnels français (liste fermée)
+FR_PERS_PRONOUNS = {
+    "je", "j", "me", "m", "moi",
+    "tu", "te", "t", "toi",
+    "il", "elle", "le", "la", "lui", "se", "s", "soi",
+    "nous", "vous",
+    "ils", "elles", "les", "leur", "eux",
+    "y", "en",
+}
+
+# Features Stanza → champs normalisés
+def _feat(word, key: str) -> str | None:
+    feats = word.feats or ""
+    for f in feats.split("|"):
+        if f.startswith(key + "="):
+            return f.split("=", 1)[1]
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Représentation interne d'un token
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Tok:
+    __slots__ = ("idx", "text", "lemma", "upos", "deprel", "head",
+                 "char_start", "char_end", "feats")
+
+    def __init__(self, word, sent_offset: int):
+        self.idx        = word.id
+        self.text       = word.text
+        self.lemma      = word.lemma or word.text
+        self.upos       = word.upos or "X"
+        self.deprel     = word.deprel or "dep"
+        self.head       = word.head
+        self.char_start = sent_offset + word.start_char
+        self.char_end   = sent_offset + word.end_char
+        self.feats      = word.feats or ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Arbre de dépendances
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_children(tokens: list[Tok]) -> dict[int, list[int]]:
+    ch: dict[int, list[int]] = {t.idx: [] for t in tokens}
+    ch[0] = []
+    for t in tokens:
+        ch.setdefault(t.head, []).append(t.idx)
+    return ch
+
+
+def subtree(root: int, children: dict, by_idx: dict,
+            exclude: set | None = None) -> list[int]:
+    res = [root]
+    for c in children.get(root, []):
+        if exclude and c in by_idx and by_idx[c].deprel in exclude:
+            continue
+        res.extend(subtree(c, children, by_idx, exclude))
+    return res
+
+
+def charspan(indices: list[int], by_idx: dict, sent_text: str,
+             sent_offset: int) -> tuple[int, int, str]:
+    toks = sorted(
+        (by_idx[i] for i in indices if i in by_idx),
+        key=lambda t: t.char_start,
+    )
+    if not toks:
+        return 0, 0, ""
+    cs = toks[0].char_start
+    ce = toks[-1].char_end
+    return cs, ce, sent_text[cs - sent_offset: ce - sent_offset]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Extraction SVO + pronoms pour une phrase
+# ─────────────────────────────────────────────────────────────────────────────
+
+def extract_sentence(sentence, sent_offset: int, orig_text: str) -> list[dict]:
+    """
+    Retourne une liste de spans SVO + pronoms au format dict :
+      {"start", "end", "text", "label", "voice", "head_lemma", "head_upos",
+       "pron_person"?, "pron_number"?, "pron_gender"?}
+    """
+    tokens = [Tok(w, sent_offset) for w in sentence.words]
+    if not tokens:
+        return []
+
+    sent_text = sentence.text
+    by_idx    = {t.idx: t for t in tokens}
+    children  = build_children(tokens)
+
+    spans: list[dict] = []
+
+    # ── Verbes candidats (ROOT + enchâssés sémantiquement porteurs) ───────────
+    verb_roots = [
+        t for t in tokens
+        if t.upos in {"VERB", "AUX"}
+        and t.deprel in {"root", "xcomp", "ccomp", "advcl", "acl"}
+    ]
+
+    for verb in verb_roots:
+        # Voix
+        ch_deprels = {by_idx[c].deprel for c in children.get(verb.idx, []) if c in by_idx}
+        is_passive = "nsubj:pass" in ch_deprels
+        voice = "PASSIVE" if is_passive else "ACTIVE"
+
+        # Span verbal (verbe + auxiliaires directs)
+        v_indices = [verb.idx] + [
+            c for c in children.get(verb.idx, [])
+            if c in by_idx and by_idx[c].deprel in AUX_DEPRELS
+        ]
+        v_cs, v_ce, v_txt = charspan(v_indices, by_idx, sent_text, sent_offset)
+        if len(v_txt.strip()) < 2:
+            continue
+
+        spans.append({
+            "start":      v_cs,
+            "end":        v_ce,
+            "text":       v_txt,
+            "label":      "svo_verb",
+            "voice":      voice,
+            "head_lemma": verb.lemma,
+            "head_upos":  verb.upos,
+        })
+
+        # Arguments
+        for child_idx in children.get(verb.idx, []):
+            if child_idx not in by_idx:
+                continue
+            child = by_idx[child_idx]
+
+            if child.deprel in SUBJ_DEPRELS:
+                arg_label = "svo_subject"
+            elif child.deprel in OBJ_DEPRELS:
+                arg_label = "svo_object"
+            elif child.deprel in IOBJ_DEPRELS:
+                arg_label = "svo_iobj"
+            else:
+                continue
+
+            np_idx = subtree(child_idx, children, by_idx, exclude=EXCLUDE_FROM_NP)
+            cs, ce, txt = charspan(np_idx, by_idx, sent_text, sent_offset)
+            if len(txt.strip()) < 2:
+                continue
+
+            spans.append({
+                "start":      cs,
+                "end":        ce,
+                "text":       txt,
+                "label":      arg_label,
+                "voice":      voice,
+                "head_lemma": child.lemma,
+                "head_upos":  child.upos,
+            })
+
+    # ── Pronoms personnels (avec features morpho) ─────────────────────────────
+    for tok in tokens:
+        if tok.upos != "PRON":
+            continue
+        lemma_lc = tok.lemma.lower().rstrip("'")
+        if lemma_lc not in FR_PERS_PRONOUNS and tok.text.lower().rstrip("'") not in FR_PERS_PRONOUNS:
+            continue
+
+        # Rôle syntaxique du pronom
+        if tok.deprel in SUBJ_DEPRELS:
+            pron_label = "pron_subj"
+        elif tok.deprel in OBJ_DEPRELS | IOBJ_DEPRELS | {"expl", "expl:subj", "expl:pass"}:
+            pron_label = "pron_obj"
+        else:
+            continue  # pronom non argumental (démonstratif, etc.)
+
+        # Features morphologiques depuis Stanza
+        person = _feat(sentence.words[tok.idx - 1], "Person")
+        number = _feat(sentence.words[tok.idx - 1], "Number")
+        gender = _feat(sentence.words[tok.idx - 1], "Gender")
+
+        sp: dict = {
+            "start":       tok.char_start,
+            "end":         tok.char_end,
+            "text":        tok.text,
+            "label":       pron_label,
+            "head_lemma":  tok.lemma,
+            "head_upos":   tok.upos,
+            "pron_person": person,
+            "pron_number": number,
+            "pron_gender": gender,
+        }
+        # Voix du verbe gouverneur (pour aider la coréf plus tard)
+        if tok.head in by_idx:
+            gov = by_idx[tok.head]
+            gov_ch_deprels = {by_idx[c].deprel for c in children.get(gov.idx, []) if c in by_idx}
+            sp["voice"] = "PASSIVE" if "nsubj:pass" in gov_ch_deprels else "ACTIVE"
+        else:
+            sp["voice"] = "ACTIVE"
+
+        spans.append(sp)
+
+    return spans
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pipeline complet
+# ─────────────────────────────────────────────────────────────────────────────
+
+def process_file(input_path: Path, output_path: Path, nlp, batch_size: int = 64):
+    # Charger les exemples
+    examples: list[dict] = []
+    with open(input_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                examples.append(json.loads(line))
+
+    print(f"[SVO] {len(examples)} exemples dans {input_path.name}")
+
+    out_examples: list[dict] = []
+    label_counts: Counter = Counter()
+
+    for i, ex in enumerate(examples):
+        text = ex.get("text", "")
+        if not text.strip():
+            continue
+
+        # Stanza parse (une seule phrase par exemple dans ce dataset)
+        doc = nlp(text)
+
+        all_new_spans: list[dict] = []
+        char_offset = 0
+        for sent in doc.sentences:
+            new_spans = extract_sentence(sent, char_offset, text)
+            all_new_spans.extend(new_spans)
+            # Avancer l'offset inter-phrases (cas multi-phrases)
+            char_offset += len(sent.text)
+            rest = text[char_offset:]
+            char_offset += len(rest) - len(rest.lstrip())
+
+        if not all_new_spans:
+            continue
+
+        # Fusionner avec les spans NER existants
+        existing_spans = ex.get("spans", [])
+        merged = existing_spans + all_new_spans
+
+        for sp in all_new_spans:
+            label_counts[sp["label"]] += 1
+
+        out_examples.append({
+            "id":    ex.get("id", f"svo_{i}"),
+            "text":  text,
+            "spans": merged,
+        })
+
+        if (i + 1) % 500 == 0:
+            print(f"  [{i + 1}/{len(examples)}] {len(out_examples)} exemples avec SVO")
+
+    # Écriture
+    with open(output_path, "w", encoding="utf-8") as f:
+        for ex in out_examples:
+            f.write(json.dumps(ex, ensure_ascii=False) + "\n")
+
+    print(f"\n[SVO] ✅ {len(out_examples)} exemples écrits → {output_path}")
+    print("\n[SVO] Répartition des nouveaux labels :")
+    for label, count in sorted(label_counts.items()):
+        print(f"  {label:<20} : {count:>6}")
+
+    return out_examples
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Entrée
+# ─────────────────────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(description="Build SVO silver dataset with Stanza")
+    parser.add_argument("--split",      default="all",
+                        choices=["all", "train", "val", "test"],
+                        help="Quel(s) split(s) traiter")
+    parser.add_argument("--data_dir",   default=".",
+                        help="Dossier contenant train_v2.jsonl etc.")
+    parser.add_argument("--suffix_in",  default="_v2",
+                        help="Suffixe des fichiers en entrée (ex: _v2 → train_v2.jsonl)")
+    parser.add_argument("--suffix_out", default="_svo_silver",
+                        help="Suffixe des fichiers en sortie")
+    parser.add_argument("--gpu",        action="store_true",
+                        help="Utiliser le GPU pour Stanza")
+    parser.add_argument("--batch",      type=int, default=64,
+                        help="Taille du batch Stanza")
+    args = parser.parse_args()
+
+    data_dir = Path(args.data_dir)
+
+    splits = ["train", "val", "test"] if args.split == "all" else [args.split]
+
+    print("[SVO] Chargement Stanza fr (tokenize, mwt, pos, lemma, depparse)…")
+    nlp = stanza.Pipeline(
+        lang               = "fr",
+        processors         = "tokenize,mwt,pos,lemma,depparse",
+        use_gpu            = args.gpu,
+        tokenize_no_ssplit = True,   # respecter les délimitations de phrase du dataset
+        verbose            = False,
+    )
+    print("[SVO] Pipeline prête.\n")
+
+    for split in splits:
+        in_file  = data_dir / f"{split}{args.suffix_in}.jsonl"
+        out_file = data_dir / f"{split}{args.suffix_out}.jsonl"
+        if not in_file.exists():
+            print(f"[SVO] ⚠️  {in_file} introuvable, skip.")
+            continue
+        print(f"{'─'*60}")
+        print(f"[SVO] Split : {split}")
+        process_file(in_file, out_file, nlp, batch_size=args.batch)
+        print()
+
+
+if __name__ == "__main__":
+    main()
+
