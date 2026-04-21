@@ -135,17 +135,17 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lr 5e-6 \
         --head-lr-multiplier 4.0 \
         --warmup-epochs 0 \
-        --lambda-boundary 1.5 \
+        --lambda-boundary 2.0 \
         --lambda-coarse 1.0 \
         --lambda-fine 1.0 \
-        --lambda-svo 1.0 \
-        --lambda-voice 0.5 \
+        --lambda-svo 0.5 \
+        --lambda-voice 0.2 \
         --focal-gamma 0.5 \
         --device $DEVICE \
         --layer-lr-decay 0.9 \
         --ema-decay 0.999 \
         --hn-every 1 \
-        --hn-boost-fp 3.5 \
+        --hn-boost-fp 5.0 \
         --hn-boost-fn 2.0 \
         --hn-boost-coarse 2.5 \
         --hn-boost-fine 2.0 \
