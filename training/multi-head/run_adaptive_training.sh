@@ -208,7 +208,10 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         fi
     fi
 
-    resume_arg="--resume checkpoint_best_multitask.pt"
+    resume_arg=""
+    if [ -f checkpoint_best_multitask.pt ]; then
+        resume_arg="--resume checkpoint_best_multitask.pt"
+    fi
     current_epoch=$((current_epoch + 1))
 done
 
