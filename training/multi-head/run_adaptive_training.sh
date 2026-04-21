@@ -2,6 +2,7 @@
 # ═══════════════════════════════════════════════════════════
 #  Training adaptatif — hard negatives introduits seulement
 #  quand le modèle stagne (plateau détecté sur val score)
+#  Inclut les têtes SVO/voice entraînées sur le silver Stanza.
 # ═══════════════════════════════════════════════════════════
 set -e
 cd "$(dirname "$0")"
@@ -39,16 +40,14 @@ fi
 MODEL="microsoft/deberta-v3-base"
 DATA="data"
 MAX_EPOCHS=40
-PATIENCE=3        # nb epochs sans amélioration avant d'augmenter difficulté
-MAX_EPOCHS_PER_LEVEL=5  # forcer niveau suivant même si amélioration continue
-MIN_DELTA=0.0005  # amélioration minimale considérée comme progrès
+PATIENCE=3
+MAX_EPOCHS_PER_LEVEL=5
+MIN_DELTA=0.0005
 
-# Niveaux de difficulté progressifs (6 niveaux au lieu de 4)
-ENGLOBANT_RATIOS=(0.0  0.2  0.4  0.6  0.8  1.0)
-HARD_NEG_RATIOS=( 0.2  0.4  0.6  0.8  1.0  1.0)
-ENGLOBANT_WEIGHTS=(1.0 1.0  1.0  1.1  1.3  1.5)
-FOCAL_GAMMAS=(    0.0  0.0  0.5  0.5  1.0  1.5)
+# Niveaux de difficulté progressifs (6 niveaux)
 LEVEL_NAMES=("easy" "easy+" "medium" "medium+" "hard" "full")
+HARD_PER_GOLD=(2    3      4       5        6      6)
+SOFT_FACTORS=( 1.0  1.5    2.0     2.0      2.0    2.0)
 
 # Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
 START_LEVEL=${START_LEVEL:-0}
@@ -68,37 +67,39 @@ echo "🚀 Démarrage training adaptatif — $(date)" | tee $log_file
 
 rebuild_dataset() {
     local level=$1
-    local ratio=${ENGLOBANT_RATIOS[$level]}
-    local hard=${HARD_NEG_RATIOS[$level]}
-    local weight=${ENGLOBANT_WEIGHTS[$level]}
+    local hard=${HARD_PER_GOLD[$level]}
+    local soft=${SOFT_FACTORS[$level]}
     local name=${LEVEL_NAMES[$level]}
-    echo "🔧 Build dataset niveau $level ($name) — englobant_ratio=$ratio hard_neg_ratio=$hard weight=$weight" | tee -a $log_file
-    python3 data/build_multitask_dataset.py \
-        --input $DATA/train_v2.jsonl \
+    echo "🔧 Build dataset niveau $level ($name) — hard_per_gold=$hard soft_factor=$soft" | tee -a $log_file
+    # Utiliser les fichiers SVO silver (NER + SVO fusionnés)
+    python3 build_multitask_dataset.py \
+        --input  $DATA/train_svo_silver.jsonl \
         --output $DATA/train.adaptive.multitask.jsonl \
         --model-name $MODEL \
-        --englobant-ratio $ratio \
-        --hard-neg-ratio $hard \
-        --englobant-weight $weight
+        --hard-per-gold $hard \
+        --soft-factor $soft \
+        --max-span-len 12
 }
 
-# Build val/test une seule fois (full hard)
+# Build val/test une seule fois
 echo "📦 Build val/test datasets..." | tee -a $log_file
-python3 data/build_multitask_dataset.py \
-    --input $DATA/val_v2.jsonl \
+python3 build_multitask_dataset.py \
+    --input  $DATA/val_svo_silver.jsonl \
     --output $DATA/val.multitask.jsonl \
     --model-name $MODEL \
-    --englobant-ratio 1.0 \
-    --hard-neg-ratio 1.0
+    --hard-per-gold 6 \
+    --soft-factor 2.0 \
+    --max-span-len 12
 
-python3 data/build_multitask_dataset.py \
-    --input $DATA/test_v2.jsonl \
+python3 build_multitask_dataset.py \
+    --input  $DATA/test_svo_silver.jsonl \
     --output $DATA/test.multitask.jsonl \
     --model-name $MODEL \
-    --englobant-ratio 1.0 \
-    --hard-neg-ratio 1.0
+    --hard-per-gold 6 \
+    --soft-factor 2.0 \
+    --max-span-len 12
 
-# Checkpoints: supprimer ou reprendre selon KEEP_CHECKPOINT
+# Checkpoints
 if [ "$KEEP_CHECKPOINT" = "1" ]; then
     echo "Reprise depuis checkpoint existant" | tee -a $log_file
     if [ -f checkpoint_best_multitask.pt ]; then
@@ -111,7 +112,6 @@ elif [ -f checkpoint_best_multitask.pt ] || [ -f checkpoint_last_multitask.pt ];
     rm -f checkpoint_best_multitask.pt checkpoint_last_multitask.pt
 fi
 
-# Build dataset niveau initial
 rebuild_dataset $current_level
 
 # ─── BOUCLE PRINCIPALE ───────────────────────────────────
@@ -121,7 +121,6 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
     echo "  Epoch $current_epoch/$MAX_EPOCHS  |  Niveau ${LEVEL_NAMES[$current_level]} (stagnation=$stagnation_count/$PATIENCE)" | tee -a $log_file
     echo "══════════════════════════════════════════════════" | tee -a $log_file
 
-    focal=${FOCAL_GAMMAS[$current_level]}
     epoch_log="logs/epoch_${current_epoch}.log"
 
     python3 train_multi_task.py \
@@ -139,7 +138,9 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lambda-boundary 1.5 \
         --lambda-coarse 1.0 \
         --lambda-fine 1.0 \
-        --focal-gamma $focal \
+        --lambda-svo 1.0 \
+        --lambda-voice 0.5 \
+        --focal-gamma 0.5 \
         --device $DEVICE \
         --layer-lr-decay 0.9 \
         --ema-decay 0.999 \
@@ -154,7 +155,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         $resume_arg \
         2>&1 | tee $epoch_log
 
-    # Extraire le val score depuis le log de l'epoch
+    # Score = grep sur la ligne Val avec Score=
     val_score=$(grep "Score=" $epoch_log | tail -1 | grep -oE "Score=[0-9.]+" | cut -d= -f2)
 
     if [ -z "$val_score" ]; then
@@ -164,9 +165,11 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         continue
     fi
 
-    echo "📊 Epoch $current_epoch — Val Score=$val_score (best=$best_score)" | tee -a $log_file
+    # Log résumé SVO depuis le log epoch
+    svo_f1=$(grep "SVO F1=" $epoch_log | tail -1 | grep -oE "SVO F1=[0-9.]+" | cut -d= -f2 || echo "?")
+    voice_f1=$(grep "Voice F1=" $epoch_log | tail -1 | grep -oE "Voice F1=[0-9.]+" | head -1 | cut -d= -f2 || echo "?")
+    echo "📊 Epoch $current_epoch — Val Score=$val_score SVO_F1=$svo_f1 Voice_F1=$voice_f1 (best=$best_score)" | tee -a $log_file
 
-    # Vérifier amélioration
     improved=$(python3 -c "print('yes' if float('$val_score') > float('$best_score') + $MIN_DELTA else 'no')")
 
     if [ "$improved" = "yes" ]; then
@@ -179,7 +182,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
     fi
 
     epochs_at_level=$((epochs_at_level + 1))
-    max_level=$(( ${#ENGLOBANT_RATIOS[@]} - 1 ))
+    max_level=$(( ${#LEVEL_NAMES[@]} - 1 ))
 
     should_advance=0
     if [ $stagnation_count -ge $PATIENCE ]; then
@@ -203,7 +206,6 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
             break
         fi
     fi
-
 
     resume_arg="--resume checkpoint_best_multitask.pt"
     current_epoch=$((current_epoch + 1))

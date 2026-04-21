@@ -16,7 +16,7 @@ from sklearn.metrics import f1_score, classification_report
 
 from multitask_dataset import MultiTaskSpanDataset, make_collate_fn
 from multitask_model import SpanMultiTaskModel
-from labels import COARSE_LABELS, FINE_LABELS
+from labels import COARSE_LABELS, FINE_LABELS, SVO_LABELS, NUM_SVO, NUM_VOICE
 
 # ──────────────────────────────────────────────────────────
 #  Inline Hard Negative Mining — constantes
@@ -203,12 +203,14 @@ def run_epoch(
         lambda_boundary=1.0,
         lambda_coarse=1.0,
         lambda_fine=1.2,
+        lambda_svo=1.0,
+        lambda_voice=0.5,
         lambda_compat=0.0,
         accum_steps=1,
         log_every=50,
         focal_gamma=0.0,
         ema: "ModelEMA | None" = None,
-        collect_hn: bool = False,   # ← si True, retourne results_by_id pour le inline HN mining
+        collect_hn: bool = False,
 ):
     """
     Version adaptée à l'architecture :
@@ -295,6 +297,11 @@ def run_epoch(
     # fine positive-only
     all_f_true_pos, all_f_pred_pos = [], []
 
+    # SVO positive-only (spans avec svo_label != SVO_NONE_ID)
+    all_svo_true, all_svo_pred = [], []
+    # voice positive-only (spans avec voice_label != VOICE_NONE_ID)
+    all_voice_true, all_voice_pred = [], []
+
     # inline HN mining : id → list[(err_type|None, pred_coarse, pred_fine)]
     hn_results_by_id: dict[str, list] = {} if collect_hn else None
 
@@ -315,6 +322,8 @@ def run_epoch(
         boundary_labels = batch["boundary_labels"].to(device)
         coarse_labels = batch["coarse_labels"].to(device)
         fine_labels = batch["fine_labels"].to(device)
+        svo_labels = batch["svo_labels"].to(device)
+        voice_labels = batch["voice_labels"].to(device)
         sample_weights = batch["sample_weights"].to(device)
 
         # Sanity check avant forward
@@ -324,6 +333,8 @@ def run_epoch(
                 == boundary_labels.size(0)
                 == coarse_labels.size(0)
                 == fine_labels.size(0)
+                == svo_labels.size(0)
+                == voice_labels.size(0)
                 == sample_weights.size(0)
         ):
             raise ValueError(
@@ -350,11 +361,15 @@ def run_epoch(
                 boundary_labels_loss = boundary_labels[si]
                 coarse_labels_loss = coarse_labels[si]
                 fine_labels_loss = fine_labels[si]
+                svo_labels_loss = svo_labels[si]
+                voice_labels_loss = voice_labels[si]
                 sample_weights_loss = sample_weights[si]
             else:
                 boundary_labels_loss = boundary_labels
                 coarse_labels_loss = coarse_labels
                 fine_labels_loss = fine_labels
+                svo_labels_loss = svo_labels
+                voice_labels_loss = voice_labels
                 sample_weights_loss = sample_weights
 
             # Sanity check après forward / avant loss
@@ -381,12 +396,16 @@ def run_epoch(
                 boundary_labels=boundary_labels_loss,
                 coarse_labels=coarse_labels_loss,
                 fine_labels=fine_labels_loss,
+                svo_labels=svo_labels_loss,
+                voice_labels=voice_labels_loss,
                 sample_weights=sample_weights_loss,
                 boundary_class_weights=boundary_class_weights,
                 coarse_class_weights=coarse_class_weights,
                 lambda_boundary=lambda_boundary,
                 lambda_coarse=lambda_coarse,
                 lambda_fine=lambda_fine,
+                lambda_svo=lambda_svo,
+                lambda_voice=lambda_voice,
                 focal_gamma=focal_gamma,
             )
 
@@ -433,10 +452,17 @@ def run_epoch(
             b_true = boundary_labels.detach().cpu()[si_cpu].tolist()
             c_true = coarse_labels.detach().cpu()[si_cpu].tolist()
             f_true = fine_labels.detach().cpu()[si_cpu].tolist()
+            svo_true = svo_labels.detach().cpu()[si_cpu].tolist()
+            voice_true = voice_labels.detach().cpu()[si_cpu].tolist()
         else:
             b_true = boundary_labels.detach().cpu().tolist()
             c_true = coarse_labels.detach().cpu().tolist()
             f_true = fine_labels.detach().cpu().tolist()
+            svo_true = svo_labels.detach().cpu().tolist()
+            voice_true = voice_labels.detach().cpu().tolist()
+
+        svo_pred_raw = outputs["svo_logits"].argmax(dim=-1).detach().cpu().tolist()
+        voice_pred_raw = outputs["voice_logits"].argmax(dim=-1).detach().cpu().tolist()
 
         # Accumulate boundary / coarse
         all_b_true.extend(b_true)
@@ -450,6 +476,17 @@ def run_epoch(
             if bt == 1:
                 all_f_true_pos.append(ft)
                 all_f_pred_pos.append(fp)
+
+        # SVO metrics = silver spans uniquement (svo_label < NUM_SVO)
+
+        for svot, svop in zip(svo_true, svo_pred_raw):
+            if svot < NUM_SVO:
+                all_svo_true.append(svot)
+                all_svo_pred.append(svop)
+        for vt, vp in zip(voice_true, voice_pred_raw):
+            if vt < NUM_VOICE:
+                all_voice_true.append(vt)
+                all_voice_pred.append(vp)
 
         # ── Inline HN mining : collecter erreurs par candidat ────────────────
         if collect_hn:
@@ -512,6 +549,15 @@ def run_epoch(
             all_f_pred_pos,
             labels=list(range(len(FINE_LABELS)))
         ),
+        "svo_macro_f1": safe_macro_f1_local(
+            all_svo_true,
+            all_svo_pred,
+            labels=list(range(NUM_SVO))
+        ) if all_svo_true else 0.0,
+        "voice_macro_f1": safe_macro_f1_local(
+            all_voice_true,
+            all_voice_pred,
+        ) if all_voice_true else 0.0,
         "boundary_report": classification_report(
             all_b_true,
             all_b_pred,
@@ -534,6 +580,14 @@ def run_epoch(
             digits=3,
             zero_division=0
         ) if all_f_true_pos else "N/A",
+        "svo_report": classification_report(
+            all_svo_true,
+            all_svo_pred,
+            labels=list(range(NUM_SVO)),
+            target_names=SVO_LABELS,
+            digits=3,
+            zero_division=0
+        ) if all_svo_true else "N/A",
         "hn_results_by_id": hn_results_by_id,  # None si collect_hn=False
     }
 
@@ -618,6 +672,10 @@ def main():
     parser.add_argument("--lambda-boundary", type=float, default=1.0)
     parser.add_argument("--lambda-coarse", type=float, default=1.0)
     parser.add_argument("--lambda-fine", type=float, default=1.2)
+    parser.add_argument("--lambda-svo", type=float, default=1.0,
+                        help="Pondération de la loss SVO (défaut=1.0)")
+    parser.add_argument("--lambda-voice", type=float, default=0.5,
+                        help="Pondération de la loss voice ACTIVE/PASSIVE (défaut=0.5)")
     parser.add_argument("--lambda-compat", type=float, default=0.2)
     parser.add_argument("--focal-gamma", type=float, default=0.0,
                         help="Focal loss gamma pour boundary (0=CE, 2.0=focal)")
@@ -860,6 +918,8 @@ def main():
             lambda_boundary=args.lambda_boundary,
             lambda_coarse=args.lambda_coarse,
             lambda_fine=args.lambda_fine,
+            lambda_svo=args.lambda_svo,
+            lambda_voice=args.lambda_voice,
             lambda_compat=args.lambda_compat,
             accum_steps=args.accum_steps,
             log_every=args.log_every,
@@ -898,6 +958,8 @@ def main():
             lambda_boundary=args.lambda_boundary,
             lambda_coarse=args.lambda_coarse,
             lambda_fine=args.lambda_fine,
+            lambda_svo=args.lambda_svo,
+            lambda_voice=args.lambda_voice,
             lambda_compat=args.lambda_compat,
             accum_steps=args.accum_steps,
             log_every=args.log_every,
@@ -914,20 +976,25 @@ def main():
             val_metrics["boundary_f1"]
             + val_metrics["coarse_macro_f1"]
             + val_metrics["fine_macro_f1"]
-        ) / 3.0
+            + val_metrics["svo_macro_f1"]
+        ) / 4.0
 
         print(f"\n📅 Epoch {epoch}")
         print(
             f"Train loss={train_metrics['loss']:.4f} | "
             f"Boundary F1={train_metrics['boundary_f1']:.4f} | "
             f"Coarse F1={train_metrics['coarse_macro_f1']:.4f} | "
-            f"Fine F1={train_metrics['fine_macro_f1']:.4f}"
+            f"Fine F1={train_metrics['fine_macro_f1']:.4f} | "
+            f"SVO F1={train_metrics['svo_macro_f1']:.4f} | "
+            f"Voice F1={train_metrics['voice_macro_f1']:.4f}"
         )
         print(
             f"Val   loss={val_metrics['loss']:.4f} | "
             f"Boundary F1={val_metrics['boundary_f1']:.4f} | "
             f"Coarse F1={val_metrics['coarse_macro_f1']:.4f} | "
             f"Fine F1={val_metrics['fine_macro_f1']:.4f} | "
+            f"SVO F1={val_metrics['svo_macro_f1']:.4f} | "
+            f"Voice F1={val_metrics['voice_macro_f1']:.4f} | "
             f"Score={score:.4f}"
         )
 
@@ -937,6 +1004,8 @@ def main():
         print(val_metrics["coarse_report"])
         print("[VAL fine]")
         print(val_metrics["fine_report"])
+        print("[VAL svo]")
+        print(val_metrics["svo_report"])
 
         torch.save({
             "epoch": epoch,
@@ -980,6 +1049,8 @@ def main():
         lambda_boundary=args.lambda_boundary,
         lambda_coarse=args.lambda_coarse,
         lambda_fine=args.lambda_fine,
+        lambda_svo=args.lambda_svo,
+        lambda_voice=args.lambda_voice,
         lambda_compat=args.lambda_compat,
         accum_steps=args.accum_steps,
         log_every=args.log_every,
@@ -991,6 +1062,8 @@ def main():
     print(f"Boundary F1={test_metrics['boundary_f1']:.4f}")
     print(f"Coarse   F1={test_metrics['coarse_macro_f1']:.4f}")
     print(f"Fine     F1={test_metrics['fine_macro_f1']:.4f}")
+    print(f"SVO      F1={test_metrics['svo_macro_f1']:.4f}")
+    print(f"Voice    F1={test_metrics['voice_macro_f1']:.4f}")
 
     print("\n[TEST boundary]")
     print(test_metrics["boundary_report"])

@@ -49,6 +49,7 @@ def main():
         model,
         (dummy_ids, dummy_mask, dummy_ss, dummy_se, dummy_bid),
         args.output,
+        dynamo=False,
         opset_version=args.opset,
         input_names=["input_ids", "attention_mask", "span_starts", "span_ends", "span_batch_ids"],
         output_names=["boundary_logits", "coarse_logits", "fine_logits"],
@@ -62,7 +63,7 @@ def main():
             "coarse_logits":   {0: "num_spans"},
             "fine_logits":     {0: "num_spans"},
         },
-        do_constant_folding=True,
+        do_constant_folding=False,
     )
 
     size_mb = os.path.getsize(args.output) / 1e6
