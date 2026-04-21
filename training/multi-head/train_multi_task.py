@@ -298,6 +298,9 @@ def run_epoch(
     # fine positive-only
     all_f_true_pos, all_f_pred_pos = [], []
 
+    # coarse positive-only (boundary=1 uniquement pour les métriques)
+    all_c_true_pos, all_c_pred_pos = [], []
+
     # svo_boundary
     all_svob_true, all_svob_pred = [], []
     # SVO positive-only (spans avec svo_label != SVO_NONE_ID)
@@ -483,6 +486,13 @@ def run_epoch(
         all_c_true.extend(c_true)
         all_c_pred.extend(c_pred)
 
+
+        # Coarse metrics = POSITIVE ONLY (boundary=1)
+        for bt, ct, cp in zip(b_true, c_true, c_pred):
+            if bt == 1:
+                all_c_true_pos.append(ct)
+                all_c_pred_pos.append(cp)
+
         all_svob_true.extend(svob_true)
         all_svob_pred.extend(svob_pred)
 
@@ -555,9 +565,9 @@ def run_epoch(
         "loss": sum(losses) / max(1, len(losses)),
         "boundary_f1": safe_macro_f1_local(all_b_true, all_b_pred),
         "coarse_macro_f1": safe_macro_f1_local(
-            all_c_true,
-            all_c_pred,
-            labels=list(range(len(COARSE_LABELS)))
+            all_c_true_pos,
+            all_c_pred_pos,
+            labels=list(range(len(COARSE_LABELS) - 1))  # excl. NONE
         ),
         "fine_macro_f1": safe_macro_f1_local(
             all_f_true_pos,
@@ -581,13 +591,13 @@ def run_epoch(
             zero_division=0
         ) if all_b_true else "N/A",
         "coarse_report": classification_report(
-            all_c_true,
-            all_c_pred,
-            labels=list(range(len(COARSE_LABELS))),
-            target_names=COARSE_LABELS,
+            all_c_true_pos,
+            all_c_pred_pos,
+            labels=list(range(len(COARSE_LABELS) - 1)),  # excl. NONE
+            target_names=COARSE_LABELS[:-1],
             digits=3,
             zero_division=0
-        ) if all_c_true else "N/A",
+        ) if all_c_true_pos else "N/A",
         "fine_report": classification_report(
             all_f_true_pos,
             all_f_pred_pos,
