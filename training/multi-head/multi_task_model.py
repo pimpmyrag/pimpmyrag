@@ -167,14 +167,11 @@ class SpanMultiTaskModel(nn.Module):
                                            weight=coarse_class_weights, reduction="none")
         loss_c = (loss_c_per_span * sample_weights).mean()
 
-        # ── 3) Fine (spans NER positifs uniquement) ────────────────
-        pos_mask = (boundary_labels == 1)
+        # ── 3) Fine (spans NER positifs avec un vrai label fine) ──────
+        pos_mask = (boundary_labels == 1) & (fine_labels < f_logits.size(-1))
         if pos_mask.any():
             f_logits_pos = f_logits[pos_mask]
             f_labels_pos = fine_labels[pos_mask]
-            if torch.any(f_labels_pos < 0) or torch.any(f_labels_pos >= f_logits.size(-1)):
-                bad = f_labels_pos[(f_labels_pos < 0) | (f_labels_pos >= f_logits.size(-1))].tolist()
-                raise ValueError(f"fine_labels positifs hors bornes: {bad[:20]}")
             loss_f = (F.cross_entropy(f_logits_pos, f_labels_pos, reduction="none")
                       * sample_weights[pos_mask]).mean()
         else:
