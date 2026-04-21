@@ -143,6 +143,14 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --device $DEVICE \
         --layer-lr-decay 0.9 \
         --ema-decay 0.999 \
+        --hn-every 1 \
+        --hn-boost-fp 3.5 \
+        --hn-boost-fn 2.0 \
+        --hn-boost-coarse 2.5 \
+        --hn-boost-fine 2.0 \
+        --hn-decay 0.85 \
+        --hn-max-weight 8.0 \
+        --hn-min-weight 0.3 \
         $resume_arg \
         2>&1 | tee $epoch_log
 
@@ -196,21 +204,6 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         fi
     fi
 
-    # ── Active hard negative mining ───────────────────────
-    # Dès qu'on a un checkpoint, on booste les candidats mal prédits
-    if [ -f checkpoint_best_multitask.pt ]; then
-        echo "⛏️  Mining hard negatives actifs..." | tee -a $log_file
-        python3 mine_hard_negatives.py \
-            --dataset $DATA/train.adaptive.multitask.jsonl \
-            --checkpoint checkpoint_best_multitask.pt \
-            --model-name $MODEL \
-            --device $DEVICE \
-            --boost 2.5 \
-            --decay 0.85 \
-            --max-weight 6.0 \
-            --batch-size $BS \
-            2>&1 | tee -a $log_file
-    fi
 
     resume_arg="--resume checkpoint_best_multitask.pt"
     current_epoch=$((current_epoch + 1))

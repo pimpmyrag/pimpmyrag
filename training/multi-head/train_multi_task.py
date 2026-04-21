@@ -18,6 +18,14 @@ from multitask_dataset import MultiTaskSpanDataset, make_collate_fn
 from multitask_model import SpanMultiTaskModel
 from labels import COARSE_LABELS, FINE_LABELS
 
+# ──────────────────────────────────────────────────────────
+#  Inline Hard Negative Mining — constantes
+# ──────────────────────────────────────────────────────────
+_LOW_PRECISION_COARSE = {"VALUE", "EVENT", "TIME", "ABSTRACT"}
+_LOW_F1_FINE = {"hint_quantity", "hint_measure", "hint_rate", "hint_infra", "hint_object_generic"}
+_FP_LOW_PREC_EXTRA = 1.5
+_FINE_ERR_EXTRA    = 1.4
+
 
 # ──────────────────────────────────────────────────────────
 #  EMA — Exponential Moving Average des poids du modèle
@@ -199,7 +207,8 @@ def run_epoch(
         accum_steps=1,
         log_every=50,
         focal_gamma=0.0,
-        ema: "ModelEMA | None" = None,   # ← EMA mis à jour après chaque optimizer step
+        ema: "ModelEMA | None" = None,
+        collect_hn: bool = False,   # ← si True, retourne results_by_id pour le inline HN mining
 ):
     """
     Version adaptée à l'architecture :
@@ -285,6 +294,9 @@ def run_epoch(
 
     # fine positive-only
     all_f_true_pos, all_f_pred_pos = [], []
+
+    # inline HN mining : id → list[(err_type|None, pred_coarse, pred_fine)]
+    hn_results_by_id: dict[str, list] = {} if collect_hn else None
 
     coarse_fine_mask = getattr(model, "coarse_fine_mask", None)
     if coarse_fine_mask is None:
@@ -439,6 +451,48 @@ def run_epoch(
                 all_f_true_pos.append(ft)
                 all_f_pred_pos.append(fp)
 
+        # ── Inline HN mining : collecter erreurs par candidat ────────────────
+        if collect_hn:
+            from collections import defaultdict
+            pos_map = []
+            for bi, sample_spans in enumerate(spans):
+                for _ in range(len(sample_spans)):
+                    pos_map.append(bi)
+
+            n_global = len(pos_map)
+            si_list = (
+                span_indices.detach().cpu().tolist()
+                if span_indices is not None
+                else list(range(n_global))
+            )
+
+            raw_results: list = [None] * n_global
+            for out_idx, in_idx in enumerate(si_list):
+                bp = b_pred[out_idx]; bl = b_true[out_idx]
+                cp = c_pred[out_idx]; cl = c_true[out_idx]
+                fp_ = f_pred[out_idx]; fl = f_true[out_idx]
+
+                pred_coarse = COARSE_LABELS[cp] if cp < len(COARSE_LABELS) else "?"
+                pred_fine   = FINE_LABELS[fp_]  if fp_ < len(FINE_LABELS)  else "?"
+
+                if bp != bl:
+                    err = "FP_BOUNDARY" if (bl == 0 and bp == 1) else "FN_BOUNDARY"
+                elif bl == 1 and cp != cl:
+                    err = "COARSE_ERR"
+                elif bl == 1 and fp_ != fl:
+                    err = "FINE_ERR"
+                else:
+                    err = None
+
+                raw_results[in_idx] = (err, pred_coarse, pred_fine)
+
+            per_row: dict[int, list] = defaultdict(list)
+            for in_idx, bi in enumerate(pos_map):
+                per_row[bi].append(raw_results[in_idx])
+
+            for bi, row_results in per_row.items():
+                hn_results_by_id[batch["ids"][bi]] = row_results
+
     if train and (len(loader) % accum_steps != 0):
         optimizer.step()
         optimizer.zero_grad()
@@ -480,9 +534,69 @@ def run_epoch(
             digits=3,
             zero_division=0
         ) if all_f_true_pos else "N/A",
+        "hn_results_by_id": hn_results_by_id,  # None si collect_hn=False
     }
 
     return metrics
+
+
+def apply_inline_hn(
+    train_ds: "MultiTaskSpanDataset",
+    results_by_id: dict,
+    boosts: dict,
+    decay: float,
+    max_weight: float,
+    min_weight: float,
+) -> dict:
+    """
+    Met à jour in-memory les sample_weights de train_ds.rows
+    à partir des erreurs collectées pendant l'epoch de training.
+    Retourne un dict de stats pour le logging.
+    """
+    from collections import Counter
+    stats: Counter = Counter()
+
+    # Construire un index id → row_index pour un accès rapide
+    id_to_idx = {row["id"]: i for i, row in enumerate(train_ds.rows)}
+
+    for rid, row_results in results_by_id.items():
+        idx = id_to_idx.get(rid)
+        if idx is None:
+            continue
+        row = train_ds.rows[idx]
+        valid_cands = [c for c in row["candidates"] if _hn_is_valid(c)]
+
+        for i, c in enumerate(valid_cands):
+            if i >= len(row_results):
+                break
+            entry = row_results[i]
+            if entry is None:
+                w = c.get("sample_weight", 1.0)
+                c["sample_weight"] = max(min_weight, 1.0 + (w - 1.0) * decay)
+                stats["decayed"] += 1
+                continue
+
+            err, pred_coarse, pred_fine = entry
+            if err is None:
+                w = c.get("sample_weight", 1.0)
+                c["sample_weight"] = max(min_weight, 1.0 + (w - 1.0) * decay)
+                stats["decayed"] += 1
+            else:
+                base = boosts.get(err, 2.0)
+                if err == "FP_BOUNDARY" and pred_coarse in _LOW_PRECISION_COARSE:
+                    base *= _FP_LOW_PREC_EXTRA
+                if err == "FINE_ERR" and pred_fine in _LOW_F1_FINE:
+                    base *= _FINE_ERR_EXTRA
+                c["sample_weight"] = min(max_weight, c.get("sample_weight", 1.0) * base)
+                c["neg_type"] = err
+                stats[err] += 1
+
+    return dict(stats)
+
+
+def _hn_is_valid(c: dict) -> bool:
+    ts, te = c.get("tok_start"), c.get("tok_end")
+    return isinstance(ts, int) and isinstance(te, int) and ts >= 0 and te >= ts
 
 
 def main():
@@ -550,6 +664,24 @@ def main():
         default=None,
         help="Force l'epoch de départ quand on reprend depuis un checkpoint."
     )
+
+    # ── Inline Hard Negative Mining ──────────────────────────────────────────
+    parser.add_argument("--hn-every",        type=int,   default=0,
+                        help="Appliquer le HN mining toutes les N epochs (0=désactivé)")
+    parser.add_argument("--hn-boost-fp",     type=float, default=3.5,
+                        help="Boost FP_BOUNDARY (défaut=3.5)")
+    parser.add_argument("--hn-boost-fn",     type=float, default=2.0,
+                        help="Boost FN_BOUNDARY (défaut=2.0)")
+    parser.add_argument("--hn-boost-coarse", type=float, default=2.5,
+                        help="Boost COARSE_ERR (défaut=2.5)")
+    parser.add_argument("--hn-boost-fine",   type=float, default=2.0,
+                        help="Boost FINE_ERR (défaut=2.0)")
+    parser.add_argument("--hn-decay",        type=float, default=0.85,
+                        help="Décroissance des poids bien prédits (défaut=0.85)")
+    parser.add_argument("--hn-max-weight",   type=float, default=8.0,
+                        help="Poids maximum (défaut=8.0)")
+    parser.add_argument("--hn-min-weight",   type=float, default=0.3,
+                        help="Poids minimum (défaut=0.3)")
 
     args = parser.parse_args()
 
@@ -656,6 +788,19 @@ def main():
     best_score = -1.0
     start_epoch = 1
 
+    # Boosts HN inline
+    hn_boosts = {
+        "FP_BOUNDARY": args.hn_boost_fp,
+        "FN_BOUNDARY": args.hn_boost_fn,
+        "COARSE_ERR":  args.hn_boost_coarse,
+        "FINE_ERR":    args.hn_boost_fine,
+    }
+    use_inline_hn = args.hn_every > 0
+    if use_inline_hn:
+        print(f"🎯 Inline HN mining activé toutes les {args.hn_every} epoch(s)")
+        print(f"   boosts = {hn_boosts}")
+        print(f"   decay={args.hn_decay}, max_weight={args.hn_max_weight}")
+
     # LR scheduler basé sur les epochs
     warmup_epochs_count = min(args.warmup_epochs, total_epochs)
     warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=warmup_epochs_count)
@@ -720,7 +865,22 @@ def main():
             log_every=args.log_every,
             focal_gamma=args.focal_gamma,
             ema=ema,
+            collect_hn=use_inline_hn and (epoch % args.hn_every == 0),
         )
+
+        # ── Inline HN mining — mise à jour des poids in-memory ────────────────
+        if use_inline_hn and (epoch % args.hn_every == 0):
+            hn_res = train_metrics.get("hn_results_by_id")
+            if hn_res:
+                hn_stats = apply_inline_hn(
+                    train_ds,
+                    hn_res,
+                    boosts=hn_boosts,
+                    decay=args.hn_decay,
+                    max_weight=args.hn_max_weight,
+                    min_weight=args.hn_min_weight,
+                )
+                print(f"   🔍 HN mining epoch {epoch} : {hn_stats}")
 
         # Validation avec poids EMA si activé
         if use_ema:
