@@ -101,13 +101,14 @@ def build_gold_candidates(row, tokenizer):
                 voice_id = VOICE_NONE_ID
 
             cand = {
-                "char_start":     start,
-                "char_end":       end,
-                "tok_start":      tok_start,
-                "tok_end":        tok_end,
-                "boundary_label": 1,           # c'est bien un span réel
-                "coarse_label_id": COARSE_NONE_ID,  # pas NER
-                "fine_label_id":   FINE_NONE_ID,    # pas NER
+                "char_start":      start,
+                "char_end":        end,
+                "tok_start":       tok_start,
+                "tok_end":         tok_end,
+                "boundary_label":  0,               # pas une entité NER
+                "svo_boundary_label": 1,            # c'est un span SVO/pron
+                "coarse_label_id": COARSE_NONE_ID,
+                "fine_label_id":   FINE_NONE_ID,
                 "svo_label_id":    svo_id,
                 "voice_label_id":  voice_id,
                 "neg_type":        "svo_gold",
@@ -132,6 +133,7 @@ def build_gold_candidates(row, tokenizer):
             "tok_start":      tok_start,
             "tok_end":        tok_end,
             "boundary_label": 1,
+            "svo_boundary_label": 0,           # pas SVO
             "coarse_label_id": coarse_id,
             "fine_label_id":   fine_id,
             "svo_label_id":    SVO_NONE_ID,    # pas SVO
@@ -193,6 +195,7 @@ def generate_hard_negatives(offsets, gold_candidates, gold_char_spans, max_per_g
                 "tok_start": nl,
                 "tok_end": nr,
                 "boundary_label": 0,
+                "svo_boundary_label": 0,
                 "coarse_label_id": COARSE_NONE_ID,
                 "fine_label_id": FINE_NONE_ID,
                 "svo_label_id": SVO_NONE_ID,
@@ -249,6 +252,7 @@ def generate_soft_negatives(offsets, gold_token_spans, gold_char_spans, num_soft
             "tok_start": l,
             "tok_end": r,
             "boundary_label": 0,
+            "svo_boundary_label": 0,
             "coarse_label_id": COARSE_NONE_ID,
             "fine_label_id": FINE_NONE_ID,
             "svo_label_id": SVO_NONE_ID,
@@ -313,6 +317,7 @@ def generate_englobant_negatives(offsets, gold_candidates, gold_char_spans, max_
                 "tok_start": nl,
                 "tok_end": nr,
                 "boundary_label": 0,
+                "svo_boundary_label": 0,
                 "coarse_label_id": COARSE_NONE_ID,
                 "fine_label_id": FINE_NONE_ID,
                 "svo_label_id": SVO_NONE_ID,
@@ -364,6 +369,7 @@ def generate_multi_entity_negatives(gold_candidates, gold_char_spans, max_negati
             "tok_start": nl,
             "tok_end": nr,
             "boundary_label": 0,
+            "svo_boundary_label": 0,
             "coarse_label_id": COARSE_NONE_ID,
             "fine_label_id": FINE_NONE_ID,
             "svo_label_id": SVO_NONE_ID,

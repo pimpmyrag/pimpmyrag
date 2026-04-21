@@ -203,6 +203,7 @@ def run_epoch(
         lambda_boundary=1.0,
         lambda_coarse=1.0,
         lambda_fine=1.2,
+        lambda_svo_boundary=1.0,
         lambda_svo=1.0,
         lambda_voice=0.5,
         lambda_compat=0.0,
@@ -297,6 +298,8 @@ def run_epoch(
     # fine positive-only
     all_f_true_pos, all_f_pred_pos = [], []
 
+    # svo_boundary
+    all_svob_true, all_svob_pred = [], []
     # SVO positive-only (spans avec svo_label != SVO_NONE_ID)
     all_svo_true, all_svo_pred = [], []
     # voice positive-only (spans avec voice_label != VOICE_NONE_ID)
@@ -322,6 +325,7 @@ def run_epoch(
         boundary_labels = batch["boundary_labels"].to(device)
         coarse_labels = batch["coarse_labels"].to(device)
         fine_labels = batch["fine_labels"].to(device)
+        svo_boundary_labels = batch["svo_boundary_labels"].to(device)
         svo_labels = batch["svo_labels"].to(device)
         voice_labels = batch["voice_labels"].to(device)
         sample_weights = batch["sample_weights"].to(device)
@@ -333,6 +337,7 @@ def run_epoch(
                 == boundary_labels.size(0)
                 == coarse_labels.size(0)
                 == fine_labels.size(0)
+                == svo_boundary_labels.size(0)
                 == svo_labels.size(0)
                 == voice_labels.size(0)
                 == sample_weights.size(0)
@@ -361,6 +366,7 @@ def run_epoch(
                 boundary_labels_loss = boundary_labels[si]
                 coarse_labels_loss = coarse_labels[si]
                 fine_labels_loss = fine_labels[si]
+                svo_boundary_labels_loss = svo_boundary_labels[si]
                 svo_labels_loss = svo_labels[si]
                 voice_labels_loss = voice_labels[si]
                 sample_weights_loss = sample_weights[si]
@@ -368,6 +374,7 @@ def run_epoch(
                 boundary_labels_loss = boundary_labels
                 coarse_labels_loss = coarse_labels
                 fine_labels_loss = fine_labels
+                svo_boundary_labels_loss = svo_boundary_labels
                 svo_labels_loss = svo_labels
                 voice_labels_loss = voice_labels
                 sample_weights_loss = sample_weights
@@ -396,6 +403,7 @@ def run_epoch(
                 boundary_labels=boundary_labels_loss,
                 coarse_labels=coarse_labels_loss,
                 fine_labels=fine_labels_loss,
+                svo_boundary_labels=svo_boundary_labels_loss,
                 svo_labels=svo_labels_loss,
                 voice_labels=voice_labels_loss,
                 sample_weights=sample_weights_loss,
@@ -404,6 +412,7 @@ def run_epoch(
                 lambda_boundary=lambda_boundary,
                 lambda_coarse=lambda_coarse,
                 lambda_fine=lambda_fine,
+                lambda_svo_boundary=lambda_svo_boundary,
                 lambda_svo=lambda_svo,
                 lambda_voice=lambda_voice,
                 focal_gamma=focal_gamma,
@@ -438,6 +447,7 @@ def run_epoch(
         # Predictions
         b_pred = outputs["boundary_logits"].argmax(dim=-1).detach().cpu().tolist()
         c_pred = outputs["coarse_logits"].argmax(dim=-1).detach().cpu().tolist()
+        svob_pred = outputs["svo_boundary_logits"].argmax(dim=-1).detach().cpu().tolist()
 
         # Fine prédite avec masquage coarse -> fine
         f_pred = masked_fine_predictions(
@@ -452,12 +462,14 @@ def run_epoch(
             b_true = boundary_labels.detach().cpu()[si_cpu].tolist()
             c_true = coarse_labels.detach().cpu()[si_cpu].tolist()
             f_true = fine_labels.detach().cpu()[si_cpu].tolist()
+            svob_true = svo_boundary_labels.detach().cpu()[si_cpu].tolist()
             svo_true = svo_labels.detach().cpu()[si_cpu].tolist()
             voice_true = voice_labels.detach().cpu()[si_cpu].tolist()
         else:
             b_true = boundary_labels.detach().cpu().tolist()
             c_true = coarse_labels.detach().cpu().tolist()
             f_true = fine_labels.detach().cpu().tolist()
+            svob_true = svo_boundary_labels.detach().cpu().tolist()
             svo_true = svo_labels.detach().cpu().tolist()
             voice_true = voice_labels.detach().cpu().tolist()
 
@@ -470,6 +482,9 @@ def run_epoch(
 
         all_c_true.extend(c_true)
         all_c_pred.extend(c_pred)
+
+        all_svob_true.extend(svob_true)
+        all_svob_pred.extend(svob_pred)
 
         # Fine metrics = POSITIVE ONLY
         for bt, ft, fp in zip(b_true, f_true, f_pred):
@@ -549,6 +564,7 @@ def run_epoch(
             all_f_pred_pos,
             labels=list(range(len(FINE_LABELS)))
         ),
+        "svo_boundary_f1": safe_macro_f1_local(all_svob_true, all_svob_pred),
         "svo_macro_f1": safe_macro_f1_local(
             all_svo_true,
             all_svo_pred,
@@ -676,6 +692,8 @@ def main():
                         help="Pondération de la loss SVO (défaut=1.0)")
     parser.add_argument("--lambda-voice", type=float, default=0.5,
                         help="Pondération de la loss voice ACTIVE/PASSIVE (défaut=0.5)")
+    parser.add_argument("--lambda-svo-boundary", type=float, default=1.0,
+                        help="Pondération de la loss svo_boundary (détection verbes/pronoms, défaut=1.0)")
     parser.add_argument("--lambda-compat", type=float, default=0.2)
     parser.add_argument("--focal-gamma", type=float, default=0.0,
                         help="Focal loss gamma pour boundary (0=CE, 2.0=focal)")
@@ -918,6 +936,7 @@ def main():
             lambda_boundary=args.lambda_boundary,
             lambda_coarse=args.lambda_coarse,
             lambda_fine=args.lambda_fine,
+            lambda_svo_boundary=args.lambda_svo_boundary,
             lambda_svo=args.lambda_svo,
             lambda_voice=args.lambda_voice,
             lambda_compat=args.lambda_compat,
@@ -958,6 +977,7 @@ def main():
             lambda_boundary=args.lambda_boundary,
             lambda_coarse=args.lambda_coarse,
             lambda_fine=args.lambda_fine,
+            lambda_svo_boundary=args.lambda_svo_boundary,
             lambda_svo=args.lambda_svo,
             lambda_voice=args.lambda_voice,
             lambda_compat=args.lambda_compat,
@@ -1049,6 +1069,7 @@ def main():
         lambda_boundary=args.lambda_boundary,
         lambda_coarse=args.lambda_coarse,
         lambda_fine=args.lambda_fine,
+        lambda_svo_boundary=args.lambda_svo_boundary,
         lambda_svo=args.lambda_svo,
         lambda_voice=args.lambda_voice,
         lambda_compat=args.lambda_compat,

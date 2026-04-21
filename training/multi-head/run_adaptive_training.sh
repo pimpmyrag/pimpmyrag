@@ -138,6 +138,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lambda-boundary 2.0 \
         --lambda-coarse 1.0 \
         --lambda-fine 1.0 \
+        --lambda-svo-boundary 1.0 \
         --lambda-svo 0.5 \
         --lambda-voice 0.2 \
         --focal-gamma 0.5 \
