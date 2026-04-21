@@ -36,6 +36,64 @@ private val FINE_LABELS = listOf(
 
 private val COARSE_NONE_IDX = COARSE_LABELS.indexOf("NONE")
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Taxonomie sémantique des labels fine
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Rôle sémantique d'un span détecté dans la taxonomie de l'application :
+ *
+ * - ENTITY           : entité nommée classique (personne, org, lieu nommé, loi…)
+ * - MENTION_ROLE     : mention de rôle ou de groupe (pas une entité nommée, mais un participant typé)
+ * - TRIGGER_INFO     : indice sur la présence d'un événement (nominal ou adjectival) —
+ *                      sert à typer/déclencher l'extraction d'événement, pas une entité en soi
+ * - TRIGGER_ARG      : candidat argument d'un événement (temps, lieu générique, valeur, objet…)
+ */
+enum class LabelKind { ENTITY, MENTION_ROLE, TRIGGER_INFO, TRIGGER_ARG }
+
+/** Rôle sémantique de chaque label fine dans la taxonomie. */
+val LABEL_KIND: Map<String, LabelKind> = mapOf(
+    // ── Entités nommées ───────────────────────────────────────────────────────
+    "hint_person_name"    to LabelKind.ENTITY,
+    "hint_gpe"            to LabelKind.ENTITY,
+    "hint_org_name"       to LabelKind.ENTITY,
+    "hint_event_named"    to LabelKind.ENTITY,
+    "hint_law"            to LabelKind.ENTITY,
+    "hint_fac_name"       to LabelKind.ENTITY,       // toponyme de facility (palais, aéroport…)
+
+    // ── Mentions de rôle / groupe ─────────────────────────────────────────────
+    "hint_person_role"    to LabelKind.MENTION_ROLE,
+    "hint_group_role"     to LabelKind.MENTION_ROLE,
+    "hint_norp"           to LabelKind.MENTION_ROLE, // nationalité/appartenance (peut être adj.)
+
+    // ── Indices de trigger événementiel ──────────────────────────────────────
+    "hint_event_nominal"  to LabelKind.TRIGGER_INFO,
+
+    // ── Candidats arguments de trigger ───────────────────────────────────────
+    "hint_time_date"      to LabelKind.TRIGGER_ARG,
+    "hint_time_clock"     to LabelKind.TRIGGER_ARG,
+    "hint_time_duration"  to LabelKind.TRIGGER_ARG,
+    "hint_loc_generic"    to LabelKind.TRIGGER_ARG,
+    "hint_infra"          to LabelKind.TRIGGER_ARG,
+    "hint_object_generic" to LabelKind.TRIGGER_ARG,
+    "hint_object_name"    to LabelKind.TRIGGER_ARG,
+    "hint_vehicle"        to LabelKind.TRIGGER_ARG,
+    "hint_substance"      to LabelKind.TRIGGER_ARG,
+    "hint_food"           to LabelKind.TRIGGER_ARG,
+    "hint_weapon"         to LabelKind.TRIGGER_ARG,
+    "hint_tool"           to LabelKind.TRIGGER_ARG,
+    "hint_disease"        to LabelKind.TRIGGER_ARG,
+    "hint_concept"        to LabelKind.TRIGGER_ARG,
+    "hint_work_of_art"    to LabelKind.TRIGGER_ARG,
+    "hint_language"       to LabelKind.TRIGGER_ARG,
+    "hint_quantity"       to LabelKind.TRIGGER_ARG,
+    "hint_measure"        to LabelKind.TRIGGER_ARG,
+    "hint_percentage"     to LabelKind.TRIGGER_ARG,
+    "hint_count"          to LabelKind.TRIGGER_ARG,
+    "hint_money"          to LabelKind.TRIGGER_ARG,
+    "hint_rate"           to LabelKind.TRIGGER_ARG,
+)
+
 /** mask[coarseIdx][fineIdx] = true si ce label fine est autorisé pour ce coarse */
 private val COARSE_FINE_MASK: Array<BooleanArray> = run {
     val mapping: Map<Int, List<Int>> = mapOf(
@@ -54,27 +112,38 @@ private val COARSE_FINE_MASK: Array<BooleanArray> = run {
 /** Seuil boundary minimum pour retenir un span comme entité candidate. */
 private const val DEFAULT_TAU_BOUNDARY = 0.70f
 /** Max prob NONE au-dessus duquel on abandonne ce span. */
-private const val DEFAULT_TAU_NONE = 0.50f
+private const val DEFAULT_TAU_NONE = 0.99f
 /** Prob coarse minimum. */
 private const val DEFAULT_TAU_COARSE = 0.45f
-/** Longueur max en tokens par label fine. */
+/** Score minimum global (pBnd × pCoarse × pFine) pour retenir un span. */
+private const val DEFAULT_MIN_SCORE = 0.10f
+/** Longueur max en SOUS-TOKENS par label fine (≈ mots × 2 pour DeBERTa fr). */
 private val MAX_TOK_LEN: Map<String, Int> = mapOf(
-    "hint_person_name"    to 6,
-    "hint_person_role"    to 4,
-    "hint_group_role"     to 4,
-    "hint_gpe"            to 5,
-    "hint_org_name"       to 8,
-    "hint_fac_name"       to 7,
-    "hint_time_date"      to 6,
-    "hint_time_clock"     to 5,
-    "hint_event_nominal"  to 6,
-    "hint_object_generic" to 5,
-    "hint_percentage"     to 4,
-    "hint_money"          to 6,
-    "hint_measure"        to 6,
-    "hint_count"          to 5,
-    "hint_quantity"       to 5,
-    "hint_rate"           to 7,
+    "hint_person_name"    to 12,
+    "hint_person_role"    to 8,
+    "hint_group_role"     to 8,
+    "hint_gpe"            to 10,
+    "hint_org_name"       to 16,
+    "hint_fac_name"       to 14,
+    "hint_time_date"      to 12,
+    "hint_time_clock"     to 10,
+    "hint_event_nominal"  to 12,
+    "hint_event_named"    to 16,
+    "hint_object_generic" to 10,
+    "hint_object_name"    to 10,
+    "hint_percentage"     to 8,
+    "hint_money"          to 12,
+    "hint_measure"        to 12,
+    "hint_count"          to 10,
+    "hint_quantity"       to 10,
+    "hint_rate"           to 14,
+    "hint_vehicle"        to 12,
+    "hint_substance"      to 10,
+    "hint_disease"        to 10,
+    "hint_loc_generic"    to 12,
+    "hint_infra"          to 14,
+    "hint_concept"        to 16,
+    "hint_law"            to 16,
 )
 /** Seuils fine par label. */
 private val FINE_THRESHOLDS: Map<String, Float> = mapOf(
@@ -84,10 +153,10 @@ private val FINE_THRESHOLDS: Map<String, Float> = mapOf(
     "hint_fac_name"       to 0.70f,
     "hint_time_date"      to 0.70f,
     "hint_time_clock"     to 0.70f,
-    "hint_person_role"    to 0.95f,
-    "hint_group_role"     to 0.95f,
-    "hint_event_nominal"  to 0.97f,
-    "hint_object_generic" to 0.97f,
+    "hint_person_role"    to 0.90f,
+    "hint_group_role"     to 0.90f,
+    "hint_event_nominal"  to 0.90f,
+    "hint_object_generic" to 0.90f,
 )
 private const val DEFAULT_FINE_THRESHOLD = 0.80f
 
@@ -138,6 +207,7 @@ class OnnxMultiHeadEntityExtractor(
     private val tauBoundary: Float = DEFAULT_TAU_BOUNDARY,
     private val tauNone: Float = DEFAULT_TAU_NONE,
     private val tauCoarse: Float = DEFAULT_TAU_COARSE,
+    private val minScore: Float = DEFAULT_MIN_SCORE,
     private val useCoreMl: Boolean = false,
     private val intraOpThreads: Int = Runtime.getRuntime().availableProcessors(),
 ) : AutoCloseable, NerExtractor {
@@ -166,23 +236,28 @@ class OnnxMultiHeadEntityExtractor(
             val text: String,
             val ids: LongArray,
             val seqLen: Int,
-            val offsets: List<Pair<Int, Int>?>,  // (charStart, charEnd) par token, null si spécial
+            val wordRanges: List<Pair<Int, Int>>,    // (charStart, charEnd) par MOT via Regex
+            val charOffsets: List<Pair<Int, Int>?>,  // charTokenSpans par token (peut être null)
+            val wordIds: LongArray,
+            val tokens: Array<String>,               // strings de tokens (pour détection ponctuation)
         )
 
-        val encodings = texts.mapIndexed { exIdx, text ->
-            val enc = tokenizer.encode(text)
+        val encodings = texts.mapIndexed { _, text ->
+            val enc    = tokenizer.encode(text)
             val seqLen = minOf(enc.ids.size, maxSeqLen)
-            // DJL retourne les offsets via enc.characterSpans si disponible,
-            // sinon on reconstruit depuis wordIds
-            val offsets = buildTokenOffsets(text, enc, seqLen)
-            EncodedText(text, enc.ids, seqLen, offsets)
+            val wordList   = Regex("\\S+").findAll(text).toList()
+            val wordRanges = wordList.map { it.range.first to (it.range.last + 1) }
+            val charOffsets: List<Pair<Int, Int>?> = enc.charTokenSpans
+                .take(seqLen)
+                .map { span -> span?.let { it.start to it.end } }
+            EncodedText(text, enc.ids, seqLen, wordRanges, charOffsets, enc.wordIds, enc.tokens)
         }
         log.debug("[MH] tokenisation batchSize={} ms={}", texts.size, ms(tTok))
 
         // ── 2. Candidats spans (plats, tous exemples) ──────────────────────
         val tSpan = System.nanoTime()
         val candidates: List<SpanCandidate> = buildCandidates(encodings.mapIndexed { i, enc ->
-            Triple(i, enc.text, enc.offsets)
+            EncodedExample(i, enc.text, enc.wordRanges, enc.charOffsets, enc.wordIds, enc.tokens, enc.seqLen)
         })
         if (candidates.isEmpty()) return texts.map { emptyList() }
         log.debug("[MH] candidats N={} ms={}", candidates.size, ms(tSpan))
@@ -245,12 +320,22 @@ class OnnxMultiHeadEntityExtractor(
         val tDec = System.nanoTime()
         val rawByExample: Array<MutableList<SpanResult>> = Array(texts.size) { mutableListOf() }
 
+//        // DEBUG
+//        System.err.println("[DBG] N candidates = ${candidates.size}")
+//        candidates.take(5).forEachIndexed { k, c ->
+//            System.err.println("[DBG]   cand[$k] ex=${c.exampleIdx} tok(${c.tokStart},${c.tokEnd}) char(${c.charStart},${c.charEnd}) '${c.spanText}'")
+//        }
+
         candidates.forEachIndexed { k, cand ->
             val bLogits = boundaryLogits[k]  // FloatArray(2)
             val cLogits = coarseLogits[k]    // FloatArray(9)
             val fLogits = fineLogits[k]      // FloatArray(32)
 
             val pBoundary = softmaxProb(bLogits, 1)   // prob classe 1 = "entité"
+            // DEBUG: log top boundary scores
+//            if (k < 20 || pBoundary > 0.1f) {
+//                System.err.println("[DBG] span(${cand.tokStart},${cand.tokEnd}) '${cand.spanText}' pBnd=${"%.4f".format(pBoundary)}")
+//            }
             if (pBoundary < tauBoundary) return@forEachIndexed
 
             val cProbs = softmax(cLogits)
@@ -267,6 +352,9 @@ class OnnxMultiHeadEntityExtractor(
             val fineThresh = FINE_THRESHOLDS.getOrDefault(result.fine, DEFAULT_FINE_THRESHOLD)
             if (result.pFine < fineThresh) return@forEachIndexed
 
+            val score = pBoundary * result.pCoarse * result.pFine
+            if (score < minScore) return@forEachIndexed
+
             rawByExample[cand.exampleIdx] += SpanResult(
                 candidate  = cand,
                 pBoundary  = pBoundary,
@@ -274,14 +362,19 @@ class OnnxMultiHeadEntityExtractor(
                 pCoarse    = result.pCoarse,
                 fine       = result.fine,
                 pFine      = result.pFine,
-                score      = pBoundary * result.pCoarse * result.pFine,
+                score      = score,
             )
         }
 
-        val results = rawByExample.mapIndexed { exIdx, spans ->
-            val sorted = spans.sortedByDescending { it.score }
+        val results = rawByExample.map { spans ->
+            // Tri par score × √longueur pour favoriser les spans plus complets à score proche.
+            // Ex : "tremblement de terre" (0.911 × √20 = 4.07) > "tremblement" (0.915 × √11 = 3.03)
+            val sorted = spans.sortedByDescending { sr ->
+                sr.score * Math.sqrt((sr.candidate.charEnd - sr.candidate.charStart).toDouble())
+            }
             val filtered = nmsSpans(sorted)
-            filtered.map { toEntity(it) }
+            // Ré-trier par score pour l'affichage
+            filtered.sortedByDescending { it.score }.map { toEntity(it) }
         }
         log.debug("[MH] décodage ms={}", ms(tDec))
         log.debug("[MH] total batchSize={} maxLen={} N={} ms={}", batchSize, maxLen, N, ms(t0))
@@ -292,52 +385,111 @@ class OnnxMultiHeadEntityExtractor(
     // Helpers : tokenisation & spans
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun buildTokenOffsets(
-        text: String,
-        enc: ai.djl.huggingface.tokenizers.Encoding,
-        seqLen: Int,
-    ): List<Pair<Int, Int>?> {
-        // DJL expose wordIds ; on recalcule les charSpans depuis les wordIds + positions des mots
-        val words     = Regex("\\S+").findAll(text).toList()
-        val wordRanges = words.map { it.range.first to (it.range.last + 1) }
-        val wordIds    = enc.wordIds
+    private data class EncodedExample(
+        val exIdx: Int,
+        val text: String,
+        val wordRanges: List<Pair<Int, Int>>,    // (charStart, charEnd) par mot via Regex
+        val charOffsets: List<Pair<Int, Int>?>,  // charTokenSpans par token (peut être null)
+        val wordIds: LongArray,
+        val tokens: Array<String>,               // strings de tokens pour détection ponctuation
+        val seqLen: Int,
+    )
 
-        val offsets = mutableListOf<Pair<Int, Int>?>()
-        var prevWid = -1L
-        for (i in 0 until seqLen) {
-            val wid = wordIds[i]
-            if (wid < 0 || wid >= wordRanges.size) {
-                offsets += null
-            } else if (wid != prevWid) {
-                offsets += wordRanges[wid.toInt()]
-            } else {
-                offsets += null   // sous-token : pas le premier → on ignore
-            }
-            prevWid = wid
-        }
-        return offsets
-    }
-
-    private fun buildCandidates(
-        examples: List<Triple<Int, String, List<Pair<Int, Int>?>>>,
-    ): List<SpanCandidate> {
+    /**
+     * Construit les spans candidats en énumérant toutes les fenêtres de mots [1..maxSpanLen].
+     *
+     * - wordRanges (Regex "\\S+") → bornes char fiables pour TOUS les mots
+     * - wordIds → groupement tokens→mots (inclus, dernier sous-token correct)
+     * - charOffsets (charTokenSpans) → trim fin de ponctuation sur tokEnd (best-effort)
+     * - tokens → fallback pour détection ponctuation si charOffsets est null
+     *
+     * tokStart/tokEnd INCLUSIFS, alignés sur build_multitask_dataset.py Python.
+     */
+    private fun buildCandidates(examples: List<EncodedExample>): List<SpanCandidate> {
         val result = mutableListOf<SpanCandidate>()
-        for ((exIdx, text, offsets) in examples) {
-            val tokenPositions = offsets.indices.filter { offsets[it] != null }
-            for (si in tokenPositions.indices) {
-                val tokStart = tokenPositions[si]
-                for (ei in si until min(si + maxSpanLen, tokenPositions.size)) {
-                    val tokEnd  = tokenPositions[ei]
-                    val cStart  = offsets[tokStart]!!.first
-                    val cEnd    = offsets[tokEnd]!!.second
-                    val spanTxt = text.substring(cStart, cEnd).trim()
+
+        for ((exIdx, text, wordRanges, charOffsets, wordIds, tokens, seqLen) in examples) {
+
+            // ── Regrouper les tokens en mots via wordIds ──────────────────────
+            data class Word(
+                val firstTok: Int, val lastTok: Int,
+                val charStart: Int, val charEnd: Int,
+            )
+
+            val words = mutableListOf<Word>()
+            var prevWid  = Long.MIN_VALUE
+            var wFirstTok = -1
+            var wLastTok  = -1
+
+            fun flushWord() {
+                if (wFirstTok < 0) return
+                val wid = wordIds[wFirstTok]
+                if (wid < 0 || wid >= wordRanges.size) { wFirstTok = -1; return }
+                val (cs, ce) = wordRanges[wid.toInt()]
+                // Détecter les contractions françaises (l', d', j', etc.) :
+                // si le mot commence par une courte particule suivie d'une apostrophe,
+                // on ajoute aussi une vue "sans la particule" pour que "Assemblée"
+                // soit un point de départ valide.
+                val wordText = text.substring(cs, ce)
+                val apoIdx   = wordText.indexOfFirst { it == '\'' || it == '\u2019' }
+                if (apoIdx in 1..3 && apoIdx < wordText.length - 1) {
+                    // Vue tronquée : commence après l'apostrophe
+                    val truncStart = cs + apoIdx + 1
+                    // Trouver le premier sous-token dont l'offset char commence après l'apostrophe
+                    val truncFirstTok = (wFirstTok..wLastTok).firstOrNull { i ->
+                        val off = charOffsets.getOrNull(i)
+                        off != null && off.first >= truncStart
+                    } ?: (wFirstTok + 1).coerceAtMost(wLastTok)
+                    words += Word(truncFirstTok, wLastTok, truncStart, ce)
+                }
+                words += Word(wFirstTok, wLastTok, cs, ce)
+                wFirstTok = -1
+            }
+
+            for (i in 0 until seqLen) {
+                val wid = wordIds[i]
+                if (wid < 0) { flushWord(); prevWid = wid; continue }  // token spécial
+                if (wid != prevWid) { flushWord(); wFirstTok = i }
+                wLastTok = i
+                prevWid  = wid
+            }
+            flushWord()
+
+            // ── Énumérer les fenêtres de mots ────────────────────────────────
+            for (si in words.indices) {
+                val tokStart  = words[si].firstTok
+                val charStart = words[si].charStart
+
+                for (ei in si until min(si + maxSpanLen, words.size)) {
+                    var tokEnd  = words[ei].lastTok
+                    var charEnd = words[ei].charEnd
+                    var spanTxt = text.substring(charStart, charEnd).trim()
+
+                    // Trimmer la ponctuation finale ET reculer tokEnd en conséquence
+                    while (spanTxt.isNotEmpty() && !spanTxt.last().isLetterOrDigit()) {
+                        spanTxt = spanTxt.dropLast(1).trimEnd()
+                        val newCharEnd = charStart + spanTxt.length
+                        // Reculer tokEnd si le token courant est ponctuation-only
+                        while (tokEnd > tokStart) {
+                            val tOff = charOffsets.getOrNull(tokEnd)
+                            if (tOff != null) {
+                                if (tOff.first >= newCharEnd) tokEnd-- else break
+                            } else {
+                                // fallback : inspecter la string du token
+                                val tok = tokens.getOrNull(tokEnd)?.trimStart('▁')?.trim() ?: break
+                                if (tok.isNotEmpty() && tok.all { !it.isLetterOrDigit() }) tokEnd--
+                                else break
+                            }
+                        }
+                        charEnd = newCharEnd
+                    }
+
                     if (spanTxt.length < 2) continue
                     if (spanTxt.all { !it.isLetterOrDigit() }) continue
-                    // frontières de mots
-                    if (cStart > 0 && text[cStart - 1].isLetterOrDigit()) continue
-                    if (cEnd < text.length && text[cEnd].isLetterOrDigit()) continue
+                    if (charStart > 0 && text[charStart - 1].isLetterOrDigit()) continue
+                    if (charEnd < text.length && text[charEnd].isLetterOrDigit()) continue
 
-                    result += SpanCandidate(exIdx, tokStart, tokEnd, cStart, cEnd, spanTxt)
+                    result += SpanCandidate(exIdx, tokStart, tokEnd, charStart, charEnd, spanTxt)
                 }
             }
         }
@@ -386,28 +538,25 @@ class OnnxMultiHeadEntityExtractor(
     // NMS : suppression des overlaps (par IoU)
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun nmsSpans(spans: List<SpanResult>, iouThreshold: Float = 0.6f): List<SpanResult> {
+    private fun nmsSpans(spans: List<SpanResult>, iouThreshold: Float = 0.5f): List<SpanResult> {
         val kept = mutableListOf<SpanResult>()
         for (s in spans) {
-            var discard = false
-            for (k in kept) {
-                if (iou(s, k) < iouThreshold) continue
-                // Même fine → garder le meilleur score
-                discard = (s.score <= k.score)
-                if (discard) break
-            }
-            if (!discard) kept += s
+            if (kept.none { k -> iouOrContainment(s, k) >= iouThreshold }) kept += s
         }
         return kept
     }
 
-    private fun iou(a: SpanResult, b: SpanResult): Float {
+    /** IoU standard OU ratio de containment (le plus grand des deux). */
+    private fun iouOrContainment(a: SpanResult, b: SpanResult): Float {
         val inter = maxOf(0, minOf(a.candidate.charEnd, b.candidate.charEnd) -
                 maxOf(a.candidate.charStart, b.candidate.charStart))
         if (inter == 0) return 0f
         val lenA  = a.candidate.charEnd - a.candidate.charStart
         val lenB  = b.candidate.charEnd - b.candidate.charStart
-        return inter.toFloat() / (lenA + lenB - inter)
+        val iou   = inter.toFloat() / (lenA + lenB - inter)
+        // containment : quel pourcentage du plus petit span est couvert ?
+        val containment = inter.toFloat() / minOf(lenA, lenB)
+        return maxOf(iou, containment)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -420,6 +569,7 @@ class OnnxMultiHeadEntityExtractor(
         span  = Span(r.candidate.charStart, r.candidate.charEnd, emptyList()),
         metadata = mapOf(
             "coarse"       to r.coarse,
+            "kind"         to (LABEL_KIND[r.fine] ?: LabelKind.TRIGGER_ARG),
             "pBoundary"    to r.pBoundary,
             "pCoarse"      to r.pCoarse,
             "pFine"        to r.pFine,
