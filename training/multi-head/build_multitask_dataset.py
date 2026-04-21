@@ -13,6 +13,8 @@ from labels import (
     FINE2ID, FINE_NONE_ID,
     fine_label_to_coarse_id,
     COARSE_NONE_ID,
+    SVO2ID, SVO_NONE_ID, ALL_SVO_LABELS,
+    VOICE2ID, VOICE_NONE_ID,
 )
 
 def load_jsonl(path: str):
@@ -80,31 +82,63 @@ def build_gold_candidates(row, tokenizer):
 
     for sp in row.get("spans", []):
         label = sp["label"]
-        if label not in FINE2ID:
-            raise ValueError(f"Label inconnu: {label}")
-
         start = sp["start"]
-        end = sp["end"]
+        end   = sp["end"]
 
         tok_span = char_span_to_token_span(offsets, start, end)
         if tok_span is None:
             continue
-
         tok_start, tok_end = tok_span
-        fine_id = FINE2ID[label]
+
+        # ── Spans SVO/pron (silver Stanza) ──────────────────────────────────
+        if label in ALL_SVO_LABELS:
+            svo_id   = SVO2ID[label]
+            # voice : récupérée depuis les métadonnées du span si présente
+            voice_str = sp.get("voice")
+            voice_id  = VOICE2ID.get(voice_str, VOICE_NONE_ID) if voice_str else VOICE_NONE_ID
+            # Pour la tête voice, on ne la supervise que sur les svo_verb
+            if label != "svo_verb":
+                voice_id = VOICE_NONE_ID
+
+            cand = {
+                "char_start":     start,
+                "char_end":       end,
+                "tok_start":      tok_start,
+                "tok_end":        tok_end,
+                "boundary_label": 1,           # c'est bien un span réel
+                "coarse_label_id": COARSE_NONE_ID,  # pas NER
+                "fine_label_id":   FINE_NONE_ID,    # pas NER
+                "svo_label_id":    svo_id,
+                "voice_label_id":  voice_id,
+                "neg_type":        "svo_gold",
+                "sample_weight":   1.0,
+                "text":            sp.get("text", text[start:end]),
+            }
+            gold_candidates.append(cand)
+            gold_token_spans.append((tok_start, tok_end))
+            gold_char_spans.add((start, end))
+            continue
+
+        # ── Spans NER classiques ─────────────────────────────────────────────
+        if label not in FINE2ID:
+            raise ValueError(f"Label inconnu: {label}")
+
+        fine_id   = FINE2ID[label]
         coarse_id = fine_label_to_coarse_id(label)
 
         cand = {
-            "char_start": start,
-            "char_end": end,
-            "tok_start": tok_start,
-            "tok_end": tok_end,
+            "char_start":     start,
+            "char_end":       end,
+            "tok_start":      tok_start,
+            "tok_end":        tok_end,
             "boundary_label": 1,
             "coarse_label_id": coarse_id,
-            "fine_label_id": fine_id,
-            "neg_type": "gold",
-            "sample_weight": 1.0,
-            "text": sp.get("text", text[start:end]),
+            "fine_label_id":   fine_id,
+            "svo_label_id":    SVO_NONE_ID,    # pas SVO
+            "voice_label_id":  VOICE_NONE_ID,  # pas SVO
+            "neg_type":        "gold",
+            "sample_weight":   1.0,
+            "text":            sp.get("text", text[start:end]),
         }
         gold_candidates.append(cand)
         gold_token_spans.append((tok_start, tok_end))
@@ -161,6 +195,8 @@ def generate_hard_negatives(offsets, gold_candidates, gold_char_spans, max_per_g
                 "boundary_label": 0,
                 "coarse_label_id": COARSE_NONE_ID,
                 "fine_label_id": FINE_NONE_ID,
+                "svo_label_id": SVO_NONE_ID,
+                "voice_label_id": VOICE_NONE_ID,
                 "neg_type": "hard_neg",
                 "sample_weight": 1.0,
                 "text": None,
@@ -215,6 +251,8 @@ def generate_soft_negatives(offsets, gold_token_spans, gold_char_spans, num_soft
             "boundary_label": 0,
             "coarse_label_id": COARSE_NONE_ID,
             "fine_label_id": FINE_NONE_ID,
+            "svo_label_id": SVO_NONE_ID,
+            "voice_label_id": VOICE_NONE_ID,
             "neg_type": "soft_neg",
             "sample_weight": 0.35,   # moins fort car plus bruité
             "text": None,
@@ -277,6 +315,8 @@ def generate_englobant_negatives(offsets, gold_candidates, gold_char_spans, max_
                 "boundary_label": 0,
                 "coarse_label_id": COARSE_NONE_ID,
                 "fine_label_id": FINE_NONE_ID,
+                "svo_label_id": SVO_NONE_ID,
+                "voice_label_id": VOICE_NONE_ID,
                 "neg_type": "englobant_neg",
                 "sample_weight": 1.5,  # poids élevé car ce sont les erreurs les plus fréquentes
                 "text": None,
@@ -326,6 +366,8 @@ def generate_multi_entity_negatives(gold_candidates, gold_char_spans, max_negati
             "boundary_label": 0,
             "coarse_label_id": COARSE_NONE_ID,
             "fine_label_id": FINE_NONE_ID,
+            "svo_label_id": SVO_NONE_ID,
+            "voice_label_id": VOICE_NONE_ID,
             "neg_type": "multi_entity_neg",
             "sample_weight": 2.0,  # poids très élevé — erreur critique
             "text": None,

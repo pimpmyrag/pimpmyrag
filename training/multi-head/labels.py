@@ -152,3 +152,36 @@ def build_coarse_to_fine_mask() -> torch.Tensor:
         for f in fines:
             mask[c, f] = True
     return mask
+
+
+# ─────────────────────────────────────────────────────────────
+# SVO LABELS  (tête syntaxique / silver Stanza)
+# ─────────────────────────────────────────────────────────────
+
+SVO_LABELS = [
+    "svo_verb",      # 0  verbe principal (+ aux)
+    "svo_subject",   # 1  sujet grammatical (NP)
+    "svo_object",    # 2  objet direct
+    "svo_iobj",      # 3  objet indirect / oblique
+    "pron_subj",     # 4  pronom sujet
+    "pron_obj",      # 5  pronom objet
+]
+
+SVO2ID   = {x: i for i, x in enumerate(SVO_LABELS)}
+ID2SVO   = {i: x for x, i in SVO2ID.items()}
+NUM_SVO  = len(SVO_LABELS)
+# Sentinel pour les spans sans rôle SVO (NER purs, négatifs)
+SVO_NONE_ID = NUM_SVO   # = 6, hors range [0..5]
+
+# ─────────────────────────────────────────────────────────────
+# VOICE LABELS  (pour la tête voice, prédite sur les svo_verb)
+# ─────────────────────────────────────────────────────────────
+
+VOICE_LABELS = ["ACTIVE", "PASSIVE"]
+VOICE2ID     = {x: i for i, x in enumerate(VOICE_LABELS)}
+ID2VOICE     = {i: x for x, i in VOICE2ID.items()}
+NUM_VOICE    = len(VOICE_LABELS)
+VOICE_NONE_ID = NUM_VOICE   # sentinel
+
+# Ensemble des labels silver SVO (pour le routage dans build_multitask_dataset)
+ALL_SVO_LABELS: set[str] = set(SVO_LABELS)
