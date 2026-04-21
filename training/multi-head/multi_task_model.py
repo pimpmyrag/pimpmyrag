@@ -169,10 +169,20 @@ class SpanMultiTaskModel(nn.Module):
             loss_b_per_span = loss_b_per_span * (1.0 - p_t) ** focal_gamma
         loss_b = (loss_b_per_span * sample_weights).mean()
 
-        # ── 2) Coarse ──────────────────────────────────────────────
-        loss_c_per_span = F.cross_entropy(c_logits, coarse_labels,
-                                           weight=coarse_class_weights, reduction="none")
-        loss_c = (loss_c_per_span * sample_weights).mean()
+        # ── 2) Coarse (positive-only, comme fine) ─────────────────
+        # On n'entraîne le coarse que sur les spans boundary=1
+        # pour éviter que les FP boundary polluent la précision coarse
+        pos_mask_coarse = (boundary_labels == 1)
+        if pos_mask_coarse.any():
+            loss_c_per_span = F.cross_entropy(
+                c_logits[pos_mask_coarse],
+                coarse_labels[pos_mask_coarse],
+                weight=coarse_class_weights,
+                reduction="none"
+            )
+            loss_c = (loss_c_per_span * sample_weights[pos_mask_coarse]).mean()
+        else:
+            loss_c = torch.tensor(0.0, device=device)
 
         # ── 3) Fine (spans NER positifs avec un vrai label fine) ──────
         pos_mask = (boundary_labels == 1) & (fine_labels < f_logits.size(-1))
