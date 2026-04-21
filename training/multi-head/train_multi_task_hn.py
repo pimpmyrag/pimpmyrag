@@ -28,7 +28,8 @@ from sklearn.metrics import f1_score, classification_report
 
 from multitask_dataset import MultiTaskSpanDataset, make_collate_fn
 from multitask_model import SpanMultiTaskModel
-from labels import COARSE_LABELS, FINE_LABELS, COARSE_NONE_ID
+from labels import COARSE_LABELS, FINE_LABELS, COARSE_NONE_ID, SVO_LABELS, VOICE_LABELS
+from labels import NUM_SVO, NUM_VOICE
 
 
 # ─── Réutilisé depuis train_multi_task.py ──────────────────────
@@ -174,6 +175,8 @@ def run_epoch(
     lambda_boundary=1.0,
     lambda_coarse=1.0,
     lambda_fine=1.2,
+    lambda_svo=1.0,
+    lambda_voice=0.5,
     accum_steps=1,
     log_every=50,
     # Hard negative params
@@ -192,6 +195,8 @@ def run_epoch(
     all_b_true, all_b_pred = [], []
     all_c_true, all_c_pred = [], []
     all_f_true_pos, all_f_pred_pos = [], []
+    all_svo_true, all_svo_pred = [], []
+    all_voice_true, all_voice_pred = [], []
     hn_stats_accum = Counter()
 
     coarse_fine_mask = model.coarse_fine_mask.to(device)
@@ -215,6 +220,8 @@ def run_epoch(
         boundary_labels = batch["boundary_labels"].to(device)
         coarse_labels = batch["coarse_labels"].to(device)
         fine_labels = batch["fine_labels"].to(device)
+        svo_labels_batch = batch["svo_labels"].to(device)
+        voice_labels_batch = batch["voice_labels"].to(device)
         sample_weights = batch["sample_weights"].to(device)
 
         with torch.set_grad_enabled(train):
@@ -230,11 +237,15 @@ def run_epoch(
                 boundary_labels_loss = boundary_labels[si]
                 coarse_labels_loss = coarse_labels[si]
                 fine_labels_loss = fine_labels[si]
+                svo_labels_loss = svo_labels_batch[si]
+                voice_labels_loss = voice_labels_batch[si]
                 sample_weights_loss = sample_weights[si]
             else:
                 boundary_labels_loss = boundary_labels
                 coarse_labels_loss = coarse_labels
                 fine_labels_loss = fine_labels
+                svo_labels_loss = svo_labels_batch
+                voice_labels_loss = voice_labels_batch
                 sample_weights_loss = sample_weights
 
             # ── Hard Negative Boost ──
@@ -260,12 +271,16 @@ def run_epoch(
                 boundary_labels=boundary_labels_loss,
                 coarse_labels=coarse_labels_loss,
                 fine_labels=fine_labels_loss,
+                svo_labels=svo_labels_loss,
+                voice_labels=voice_labels_loss,
                 sample_weights=sample_weights_loss,
                 boundary_class_weights=boundary_class_weights,
                 coarse_class_weights=coarse_class_weights,
                 lambda_boundary=lambda_boundary,
                 lambda_coarse=lambda_coarse,
                 lambda_fine=lambda_fine,
+                lambda_svo=lambda_svo,
+                lambda_voice=lambda_voice,
             )
 
             loss = loss_dict["loss"] / accum_steps
@@ -294,16 +309,22 @@ def run_epoch(
         b_pred = outputs["boundary_logits"].argmax(dim=-1).detach().cpu().tolist()
         c_pred = outputs["coarse_logits"].argmax(dim=-1).detach().cpu().tolist()
         f_pred = masked_fine_predictions(outputs["fine_logits"], c_pred, coarse_fine_mask)
+        svo_pred = outputs["svo_logits"].argmax(dim=-1).detach().cpu().tolist()
+        voice_pred = outputs["voice_logits"].argmax(dim=-1).detach().cpu().tolist()
 
         if span_indices is not None:
             si_cpu = span_indices.detach().cpu().to(dtype=torch.long)
             b_true = boundary_labels.detach().cpu()[si_cpu].tolist()
             c_true = coarse_labels.detach().cpu()[si_cpu].tolist()
             f_true = fine_labels.detach().cpu()[si_cpu].tolist()
+            svo_true = svo_labels_batch.detach().cpu()[si_cpu].tolist()
+            voice_true = voice_labels_batch.detach().cpu()[si_cpu].tolist()
         else:
             b_true = boundary_labels.detach().cpu().tolist()
             c_true = coarse_labels.detach().cpu().tolist()
             f_true = fine_labels.detach().cpu().tolist()
+            svo_true = svo_labels_batch.detach().cpu().tolist()
+            voice_true = voice_labels_batch.detach().cpu().tolist()
 
         all_b_true.extend(b_true)
         all_b_pred.extend(b_pred)
@@ -315,6 +336,15 @@ def run_epoch(
                 all_f_true_pos.append(ft)
                 all_f_pred_pos.append(fp)
 
+        for st, sp_pred in zip(svo_true, svo_pred):
+            if st < NUM_SVO:  # span avec un vrai rôle SVO
+                all_svo_true.append(st)
+                all_svo_pred.append(sp_pred)
+        for vt, vp in zip(voice_true, voice_pred):
+            if vt < NUM_VOICE:  # svo_verb uniquement
+                all_voice_true.append(vt)
+                all_voice_pred.append(vp)
+
     if train and (len(loader) % accum_steps != 0):
         optimizer.step()
         optimizer.zero_grad()
@@ -324,9 +354,13 @@ def run_epoch(
         "boundary_f1": f1_score(all_b_true, all_b_pred, average="macro", zero_division=0) if all_b_true else 0.0,
         "coarse_macro_f1": f1_score(all_c_true, all_c_pred, average="macro", labels=list(range(len(COARSE_LABELS))), zero_division=0) if all_c_true else 0.0,
         "fine_macro_f1": f1_score(all_f_true_pos, all_f_pred_pos, average="macro", labels=list(range(len(FINE_LABELS))), zero_division=0) if all_f_true_pos else 0.0,
+        "svo_macro_f1": f1_score(all_svo_true, all_svo_pred, average="macro", labels=list(range(len(SVO_LABELS))), zero_division=0) if all_svo_true else 0.0,
+        "voice_macro_f1": f1_score(all_voice_true, all_voice_pred, average="macro", labels=list(range(len(VOICE_LABELS))), zero_division=0) if all_voice_true else 0.0,
         "boundary_report": classification_report(all_b_true, all_b_pred, digits=3, zero_division=0) if all_b_true else "N/A",
         "coarse_report": classification_report(all_c_true, all_c_pred, labels=list(range(len(COARSE_LABELS))), target_names=COARSE_LABELS, digits=3, zero_division=0) if all_c_true else "N/A",
         "fine_report": classification_report(all_f_true_pos, all_f_pred_pos, labels=list(range(len(FINE_LABELS))), target_names=FINE_LABELS, digits=3, zero_division=0) if all_f_true_pos else "N/A",
+        "svo_report": classification_report(all_svo_true, all_svo_pred, labels=list(range(len(SVO_LABELS))), target_names=SVO_LABELS, digits=3, zero_division=0) if all_svo_true else "N/A",
+        "voice_report": classification_report(all_voice_true, all_voice_pred, labels=list(range(len(VOICE_LABELS))), target_names=VOICE_LABELS, digits=3, zero_division=0) if all_voice_true else "N/A",
     }
 
     if train and hn_enabled:
@@ -358,6 +392,8 @@ def main():
     parser.add_argument("--lambda-boundary", type=float, default=1.0)
     parser.add_argument("--lambda-coarse", type=float, default=1.0)
     parser.add_argument("--lambda-fine", type=float, default=1.2)
+    parser.add_argument("--lambda-svo", type=float, default=1.0)
+    parser.add_argument("--lambda-voice", type=float, default=0.5)
 
     parser.add_argument("--device", choices=["cpu", "mps", "cuda"], default=None)
     parser.add_argument("--class-weights", choices=["none", "auto"], default="auto")
@@ -467,6 +503,7 @@ def main():
             train_loader, model, optimizer, device, train=True,
             boundary_class_weights=boundary_w, coarse_class_weights=coarse_w,
             lambda_boundary=args.lambda_boundary, lambda_coarse=args.lambda_coarse, lambda_fine=args.lambda_fine,
+            lambda_svo=args.lambda_svo, lambda_voice=args.lambda_voice,
             accum_steps=args.accum_steps, log_every=args.log_every,
             hn_enabled=args.hn_enabled, hn_conf_threshold=args.hn_conf_threshold,
             hn_boost_factor=args.hn_boost_factor, hn_ramp=hn_ramp,
@@ -476,6 +513,7 @@ def main():
             val_loader, model, optimizer, device, train=False,
             boundary_class_weights=boundary_w, coarse_class_weights=coarse_w,
             lambda_boundary=args.lambda_boundary, lambda_coarse=args.lambda_coarse, lambda_fine=args.lambda_fine,
+            lambda_svo=args.lambda_svo, lambda_voice=args.lambda_voice,
             accum_steps=args.accum_steps, log_every=args.log_every,
         )
 
@@ -486,7 +524,9 @@ def main():
             f"Train loss={train_metrics['loss']:.4f} | "
             f"B_F1={train_metrics['boundary_f1']:.4f} | "
             f"C_F1={train_metrics['coarse_macro_f1']:.4f} | "
-            f"F_F1={train_metrics['fine_macro_f1']:.4f}"
+            f"F_F1={train_metrics['fine_macro_f1']:.4f} | "
+            f"SVO_F1={train_metrics['svo_macro_f1']:.4f} | "
+            f"Voice_F1={train_metrics['voice_macro_f1']:.4f}"
         )
         if args.hn_enabled:
             print(
@@ -500,6 +540,8 @@ def main():
             f"B_F1={val_metrics['boundary_f1']:.4f} | "
             f"C_F1={val_metrics['coarse_macro_f1']:.4f} | "
             f"F_F1={val_metrics['fine_macro_f1']:.4f} | "
+            f"SVO_F1={val_metrics['svo_macro_f1']:.4f} | "
+            f"Voice_F1={val_metrics['voice_macro_f1']:.4f} | "
             f"Score={score:.4f}"
         )
 
@@ -509,6 +551,10 @@ def main():
         print(val_metrics["coarse_report"])
         print("[VAL fine]")
         print(val_metrics["fine_report"])
+        print("[VAL svo]")
+        print(val_metrics["svo_report"])
+        print("[VAL voice]")
+        print(val_metrics["voice_report"])
 
         torch.save({
             "epoch": epoch,
@@ -537,6 +583,7 @@ def main():
         test_loader, model, optimizer, device, train=False,
         boundary_class_weights=boundary_w, coarse_class_weights=coarse_w,
         lambda_boundary=args.lambda_boundary, lambda_coarse=args.lambda_coarse, lambda_fine=args.lambda_fine,
+        lambda_svo=args.lambda_svo, lambda_voice=args.lambda_voice,
         accum_steps=args.accum_steps, log_every=args.log_every,
     )
 
@@ -545,12 +592,18 @@ def main():
     print(f"Boundary F1={test_metrics['boundary_f1']:.4f}")
     print(f"Coarse   F1={test_metrics['coarse_macro_f1']:.4f}")
     print(f"Fine     F1={test_metrics['fine_macro_f1']:.4f}")
+    print(f"SVO      F1={test_metrics['svo_macro_f1']:.4f}")
+    print(f"Voice    F1={test_metrics['voice_macro_f1']:.4f}")
     print("\n[TEST boundary]")
     print(test_metrics["boundary_report"])
     print("[TEST coarse]")
     print(test_metrics["coarse_report"])
     print("[TEST fine]")
     print(test_metrics["fine_report"])
+    print("[TEST svo]")
+    print(test_metrics["svo_report"])
+    print("[TEST voice]")
+    print(test_metrics["voice_report"])
 
 
 if __name__ == "__main__":

@@ -7,6 +7,8 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset
 
+from labels import SVO_NONE_ID, VOICE_NONE_ID
+
 
 class MultiTaskSpanDataset(Dataset):
     def __init__(self, path: str, tokenizer, max_length: int = 512):
@@ -74,6 +76,8 @@ class MultiTaskSpanDataset(Dataset):
                 "boundary_label": c["boundary_label"],
                 "coarse_label_id": c["coarse_label_id"],
                 "fine_label_id": c["fine_label_id"],
+                "svo_label_id": c.get("svo_label_id", SVO_NONE_ID),
+                "voice_label_id": c.get("voice_label_id", VOICE_NONE_ID),
                 "sample_weight": c.get("sample_weight", 1.0),
                 "neg_type": c.get("neg_type", "unknown"),
             })
@@ -100,6 +104,8 @@ def make_collate_fn(tokenizer):
         boundary_labels = []
         coarse_labels = []
         fine_labels = []
+        svo_labels = []
+        voice_labels = []
         sample_weights = []
 
         ids = []
@@ -135,6 +141,8 @@ def make_collate_fn(tokenizer):
                 boundary_labels.append(c["boundary_label"])
                 coarse_labels.append(c["coarse_label_id"])
                 fine_labels.append(c["fine_label_id"])
+                svo_labels.append(c["svo_label_id"])
+                voice_labels.append(c["voice_label_id"])
                 sample_weights.append(c["sample_weight"])
 
             spans.append(sample_spans)
@@ -147,6 +155,8 @@ def make_collate_fn(tokenizer):
             "boundary_labels": torch.tensor(boundary_labels, dtype=torch.long),
             "coarse_labels": torch.tensor(coarse_labels, dtype=torch.long),
             "fine_labels": torch.tensor(fine_labels, dtype=torch.long),
+            "svo_labels": torch.tensor(svo_labels, dtype=torch.long),
+            "voice_labels": torch.tensor(voice_labels, dtype=torch.long),
             "sample_weights": torch.tensor(sample_weights, dtype=torch.float32),
             "invalid_candidate_count": invalid_candidate_count,
         }
