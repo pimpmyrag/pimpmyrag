@@ -88,8 +88,9 @@ class Tok:
         self.upos       = word.upos or "X"
         self.deprel     = word.deprel or "dep"
         self.head       = word.head
-        self.char_start = sent_offset + word.start_char
-        self.char_end   = sent_offset + word.end_char
+        # start_char/end_char peuvent être None pour les tokens MWT décomposés
+        self.char_start = sent_offset + word.start_char if word.start_char is not None else -1
+        self.char_end   = sent_offset + word.end_char   if word.end_char   is not None else -1
         self.feats      = word.feats or ""
 
 
@@ -138,7 +139,7 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str) -> list[dict]:
       {"start", "end", "text", "label", "voice", "head_lemma", "head_upos",
        "pron_person"?, "pron_number"?, "pron_gender"?}
     """
-    tokens = [Tok(w, sent_offset) for w in sentence.words]
+    tokens = [Tok(w, sent_offset) for w in sentence.words if w.start_char is not None]
     if not tokens:
         return []
 
