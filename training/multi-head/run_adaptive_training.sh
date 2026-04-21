@@ -6,22 +6,48 @@
 set -e
 cd "$(dirname "$0")"
 export PYTHONPATH="$(pwd):$PYTHONPATH"
-source venv/bin/activate
+
+# ── Environnement Python ──────────────────────────────────
+if [ -f venv/bin/activate ]; then
+    echo "🐍 Activation venv local"
+    source venv/bin/activate
+else
+    echo "🐍 Pas de venv détecté — vérification des dépendances"
+    if [ -f requirements.txt ]; then
+        pip install -q -r requirements.txt
+    fi
+fi
+
+# ── Détection device & batch size ────────────────────────
+if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
+    DEVICE="cuda"
+    BS=64
+    ACCUM=1
+    echo "🚀 Device: CUDA (BS=$BS)"
+elif python3 -c "import torch; assert torch.backends.mps.is_available()" 2>/dev/null; then
+    DEVICE="mps"
+    BS=24
+    ACCUM=2
+    echo "🍎 Device: MPS (BS=$BS)"
+else
+    DEVICE="cpu"
+    BS=16
+    ACCUM=2
+    echo "💻 Device: CPU (BS=$BS)"
+fi
 
 MODEL="microsoft/deberta-v3-base"
 DATA="data"
-BS=32
-ACCUM=2
-MAX_EPOCHS=15
-PATIENCE=2        # nb epochs sans amélioration avant d'augmenter difficulté
+MAX_EPOCHS=30
+PATIENCE=3        # nb epochs sans amélioration avant d'augmenter difficulté
 MIN_DELTA=0.0005  # amélioration minimale considérée comme progrès
 
-# Niveaux de difficulté progressifs
-ENGLOBANT_RATIOS=(0.0 0.4 0.7 1.0)
-HARD_NEG_RATIOS=(0.3 0.7 1.0 1.0)
-ENGLOBANT_WEIGHTS=(1.0 1.0 1.2 1.5)
-FOCAL_GAMMAS=(0.0 0.5 1.0 1.5)
-LEVEL_NAMES=("easy" "medium" "hard" "full")
+# Niveaux de difficulté progressifs (6 niveaux au lieu de 4)
+ENGLOBANT_RATIOS=(0.0  0.2  0.4  0.6  0.8  1.0)
+HARD_NEG_RATIOS=( 0.2  0.4  0.6  0.8  1.0  1.0)
+ENGLOBANT_WEIGHTS=(1.0 1.0  1.0  1.1  1.3  1.5)
+FOCAL_GAMMAS=(    0.0  0.0  0.5  0.5  1.0  1.5)
+LEVEL_NAMES=("easy" "easy+" "medium" "medium+" "hard" "full")
 
 current_level=0
 stagnation_count=0
@@ -41,7 +67,7 @@ rebuild_dataset() {
     local name=${LEVEL_NAMES[$level]}
     echo "🔧 Build dataset niveau $level ($name) — englobant_ratio=$ratio hard_neg_ratio=$hard weight=$weight" | tee -a $log_file
     python3 data/build_multitask_dataset.py \
-        --input $DATA/train.jsonl \
+        --input $DATA/train_v2.jsonl \
         --output $DATA/train.adaptive.multitask.jsonl \
         --model-name $MODEL \
         --englobant-ratio $ratio \
@@ -52,18 +78,24 @@ rebuild_dataset() {
 # Build val/test une seule fois (full hard)
 echo "📦 Build val/test datasets..." | tee -a $log_file
 python3 data/build_multitask_dataset.py \
-    --input $DATA/val.jsonl \
+    --input $DATA/val_v2.jsonl \
     --output $DATA/val.multitask.jsonl \
     --model-name $MODEL \
     --englobant-ratio 1.0 \
     --hard-neg-ratio 1.0
 
 python3 data/build_multitask_dataset.py \
-    --input $DATA/test.jsonl \
+    --input $DATA/test_v2.jsonl \
     --output $DATA/test.multitask.jsonl \
     --model-name $MODEL \
     --englobant-ratio 1.0 \
     --hard-neg-ratio 1.0
+
+# Supprimer les vieux checkpoints pour repartir proprement
+if [ -f checkpoint_best_multitask.pt ] || [ -f checkpoint_last_multitask.pt ]; then
+    echo "🗑️  Suppression des anciens checkpoints" | tee -a $log_file
+    rm -f checkpoint_best_multitask.pt checkpoint_last_multitask.pt
+fi
 
 # Build dataset niveau initial
 rebuild_dataset $current_level
@@ -94,7 +126,9 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lambda-coarse 1.0 \
         --lambda-fine 1.0 \
         --focal-gamma $focal \
-        --device cpu \
+        --device $DEVICE \
+        --layer-lr-decay 0.9 \
+        --ema-decay 0.999 \
         $resume_arg \
         2>&1 | tee $epoch_log
 
@@ -103,7 +137,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
 
     if [ -z "$val_score" ]; then
         echo "⚠️  Impossible d'extraire le val score — on continue" | tee -a $log_file
-        resume_arg="--resume checkpoint_last_multitask.pt"
+        resume_arg="--resume checkpoint_best_multitask.pt"
         current_epoch=$((current_epoch + 1))
         continue
     fi
@@ -136,7 +170,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         fi
     fi
 
-    resume_arg="--resume checkpoint_last_multitask.pt"
+    resume_arg="--resume checkpoint_best_multitask.pt"
     current_epoch=$((current_epoch + 1))
 done
 

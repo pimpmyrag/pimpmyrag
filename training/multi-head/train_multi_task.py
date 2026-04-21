@@ -19,6 +19,104 @@ from multitask_model import SpanMultiTaskModel
 from labels import COARSE_LABELS, FINE_LABELS
 
 
+# ──────────────────────────────────────────────────────────
+#  EMA — Exponential Moving Average des poids du modèle
+# ──────────────────────────────────────────────────────────
+class ModelEMA:
+    """
+    Maintient une copie lissée des poids du modèle.
+    Gain typique : +0.5 à +1.5% sur val score sans autre changement.
+    """
+    def __init__(self, model: torch.nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.shadow: dict[str, torch.Tensor] = {
+            k: v.clone().float().detach()
+            for k, v in model.state_dict().items()
+        }
+
+    @torch.no_grad()
+    def update(self, model: torch.nn.Module):
+        for k, v in model.state_dict().items():
+            self.shadow[k] = self.decay * self.shadow[k] + (1.0 - self.decay) * v.float().detach()
+
+    def apply(self, model: torch.nn.Module) -> dict:
+        """Injecte les poids EMA dans le modèle. Retourne l'état original."""
+        original = {k: v.clone() for k, v in model.state_dict().items()}
+        ema_state = {k: v.to(dtype=model.state_dict()[k].dtype) for k, v in self.shadow.items()}
+        model.load_state_dict(ema_state)
+        return original
+
+    def restore(self, model: torch.nn.Module, original_state: dict):
+        model.load_state_dict(original_state)
+
+    def state_dict(self):
+        return self.shadow
+
+
+# ──────────────────────────────────────────────────────────
+#  Layer-wise LR decay
+# ──────────────────────────────────────────────────────────
+def get_layerwise_param_groups(model, base_lr: float, head_lr: float, decay: float = 0.9):
+    """
+    Crée des groupes de paramètres avec LR décroissant par couche.
+    - Têtes (boundary/coarse/fine/MLP) : head_lr
+    - Couche transformer i (depuis le haut) : base_lr * decay^(num_layers - 1 - i)
+    - Embeddings : base_lr * decay^num_layers  (LR le plus faible)
+
+    decay=1.0 → pas de decay (comportement original).
+    """
+    head_params = (
+        list(model.span_mlp.parameters())
+        + list(model.boundary_head.parameters())
+        + list(model.coarse_head.parameters())
+        + list(model.fine_head.parameters())
+        + list(model.width_emb.parameters())
+    )
+    seen = {id(p) for p in head_params}
+    param_groups = [{"params": head_params, "lr": head_lr, "name": "heads"}]
+
+    if decay >= 1.0:
+        enc_params = [p for p in model.encoder.parameters() if id(p) not in seen]
+        param_groups.append({"params": enc_params, "lr": base_lr, "name": "encoder"})
+        return param_groups
+
+    encoder = model.encoder
+    # DeBERTa-v3 : encoder.encoder.layer
+    try:
+        layers = encoder.encoder.layer
+    except AttributeError:
+        enc_params = [p for p in encoder.parameters() if id(p) not in seen]
+        param_groups.append({"params": enc_params, "lr": base_lr, "name": "encoder"})
+        return param_groups
+
+    num_layers = len(layers)
+
+    # Embeddings — LR le plus faible
+    try:
+        emb_params = [p for p in encoder.embeddings.parameters() if id(p) not in seen]
+        if emb_params:
+            emb_lr = base_lr * (decay ** num_layers)
+            param_groups.append({"params": emb_params, "lr": emb_lr, "name": "embeddings"})
+            seen.update(id(p) for p in emb_params)
+    except AttributeError:
+        pass
+
+    # Couches transformer — decay croissant vers le bas
+    for i, layer in enumerate(layers):
+        layer_lr = base_lr * (decay ** (num_layers - 1 - i))
+        layer_p = [p for p in layer.parameters() if id(p) not in seen]
+        if layer_p:
+            param_groups.append({"params": layer_p, "lr": layer_lr, "name": f"layer_{i}"})
+            seen.update(id(p) for p in layer_p)
+
+    # Reste (pooler, etc.)
+    remaining = [p for p in encoder.parameters() if id(p) not in seen]
+    if remaining:
+        param_groups.append({"params": remaining, "lr": base_lr, "name": "encoder_other"})
+
+    return param_groups
+
+
 def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
     """
     Calcule des poids de classes à partir du dataset multitask enrichi.
@@ -93,14 +191,15 @@ def run_epoch(
         train: bool,
         boundary_class_weights=None,
         coarse_class_weights=None,
-        fine_class_weights=None,   # gardé pour compat API, ignoré si compute_loss ne l'utilise pas
+        fine_class_weights=None,
         lambda_boundary=1.0,
         lambda_coarse=1.0,
         lambda_fine=1.2,
-        lambda_compat=0.0,         # gardé pour compat API, ignoré ici
+        lambda_compat=0.0,
         accum_steps=1,
         log_every=50,
         focal_gamma=0.0,
+        ema: "ModelEMA | None" = None,   # ← EMA mis à jour après chaque optimizer step
 ):
     """
     Version adaptée à l'architecture :
@@ -287,6 +386,8 @@ def run_epoch(
         if train and (step % accum_steps == 0):
             optimizer.step()
             optimizer.zero_grad()
+            if ema is not None:
+                ema.update(model)
 
         losses.append(loss_dict["loss"].item())
 
@@ -341,6 +442,8 @@ def run_epoch(
     if train and (len(loader) % accum_steps != 0):
         optimizer.step()
         optimizer.zero_grad()
+        if ema is not None:
+            ema.update(model)
 
     metrics = {
         "loss": sum(losses) / max(1, len(losses)),
@@ -406,6 +509,10 @@ def main():
                         help="Focal loss gamma pour boundary (0=CE, 2.0=focal)")
     parser.add_argument("--head-lr-multiplier", type=float, default=5.0,
                         help="Multiplicateur LR pour les heads vs encoder")
+    parser.add_argument("--layer-lr-decay", type=float, default=0.9,
+                        help="Decay LR par couche (1.0=désactivé, 0.9=recommandé)")
+    parser.add_argument("--ema-decay", type=float, default=0.999,
+                        help="Decay EMA (0.0=désactivé, 0.999=recommandé)")
     parser.add_argument("--warmup-epochs", type=int, default=1,
                         help="Nombre d'epochs de linear warmup LR")
     parser.add_argument("--label-smoothing", type=float, default=0.0,
@@ -486,30 +593,18 @@ def main():
     )
 
     model = SpanMultiTaskModel(model_name=args.model_name).to(device).float()
-
-    # Differential LR : encoder à LR base, heads + MLP à LR * multiplier
-    encoder_params = list(model.encoder.parameters())
-    head_params = (
-        list(model.span_mlp.parameters())
-        + list(model.boundary_head.parameters())
-        + list(model.coarse_head.parameters())
-        + list(model.fine_head.parameters())
-        + list(model.width_emb.parameters())
-    )
-    head_lr = args.lr * args.head_lr_multiplier
-    optimizer = AdamW([
-        {"params": encoder_params, "lr": args.lr},
-        {"params": head_params, "lr": head_lr},
-    ])
-
-    # LR scheduler : linear warmup + cosine decay
     total_epochs = args.epochs
-    warmup_epochs_count = min(args.warmup_epochs, total_epochs)
-    steps_per_epoch = 1  # sera ajusté après DataLoader creation
 
-    print(f"📐 Differential LR: encoder={args.lr}, heads={head_lr}")
+    # Differential LR avec layer-wise decay
+    head_lr = args.lr * args.head_lr_multiplier
+    param_groups = get_layerwise_param_groups(model, args.lr, head_lr, decay=args.layer_lr_decay)
+    optimizer = AdamW(param_groups)
+
+    # Log LR par couche
+    print(f"📐 Layer-wise LR decay={args.layer_lr_decay}")
+    for g in param_groups:
+        print(f"   {g.get('name', '?'):<20} lr={g['lr']:.2e}")
     print(f"📐 Focal gamma: {args.focal_gamma}")
-    print(f"📐 Warmup: {warmup_epochs_count} epochs, then cosine decay")
 
     boundary_w = coarse_w = fine_w = None
     if args.class_weights == "auto":
@@ -562,10 +657,17 @@ def main():
     start_epoch = 1
 
     # LR scheduler basé sur les epochs
+    warmup_epochs_count = min(args.warmup_epochs, total_epochs)
     warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=warmup_epochs_count)
     cosine_scheduler = CosineAnnealingLR(optimizer, T_max=max(1, total_epochs - warmup_epochs_count))
     scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
                              milestones=[warmup_epochs_count])
+
+    # EMA
+    use_ema = args.ema_decay > 0.0
+    ema = ModelEMA(model, decay=args.ema_decay) if use_ema else None
+    if use_ema:
+        print(f"📐 EMA activé (decay={args.ema_decay})")
 
     # Reprise éventuelle depuis checkpoint
     if args.resume is not None:
@@ -574,7 +676,14 @@ def main():
         model.load_state_dict(ckpt["model_state"])
 
         if "optim_state" in ckpt and ckpt["optim_state"] is not None:
-            optimizer.load_state_dict(ckpt["optim_state"])
+            try:
+                optimizer.load_state_dict(ckpt["optim_state"])
+            except Exception as e:
+                print(f"⚠️ Impossible de recharger l'optimizer state: {e}")
+
+        if use_ema and "ema_state" in ckpt and ckpt["ema_state"] is not None:
+            ema.shadow = {k: v.clone() for k, v in ckpt["ema_state"].items()}
+            print("📐 EMA state rechargé depuis checkpoint")
 
         if args.start_epoch is not None:
             start_epoch = args.start_epoch
@@ -589,8 +698,10 @@ def main():
 
     for epoch in range(start_epoch, args.epochs + 1):
         # Log LR
-        lrs = [pg['lr'] for pg in optimizer.param_groups]
-        print(f"\n🔧 Epoch {epoch} | LR encoder={lrs[0]:.2e}, heads={lrs[1]:.2e}")
+        head_lrs = [pg['lr'] for pg in optimizer.param_groups if pg.get('name') == 'heads']
+        enc_lrs = [pg['lr'] for pg in optimizer.param_groups if pg.get('name', '').startswith('layer_')]
+        top_lr = enc_lrs[-1] if enc_lrs else args.lr
+        print(f"\n🔧 Epoch {epoch} | LR top_layer={top_lr:.2e}, heads={head_lrs[0] if head_lrs else '?':.2e}")
 
         train_metrics = run_epoch(
             train_loader,
@@ -608,7 +719,12 @@ def main():
             accum_steps=args.accum_steps,
             log_every=args.log_every,
             focal_gamma=args.focal_gamma,
+            ema=ema,
         )
+
+        # Validation avec poids EMA si activé
+        if use_ema:
+            original_state = ema.apply(model)
 
         val_metrics = run_epoch(
             val_loader,
@@ -627,6 +743,9 @@ def main():
             log_every=args.log_every,
             focal_gamma=args.focal_gamma,
         )
+
+        if use_ema:
+            ema.restore(model, original_state)
 
         # Step scheduler after each epoch
         scheduler.step()
@@ -664,17 +783,24 @@ def main():
             "model_state": model.state_dict(),
             "optim_state": optimizer.state_dict(),
             "best_score": best_score,
+            "ema_state": ema.state_dict() if use_ema else None,
         }, "checkpoint_last_multitask.pt")
 
         if score > best_score:
             best_score = score
+            # Sauvegarder les poids EMA si activé (meilleure version lissée)
+            if use_ema:
+                save_state = ema.apply(model)
             torch.save({
                 "epoch": epoch,
                 "model_state": model.state_dict(),
                 "optim_state": optimizer.state_dict(),
                 "best_score": best_score,
+                "ema_state": ema.state_dict() if use_ema else None,
             }, "checkpoint_best_multitask.pt")
             torch.save(model.state_dict(), "best_model_multitask.pt")
+            if use_ema:
+                ema.restore(model, save_state)
             print("✅ nouveau best model sauvegardé")
 
     print("\n✅ Fin training, évaluation test sur le best model")
