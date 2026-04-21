@@ -1064,8 +1064,13 @@ def main():
 
     print("\n✅ Fin training, évaluation test sur le best model")
 
-    ckpt = torch.load("checkpoint_best_multitask.pt", map_location=device)
-    model.load_state_dict(ckpt["model_state"])
+    best_ckpt_path = "checkpoint_best_multitask.pt"
+    if os.path.exists(best_ckpt_path):
+        ckpt = torch.load(best_ckpt_path, map_location=device)
+        model.load_state_dict(ckpt["model_state"])
+        print(f"✅ Best model chargé depuis {best_ckpt_path}")
+    else:
+        print("⚠️ Pas de checkpoint best trouvé — évaluation avec le modèle courant")
 
     test_metrics = run_epoch(
         test_loader,
