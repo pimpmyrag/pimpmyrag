@@ -105,6 +105,7 @@ def make_collate_fn(tokenizer):
         boundary_labels = []
         coarse_labels = []
         fine_labels = []
+        svo_boundary_labels = []
         svo_labels = []
         voice_labels = []
         sample_weights = []
@@ -140,6 +141,7 @@ def make_collate_fn(tokenizer):
                     "tok_end": c["tok_end"],
                 })
                 boundary_labels.append(c["boundary_label"])
+                svo_boundary_labels.append(c.get("svo_boundary_label", 0))
                 coarse_labels.append(c["coarse_label_id"])
                 fine_labels.append(c["fine_label_id"])
                 svo_labels.append(c["svo_label_id"])
