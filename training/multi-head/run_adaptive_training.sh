@@ -38,8 +38,9 @@ fi
 
 MODEL="microsoft/deberta-v3-base"
 DATA="data"
-MAX_EPOCHS=30
+MAX_EPOCHS=40
 PATIENCE=3        # nb epochs sans amélioration avant d'augmenter difficulté
+MAX_EPOCHS_PER_LEVEL=5  # forcer niveau suivant même si amélioration continue
 MIN_DELTA=0.0005  # amélioration minimale considérée comme progrès
 
 # Niveaux de difficulté progressifs (6 niveaux au lieu de 4)
@@ -49,10 +50,16 @@ ENGLOBANT_WEIGHTS=(1.0 1.0  1.0  1.1  1.3  1.5)
 FOCAL_GAMMAS=(    0.0  0.0  0.5  0.5  1.0  1.5)
 LEVEL_NAMES=("easy" "easy+" "medium" "medium+" "hard" "full")
 
-current_level=0
+# Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
+START_LEVEL=${START_LEVEL:-0}
+START_EPOCH=${START_EPOCH:-1}
+KEEP_CHECKPOINT=${KEEP_CHECKPOINT:-0}
+
+current_level=$START_LEVEL
 stagnation_count=0
+epochs_at_level=0
 best_score=-1.0
-current_epoch=1
+current_epoch=$START_EPOCH
 resume_arg=""
 
 mkdir -p logs
@@ -91,9 +98,16 @@ python3 data/build_multitask_dataset.py \
     --englobant-ratio 1.0 \
     --hard-neg-ratio 1.0
 
-# Supprimer les vieux checkpoints pour repartir proprement
-if [ -f checkpoint_best_multitask.pt ] || [ -f checkpoint_last_multitask.pt ]; then
-    echo "🗑️  Suppression des anciens checkpoints" | tee -a $log_file
+# Checkpoints: supprimer ou reprendre selon KEEP_CHECKPOINT
+if [ "$KEEP_CHECKPOINT" = "1" ]; then
+    echo "Reprise depuis checkpoint existant" | tee -a $log_file
+    if [ -f checkpoint_best_multitask.pt ]; then
+        resume_arg="--resume checkpoint_best_multitask.pt"
+        best_score=$(python3 -c "import torch; c=torch.load('checkpoint_best_multitask.pt',map_location='cpu'); print(f\"{c.get('best_score',-1.0):.4f}\")" 2>/dev/null || echo "-1.0")
+        echo "best_score checkpoint: $best_score" | tee -a $log_file
+    fi
+elif [ -f checkpoint_best_multitask.pt ] || [ -f checkpoint_last_multitask.pt ]; then
+    echo "Suppression anciens checkpoints" | tee -a $log_file
     rm -f checkpoint_best_multitask.pt checkpoint_last_multitask.pt
 fi
 
@@ -156,16 +170,28 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         echo "⏸️  Pas d'amélioration ($stagnation_count/$PATIENCE)" | tee -a $log_file
     fi
 
-    # Augmenter difficulté si plateau atteint
+    epochs_at_level=$((epochs_at_level + 1))
     max_level=$(( ${#ENGLOBANT_RATIOS[@]} - 1 ))
+
+    should_advance=0
     if [ $stagnation_count -ge $PATIENCE ]; then
+        echo "PLATEAU ($stagnation_count epochs)" | tee -a $log_file
+        should_advance=1
+    fi
+    if [ $epochs_at_level -ge $MAX_EPOCHS_PER_LEVEL ]; then
+        echo "MAX epochs/level ($epochs_at_level/$MAX_EPOCHS_PER_LEVEL) -> advance" | tee -a $log_file
+        should_advance=1
+    fi
+
+    if [ $should_advance -eq 1 ]; then
         if [ $current_level -lt $max_level ]; then
             current_level=$((current_level + 1))
             stagnation_count=0
-            echo "🔥 Plateau détecté → passage au niveau ${LEVEL_NAMES[$current_level]}" | tee -a $log_file
+            epochs_at_level=0
+            echo "ADVANCE to level ${LEVEL_NAMES[$current_level]}" | tee -a $log_file
             rebuild_dataset $current_level
         else
-            echo "🛑 Plateau au niveau max (${LEVEL_NAMES[$current_level]}) — early stopping" | tee -a $log_file
+            echo "EARLY STOP at max level ${LEVEL_NAMES[$current_level]}" | tee -a $log_file
             break
         fi
     fi
