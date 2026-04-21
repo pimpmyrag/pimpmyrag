@@ -29,12 +29,25 @@ FINE_LABELS = [
     "hint_time_clock",       # 19
     "hint_time_duration",    # 20
     "hint_quantity",         # 21
+    "hint_measure",          # 22
+    "hint_percentage",       # 23
+    "hint_count",            # 24
+    "hint_money",            # 25
+    "hint_rate",             # 26
+    "hint_law",              # 27
+    "hint_work_of_art",      # 28
+    "hint_concept",          # 29
+    "hint_disease",          # 30
+    "hint_language",         # 31
 ]
 
 FINE2ID = {x: i for i, x in enumerate(FINE_LABELS)}
 ID2FINE = {i: x for x, i in FINE2ID.items()}
 
 NUM_FINE = len(FINE_LABELS)
+
+# Sentinel pour les spans négatifs (pas un vrai label fine)
+FINE_NONE_ID = NUM_FINE  # = 32, hors range [0..31]
 
 # ─────────────────────────────────────────────────────────────
 # COARSE LABELS
@@ -47,7 +60,9 @@ COARSE_LABELS = [
     "TIME",     # 3
     "EVENT",    # 4
     "OBJECT",   # 5
-    "NONE",     # 6
+    "VALUE",    # 6
+    "ABSTRACT", # 7
+    "NONE",     # 8
 ]
 
 COARSE2ID = {x: i for i, x in enumerate(COARSE_LABELS)}
@@ -92,9 +107,40 @@ COARSE_TO_FINE = {
         FINE2ID["hint_tool"],
         FINE2ID["hint_object_generic"],
         FINE2ID["hint_object_name"],
+    ],
+    COARSE2ID["VALUE"]: [
         FINE2ID["hint_quantity"],
+        FINE2ID["hint_measure"],
+        FINE2ID["hint_percentage"],
+        FINE2ID["hint_count"],
+        FINE2ID["hint_money"],
+        FINE2ID["hint_rate"],
+    ],
+    COARSE2ID["ABSTRACT"]: [
+        FINE2ID["hint_law"],
+        FINE2ID["hint_work_of_art"],
+        FINE2ID["hint_concept"],
+        FINE2ID["hint_disease"],
+        FINE2ID["hint_language"],
     ],
 }
+
+# ─────────────────────────────────────────────────────────────
+# FINE → COARSE reverse mapping
+# ─────────────────────────────────────────────────────────────
+
+_FINE_TO_COARSE = {}
+for _c, _fines in COARSE_TO_FINE.items():
+    for _f in _fines:
+        _FINE_TO_COARSE[_f] = _c
+        _FINE_TO_COARSE[FINE_LABELS[_f]] = _c
+
+
+def fine_label_to_coarse_id(fine_label: str | int) -> int:
+    """Renvoie le coarse_id pour un fine label (str ou int)."""
+    if isinstance(fine_label, int):
+        return _FINE_TO_COARSE.get(fine_label, COARSE_NONE_ID)
+    return _FINE_TO_COARSE.get(fine_label, COARSE_NONE_ID)
 
 def build_coarse_to_fine_mask() -> torch.Tensor:
     """

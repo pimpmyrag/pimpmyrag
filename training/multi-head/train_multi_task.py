@@ -10,6 +10,7 @@ from collections import Counter
 import torch
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from transformers import AutoTokenizer
 from sklearn.metrics import f1_score, classification_report
 
@@ -99,6 +100,7 @@ def run_epoch(
         lambda_compat=0.0,         # gardé pour compat API, ignoré ici
         accum_steps=1,
         log_every=50,
+        focal_gamma=0.0,
 ):
     """
     Version adaptée à l'architecture :
@@ -274,6 +276,7 @@ def run_epoch(
                 lambda_boundary=lambda_boundary,
                 lambda_coarse=lambda_coarse,
                 lambda_fine=lambda_fine,
+                focal_gamma=focal_gamma,
             )
 
             loss = loss_dict["loss"] / accum_steps
@@ -399,6 +402,14 @@ def main():
     parser.add_argument("--lambda-coarse", type=float, default=1.0)
     parser.add_argument("--lambda-fine", type=float, default=1.2)
     parser.add_argument("--lambda-compat", type=float, default=0.2)
+    parser.add_argument("--focal-gamma", type=float, default=0.0,
+                        help="Focal loss gamma pour boundary (0=CE, 2.0=focal)")
+    parser.add_argument("--head-lr-multiplier", type=float, default=5.0,
+                        help="Multiplicateur LR pour les heads vs encoder")
+    parser.add_argument("--warmup-epochs", type=int, default=1,
+                        help="Nombre d'epochs de linear warmup LR")
+    parser.add_argument("--label-smoothing", type=float, default=0.0,
+                        help="Label smoothing pour coarse/fine CE")
 
     parser.add_argument("--device", choices=["cpu", "mps", "cuda"], default=None)
     parser.add_argument("--class-weights", choices=["none", "auto"], default="auto")
@@ -475,7 +486,30 @@ def main():
     )
 
     model = SpanMultiTaskModel(model_name=args.model_name).to(device).float()
-    optimizer = AdamW(model.parameters(), lr=args.lr)
+
+    # Differential LR : encoder à LR base, heads + MLP à LR * multiplier
+    encoder_params = list(model.encoder.parameters())
+    head_params = (
+        list(model.span_mlp.parameters())
+        + list(model.boundary_head.parameters())
+        + list(model.coarse_head.parameters())
+        + list(model.fine_head.parameters())
+        + list(model.width_emb.parameters())
+    )
+    head_lr = args.lr * args.head_lr_multiplier
+    optimizer = AdamW([
+        {"params": encoder_params, "lr": args.lr},
+        {"params": head_params, "lr": head_lr},
+    ])
+
+    # LR scheduler : linear warmup + cosine decay
+    total_epochs = args.epochs
+    warmup_epochs_count = min(args.warmup_epochs, total_epochs)
+    steps_per_epoch = 1  # sera ajusté après DataLoader creation
+
+    print(f"📐 Differential LR: encoder={args.lr}, heads={head_lr}")
+    print(f"📐 Focal gamma: {args.focal_gamma}")
+    print(f"📐 Warmup: {warmup_epochs_count} epochs, then cosine decay")
 
     boundary_w = coarse_w = fine_w = None
     if args.class_weights == "auto":
@@ -527,6 +561,12 @@ def main():
     best_score = -1.0
     start_epoch = 1
 
+    # LR scheduler basé sur les epochs
+    warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=warmup_epochs_count)
+    cosine_scheduler = CosineAnnealingLR(optimizer, T_max=max(1, total_epochs - warmup_epochs_count))
+    scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
+                             milestones=[warmup_epochs_count])
+
     # Reprise éventuelle depuis checkpoint
     if args.resume is not None:
         print(f"⤴️ Reprise depuis checkpoint: {args.resume}")
@@ -548,6 +588,10 @@ def main():
         )
 
     for epoch in range(start_epoch, args.epochs + 1):
+        # Log LR
+        lrs = [pg['lr'] for pg in optimizer.param_groups]
+        print(f"\n🔧 Epoch {epoch} | LR encoder={lrs[0]:.2e}, heads={lrs[1]:.2e}")
+
         train_metrics = run_epoch(
             train_loader,
             model,
@@ -563,6 +607,7 @@ def main():
             lambda_compat=args.lambda_compat,
             accum_steps=args.accum_steps,
             log_every=args.log_every,
+            focal_gamma=args.focal_gamma,
         )
 
         val_metrics = run_epoch(
@@ -580,7 +625,11 @@ def main():
             lambda_compat=args.lambda_compat,
             accum_steps=args.accum_steps,
             log_every=args.log_every,
+            focal_gamma=args.focal_gamma,
         )
+
+        # Step scheduler after each epoch
+        scheduler.step()
 
         score = (
             val_metrics["boundary_f1"]
@@ -648,6 +697,7 @@ def main():
         lambda_compat=args.lambda_compat,
         accum_steps=args.accum_steps,
         log_every=args.log_every,
+        focal_gamma=args.focal_gamma,
     )
 
     print("\n🎯 TEST")

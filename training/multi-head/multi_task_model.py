@@ -15,7 +15,7 @@ class SpanMultiTaskModel(nn.Module):
     def __init__(
             self,
             model_name: str,
-            num_coarse: int = 7,
+            num_coarse: int = 9,
             width_emb_dim: int = 32,
             span_hidden_dim: int = 512,
             max_width_bucket: int = 16,
@@ -114,6 +114,7 @@ class SpanMultiTaskModel(nn.Module):
             lambda_coarse=1.0,
             lambda_fine=1.2,
             lambda_compat=0.0,         # gardé pour compat API, non utilisé ici
+            focal_gamma=0.0,           # 0.0 = CE standard, 2.0 = focal loss sur boundary
     ):
         """
         Loss adaptée à l'architecture :
@@ -158,12 +159,8 @@ class SpanMultiTaskModel(nn.Module):
         if coarse_class_weights is not None:
             coarse_class_weights = coarse_class_weights.to(device=device, dtype=torch.float32)
 
-        # fine_class_weights volontairement ignoré dans cette première version
-        # pour garder la tâche fine simple et propre.
-        # On pourra le réintroduire plus tard si nécessaire, mais uniquement sur les spans positifs.
-
         # ─────────────────────────────────────────────
-        # 1) Boundary loss : tous les spans
+        # 1) Boundary loss : focal loss si focal_gamma > 0
         # ─────────────────────────────────────────────
         loss_b_per_span = F.cross_entropy(
             b_logits,
@@ -171,6 +168,13 @@ class SpanMultiTaskModel(nn.Module):
             weight=boundary_class_weights,
             reduction="none",
         )
+
+        if focal_gamma > 0.0:
+            # Focal loss : down-pondère les exemples bien classés
+            b_probs = F.softmax(b_logits.detach(), dim=-1)
+            p_t = b_probs.gather(1, boundary_labels.unsqueeze(1)).squeeze(1)
+            focal_factor = (1.0 - p_t) ** focal_gamma
+            loss_b_per_span = loss_b_per_span * focal_factor
 
         loss_b = (loss_b_per_span * sample_weights).mean()
 

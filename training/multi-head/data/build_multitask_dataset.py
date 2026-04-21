@@ -222,7 +222,129 @@ def generate_soft_negatives(offsets, gold_token_spans, gold_char_spans, num_soft
 
     return out
 
-def make_multitask_row(row, tokenizer, hard_per_gold=6, soft_factor=2.0, max_span_len=8, seed=13):
+
+def generate_englobant_negatives(offsets, gold_candidates, gold_char_spans, max_per_gold=3, max_span_len=12):
+    """
+    Englobant negatives = spans larges qui CONTIENNENT un gold mais débordent
+    suffisamment pour ne plus être une entité valide.
+    Enseigne au boundary head que 'Simon Bolivar est considéré comme le Libérateur'
+    n'est PAS une entité même si ça contient 'Simon Bolivar'.
+    """
+    n_tokens = len(offsets)
+    out = []
+    seen = set()
+
+    for gc in gold_candidates:
+        l = gc["tok_start"]
+        r = gc["tok_end"]
+        gold_len = r - l + 1
+
+        proposals = []
+        # Étendre à gauche et/ou à droite de 2 à 6 tokens au total
+        for expand_left in range(0, 5):
+            for expand_right in range(0, 5):
+                total_expand = expand_left + expand_right
+                if total_expand < 2:
+                    # Au moins 2 tokens d'expansion pour être un vrai englobant
+                    continue
+                nl = l - expand_left
+                nr = r + expand_right
+                if nl < 0 or nr >= n_tokens or nr - nl + 1 > max_span_len:
+                    continue
+
+                cstart, cend = token_span_to_char_span(offsets, nl, nr)
+                if (cstart, cend) in gold_char_spans:
+                    continue
+
+                new_len = nr - nl + 1
+                # Plus l'expansion est grande, plus c'est un bon négatif
+                expansion_ratio = new_len / max(1, gold_len)
+                proposals.append((nl, nr, cstart, cend, expansion_ratio))
+
+        # Trier par expansion décroissante (les plus larges d'abord = les plus informatifs)
+        proposals.sort(key=lambda x: x[-1], reverse=True)
+        kept = 0
+        for nl, nr, cstart, cend, _ in proposals:
+            key = (cstart, cend)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "char_start": cstart,
+                "char_end": cend,
+                "tok_start": nl,
+                "tok_end": nr,
+                "boundary_label": 0,
+                "coarse_label_id": COARSE_NONE_ID,
+                "fine_label_id": FINE_NONE_ID,
+                "neg_type": "englobant_neg",
+                "sample_weight": 1.5,  # poids élevé car ce sont les erreurs les plus fréquentes
+                "text": None,
+            })
+            kept += 1
+            if kept >= max_per_gold:
+                break
+
+    return out
+
+
+def generate_multi_entity_negatives(gold_candidates, gold_char_spans, max_negatives=5):
+    """
+    Multi-entity negatives = spans qui englobent 2+ entités adjacentes.
+    Enseigne que 'Winston Churchill et Franklin D. Roosevelt' n'est PAS un seul span.
+    """
+    out = []
+    seen = set()
+
+    # Trier les golds par position
+    sorted_golds = sorted(gold_candidates, key=lambda g: g["tok_start"])
+
+    for i in range(len(sorted_golds) - 1):
+        g1 = sorted_golds[i]
+        g2 = sorted_golds[i + 1]
+
+        # Vérifier qu'ils sont proches (gap <= 5 tokens)
+        gap = g2["tok_start"] - g1["tok_end"]
+        if gap > 5 or gap < 0:
+            continue
+
+        nl = g1["tok_start"]
+        nr = g2["tok_end"]
+        cstart = g1["char_start"]
+        cend = g2["char_end"]
+
+        key = (cstart, cend)
+        if key in seen or key in gold_char_spans:
+            continue
+        seen.add(key)
+
+        out.append({
+            "char_start": cstart,
+            "char_end": cend,
+            "tok_start": nl,
+            "tok_end": nr,
+            "boundary_label": 0,
+            "coarse_label_id": COARSE_NONE_ID,
+            "fine_label_id": FINE_NONE_ID,
+            "neg_type": "multi_entity_neg",
+            "sample_weight": 2.0,  # poids très élevé — erreur critique
+            "text": None,
+        })
+
+        if len(out) >= max_negatives:
+            break
+
+    return out
+
+
+def make_multitask_row(row, tokenizer, hard_per_gold=6, soft_factor=2.0, max_span_len=8, seed=13,
+                       englobant_ratio=1.0, hard_neg_ratio=1.0, englobant_weight=1.5):
+    """
+    Args:
+        englobant_ratio: 0.0 → 1.0, fraction des englobants à inclure (curriculum)
+        hard_neg_ratio: 0.0 → 1.0, fraction des hard_negs à inclure
+        englobant_weight: sample_weight pour les englobants (1.0 → 2.0 selon la phase)
+    """
     text, input_ids, offsets, gold_candidates, gold_token_spans, gold_char_spans = build_gold_candidates(row, tokenizer)
 
     num_soft = max(1, int(len(gold_candidates) * soft_factor))
@@ -240,8 +362,36 @@ def make_multitask_row(row, tokenizer, hard_per_gold=6, soft_factor=2.0, max_spa
         max_span_len=max_span_len,
         seed=seed
     )
+    englobant_negs = generate_englobant_negatives(
+        offsets,
+        gold_candidates,
+        gold_char_spans,
+        max_per_gold=3,
+        max_span_len=max_span_len,
+    )
+    multi_ent_negs = generate_multi_entity_negatives(
+        gold_candidates,
+        gold_char_spans,
+        max_negatives=5,
+    )
 
-    candidates = gold_candidates + hard_negs + soft_negs
+    # Curriculum : sous-échantillonner hard_negs et englobants selon les ratios
+    import random as _rnd
+    if hard_neg_ratio < 1.0 and hard_negs:
+        k = max(0, int(len(hard_negs) * hard_neg_ratio))
+        _rnd.shuffle(hard_negs)
+        hard_negs = hard_negs[:k]
+
+    if englobant_ratio < 1.0 and englobant_negs:
+        k = max(0, int(len(englobant_negs) * englobant_ratio))
+        _rnd.shuffle(englobant_negs)
+        englobant_negs = englobant_negs[:k]
+
+    # Appliquer le poids custom aux englobants
+    for neg in englobant_negs:
+        neg["sample_weight"] = englobant_weight
+
+    candidates = gold_candidates + hard_negs + soft_negs + englobant_negs + multi_ent_negs
 
     # renseigner le texte du span si absent
     for c in candidates:
@@ -256,6 +406,8 @@ def make_multitask_row(row, tokenizer, hard_per_gold=6, soft_factor=2.0, max_spa
             "num_gold": len(gold_candidates),
             "num_hard_neg": len(hard_negs),
             "num_soft_neg": len(soft_negs),
+            "num_englobant_neg": len(englobant_negs),
+            "num_multi_entity_neg": len(multi_ent_negs),
             "num_tokens": len(input_ids),
         }
     }
@@ -330,6 +482,9 @@ def main():
     parser.add_argument("--max-span-len", type=int, default=8)
     parser.add_argument("--seed", type=int, default=13)
     parser.add_argument("--export-head-views-prefix", default=None, help="si défini, exporte aussi boundary/coarse/fine séparés")
+    parser.add_argument("--englobant-ratio", type=float, default=1.0, help="0.0-1.0 : fraction des englobants à inclure (curriculum)")
+    parser.add_argument("--hard-neg-ratio", type=float, default=1.0, help="0.0-1.0 : fraction des hard negs à inclure")
+    parser.add_argument("--englobant-weight", type=float, default=1.5, help="sample_weight pour les englobants")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -345,7 +500,10 @@ def main():
             hard_per_gold=args.hard_per_gold,
             soft_factor=args.soft_factor,
             max_span_len=args.max_span_len,
-            seed=args.seed
+            seed=args.seed,
+            englobant_ratio=args.englobant_ratio,
+            hard_neg_ratio=args.hard_neg_ratio,
+            englobant_weight=args.englobant_weight,
         )
         rows.append(mt_row)
 
