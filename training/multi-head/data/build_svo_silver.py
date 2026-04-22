@@ -384,6 +384,8 @@ def process_file(
     require_obl: bool = False,
     max_sent_tokens: int = 0,
     max_sents: int = 0,
+    log_every: int = 0,
+    total_lines: int = 0,
 ):
     """
     Traitement en streaming : lecture ligne par ligne + écriture au fil de l'eau.
@@ -392,7 +394,9 @@ def process_file(
     - resume_from     : reprendre à partir de la ligne N du fichier source (0 = début)
     - require_obl     : ne conserver que les phrases contenant au moins un oblique (obl/iobj)
     - max_sent_tokens : ignorer les phrases Stanza dépassant N tokens (0 = illimité)
-    - max_sents       : ne traiter que les N premières phrases d'un exemple (0 = toutes)
+    - max_sents       : ne traiter que les N premières phrases par exemple (0 = toutes)
+    - log_every       : logger toutes les N lignes lues (0 = à chaque batch)
+    - total_lines     : nb total de lignes dans le fichier source (pour l'ETA, 0 = inconnu)
     """
     n_total_in = 0
     out_examples_count = 0
@@ -401,6 +405,7 @@ def process_file(
     t_start   = time.time()
     t_last    = t_start
     cnt_last  = 0  # out_examples_count au dernier log
+    n_last    = 0  # n_total_in au dernier log
 
     # Buffer pour le traitement par batch Stanza
     batch_rows: list[dict] = []
@@ -485,18 +490,35 @@ def process_file(
 
             if len(batch_texts) >= batch_size:
                 flush_batch(f_out)
-                if (n_total_in % 2000) == 0:
+                _log_interval = log_every if log_every > 0 else batch_size
+                if (n_total_in - n_last) >= _log_interval or n_total_in == batch_size:
                     now      = time.time()
                     elapsed  = now - t_start
                     delta_t  = now - t_last
-                    delta_n  = out_examples_count - cnt_last
+                    delta_n  = n_total_in - n_last
                     rate_now = delta_n / delta_t if delta_t > 0 else 0.0
-                    rate_avg = out_examples_count / elapsed if elapsed > 0 else 0.0
+                    rate_avg = n_total_in / elapsed if elapsed > 0 else 0.0
                     t_last   = now
                     cnt_last = out_examples_count
-                    print(f"  [ligne {line_idx + 1}] {n_total_in} lues → {out_examples_count} sélectionnées"
+                    n_last   = n_total_in
+                    # ETA
+                    eta_str = ""
+                    if rate_avg > 0 and total_lines > 0:
+                        remaining = total_lines - (resume_from + n_total_in)
+                        eta_s = remaining / rate_avg
+                        eta_h, eta_rem = divmod(int(eta_s), 3600)
+                        eta_m = eta_rem // 60
+                        eta_str = f"  ETA ~{eta_h}h{eta_m:02d}m"
+                    pct_str = ""
+                    if total_lines > 0:
+                        pct = 100.0 * (resume_from + n_total_in) / total_lines
+                        pct_str = f"  ({pct:.1f}%)"
+                    print(f"  [l.{line_idx + 1}]{pct_str} {n_total_in} lues → {out_examples_count} out"
                           f" | {rate_now:.1f} ex/s (inst)  {rate_avg:.1f} ex/s (moy)"
-                          f" | {dict(label_counts.most_common(4))}")
+                          f"{eta_str}"
+                          f" | elapsed {elapsed:.0f}s"
+                          f" | {dict(label_counts.most_common(3))}",
+                          flush=True)
 
             if max_examples > 0 and out_examples_count >= max_examples:
                 print(f"[SVO] max_examples={max_examples} atteint — arrêt.")
@@ -545,6 +567,8 @@ def main():
                         help="Ignorer les phrases Stanza > N tokens (0=illimité, ex: 128 pour DeBERTa)")
     parser.add_argument("--max-sents", type=int, default=0,
                         help="Ne traiter que les N premières phrases par exemple (0=toutes)")
+    parser.add_argument("--log-every", type=int, default=0,
+                        help="Logger toutes les N lignes lues (0 = à chaque batch, ex: 200)")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -569,6 +593,14 @@ def main():
             continue
         print(f"{'─'*60}")
         print(f"[SVO] Split : {split}")
+        # Compter le nombre de lignes pour l'ETA
+        total_lines = 0
+        try:
+            with open(in_file, encoding="utf-8") as _f:
+                total_lines = sum(1 for _ in _f)
+            print(f"[SVO]   {total_lines} lignes dans {in_file.name}")
+        except Exception:
+            pass
         process_file(
             in_file, out_file, nlp,
             batch_size=args.batch,
@@ -577,6 +609,8 @@ def main():
             require_obl=args.require_obl,
             max_sent_tokens=args.max_sent_tokens,
             max_sents=args.max_sents,
+            log_every=args.log_every,
+            total_lines=total_lines,
         )
         print()
 
