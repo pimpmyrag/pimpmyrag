@@ -322,68 +322,123 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str) -> list[dict]:
 # Pipeline complet
 # ─────────────────────────────────────────────────────────────────────────────
 
-def process_file(input_path: Path, output_path: Path, nlp, batch_size: int = 64):
-    # Charger les exemples
-    examples: list[dict] = []
-    with open(input_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                examples.append(json.loads(line))
-
-    print(f"[SVO] {len(examples)} exemples dans {input_path.name}")
-
-    out_examples: list[dict] = []
+def process_file(
+    input_path: Path,
+    output_path: Path,
+    nlp,
+    batch_size: int = 64,
+    max_examples: int = 0,
+    resume_from: int = 0,
+):
+    """
+    Traitement en streaming : lecture ligne par ligne + écriture au fil de l'eau.
+    - batch_size : nb de phrases envoyées à Stanza en une fois (throughput x3-5)
+    - max_examples : arrêter après N exemples produits (0 = illimité)
+    - resume_from : reprendre à partir de la ligne N du fichier source (0 = début)
+                    utile si le processus a crashé en cours de route
+    """
+    n_total_in = 0
+    out_examples_count = 0
     label_counts: Counter = Counter()
 
-    for i, ex in enumerate(examples):
-        text = ex.get("text", "")
-        if not text.strip():
-            continue
+    # Buffer pour le traitement par batch Stanza
+    batch_rows: list[dict] = []
+    batch_texts: list[str] = []
 
-        # Stanza parse (une seule phrase par exemple dans ce dataset)
-        doc = nlp(text)
+    def flush_batch(f_out):
+        nonlocal out_examples_count
+        if not batch_texts:
+            return
+        # Stanza : traiter tout le batch en une passe
+        docs = [nlp(t) for t in batch_texts]  # fallback mono si bulk non dispo
+        # Utiliser bulk_process si disponible (Stanza >=1.5)
+        try:
+            docs = nlp.bulk_process(batch_texts)
+        except AttributeError:
+            pass  # version ancienne : déjà traité en mono
 
-        all_new_spans: list[dict] = []
-        char_offset = 0
-        for sent in doc.sentences:
-            new_spans = extract_sentence(sent, char_offset, text)
-            all_new_spans.extend(new_spans)
-            # Avancer l'offset inter-phrases (cas multi-phrases)
-            char_offset += len(sent.text)
-            rest = text[char_offset:]
-            char_offset += len(rest) - len(rest.lstrip())
+        for ex, doc in zip(batch_rows, docs):
+            text = ex.get("text", "")
+            all_new_spans: list[dict] = []
+            char_offset = 0
+            for sent in doc.sentences:
+                new_spans = extract_sentence(sent, char_offset, text)
+                all_new_spans.extend(new_spans)
+                char_offset += len(sent.text)
+                rest = text[char_offset:]
+                char_offset += len(rest) - len(rest.lstrip())
 
-        if not all_new_spans:
-            continue
+            if not all_new_spans:
+                continue
 
-        # Fusionner avec les spans NER existants
-        existing_spans = ex.get("spans", [])
-        merged = existing_spans + all_new_spans
+            existing_spans = ex.get("spans", [])
+            merged = existing_spans + all_new_spans
 
-        for sp in all_new_spans:
-            label_counts[sp["label"]] += 1
+            for sp in all_new_spans:
+                label_counts[sp["label"]] += 1
 
-        out_examples.append({
-            "id":    ex.get("id", f"svo_{i}"),
-            "text":  text,
-            "spans": merged,
-        })
+            out_row = {
+                "id":    ex.get("id", f"svo_{out_examples_count}"),
+                "text":  text,
+                "spans": merged,
+            }
+            f_out.write(json.dumps(out_row, ensure_ascii=False) + "\n")
+            f_out.flush()
+            out_examples_count += 1
 
-        if (i + 1) % 500 == 0:
-            print(f"  [{i + 1}/{len(examples)}] {len(out_examples)} exemples avec SVO")
+        batch_rows.clear()
+        batch_texts.clear()
 
-    # Écriture
-    with open(output_path, "w", encoding="utf-8") as f:
-        for ex in out_examples:
-            f.write(json.dumps(ex, ensure_ascii=False) + "\n")
+    print(f"[SVO] Streaming depuis {input_path.name}"
+          + (f" (resume depuis ligne {resume_from})" if resume_from else "")
+          + (f" (max {max_examples} exemples)" if max_examples else ""))
 
-    print(f"\n[SVO] ✅ {len(out_examples)} exemples écrits → {output_path}")
+    # Mode append si resume, sinon overwrite
+    write_mode = "a" if resume_from > 0 else "w"
+
+    with open(input_path, encoding="utf-8") as f_in, \
+         open(output_path, write_mode, encoding="utf-8") as f_out:
+
+        for line_idx, line in enumerate(f_in):
+            if line_idx < resume_from:
+                continue
+
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ex = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            text = ex.get("text", "")
+            if not text.strip():
+                continue
+
+            n_total_in += 1
+            batch_rows.append(ex)
+            batch_texts.append(text)
+
+            if len(batch_texts) >= batch_size:
+                flush_batch(f_out)
+                if (n_total_in % 2000) == 0:
+                    print(f"  [ligne {line_idx + 1}] {n_total_in} traitées → {out_examples_count} avec SVO"
+                          f" | {dict(label_counts.most_common(4))}")
+
+            if max_examples > 0 and out_examples_count >= max_examples:
+                print(f"[SVO] max_examples={max_examples} atteint — arrêt.")
+                break
+
+        # Flush du dernier batch partiel
+        flush_batch(f_out)
+
+    print(f"\n[SVO] ✅ {out_examples_count} exemples écrits → {output_path}")
+    print(f"[SVO]    (source: {n_total_in} lignes traitées)")
     print("\n[SVO] Répartition des nouveaux labels :")
     for label, count in sorted(label_counts.items()):
         print(f"  {label:<20} : {count:>6}")
 
-    return out_examples
+    return out_examples_count
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -404,7 +459,11 @@ def main():
     parser.add_argument("--gpu",        action="store_true",
                         help="Utiliser le GPU pour Stanza")
     parser.add_argument("--batch",      type=int, default=64,
-                        help="Taille du batch Stanza")
+                        help="Taille du batch Stanza (défaut=64, augmenter sur GPU)")
+    parser.add_argument("--max-examples", type=int, default=0,
+                        help="Arrêter après N exemples produits (0=illimité, utile pour tester)")
+    parser.add_argument("--resume-from", type=int, default=0,
+                        help="Reprendre à partir de la ligne N du fichier source (après un crash)")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -429,7 +488,12 @@ def main():
             continue
         print(f"{'─'*60}")
         print(f"[SVO] Split : {split}")
-        process_file(in_file, out_file, nlp, batch_size=args.batch)
+        process_file(
+            in_file, out_file, nlp,
+            batch_size=args.batch,
+            max_examples=args.max_examples,
+            resume_from=args.resume_from,
+        )
         print()
 
 
