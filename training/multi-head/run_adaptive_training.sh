@@ -141,6 +141,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lambda-svo-boundary 1.0 \
         --lambda-svo 0.5 \
         --lambda-voice 0.2 \
+        --lambda-morpho 0.3 \
         --focal-gamma 0.5 \
         --device $DEVICE \
         --layer-lr-decay 0.9 \
@@ -150,6 +151,8 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --hn-boost-fn 2.0 \
         --hn-boost-coarse 2.5 \
         --hn-boost-fine 2.0 \
+        --hn-boost-fp-svo 3.0 \
+        --hn-boost-fn-svo 2.0 \
         --hn-decay 0.85 \
         --hn-max-weight 8.0 \
         --hn-min-weight 0.3 \

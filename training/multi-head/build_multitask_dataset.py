@@ -15,6 +15,8 @@ from labels import (
     COARSE_NONE_ID,
     SVO2ID, SVO_NONE_ID, ALL_SVO_LABELS,
     VOICE2ID, VOICE_NONE_ID,
+    GENDER2ID, GENDER_NONE_ID,
+    NUMBER2ID, NUMBER_NONE_ID,
 )
 
 def load_jsonl(path: str):
@@ -111,6 +113,8 @@ def build_gold_candidates(row, tokenizer):
                 "fine_label_id":   FINE_NONE_ID,
                 "svo_label_id":    svo_id,
                 "voice_label_id":  voice_id,
+                "gender_label_id": GENDER2ID.get(sp.get("gender"), GENDER_NONE_ID),
+                "number_label_id": NUMBER2ID.get(sp.get("number"), NUMBER_NONE_ID),
                 "neg_type":        "svo_gold",
                 "sample_weight":   1.0,
                 "text":            sp.get("text", text[start:end]),
@@ -138,6 +142,8 @@ def build_gold_candidates(row, tokenizer):
             "fine_label_id":   fine_id,
             "svo_label_id":    SVO_NONE_ID,    # pas SVO
             "voice_label_id":  VOICE_NONE_ID,  # pas SVO
+            "gender_label_id": GENDER_NONE_ID, # pas supervisé sur NER pur
+            "number_label_id": NUMBER_NONE_ID,
             "neg_type":        "gold",
             "sample_weight":   1.0,
             "text":            sp.get("text", text[start:end]),
@@ -200,6 +206,8 @@ def generate_hard_negatives(offsets, gold_candidates, gold_char_spans, max_per_g
                 "fine_label_id": FINE_NONE_ID,
                 "svo_label_id": SVO_NONE_ID,
                 "voice_label_id": VOICE_NONE_ID,
+                "gender_label_id": GENDER_NONE_ID,
+                "number_label_id": NUMBER_NONE_ID,
                 "neg_type": "hard_neg",
                 "sample_weight": 1.0,
                 "text": None,
@@ -257,6 +265,8 @@ def generate_soft_negatives(offsets, gold_token_spans, gold_char_spans, num_soft
             "fine_label_id": FINE_NONE_ID,
             "svo_label_id": SVO_NONE_ID,
             "voice_label_id": VOICE_NONE_ID,
+            "gender_label_id": GENDER_NONE_ID,
+            "number_label_id": NUMBER_NONE_ID,
             "neg_type": "soft_neg",
             "sample_weight": 0.35,   # moins fort car plus bruité
             "text": None,
@@ -322,6 +332,8 @@ def generate_englobant_negatives(offsets, gold_candidates, gold_char_spans, max_
                 "fine_label_id": FINE_NONE_ID,
                 "svo_label_id": SVO_NONE_ID,
                 "voice_label_id": VOICE_NONE_ID,
+                "gender_label_id": GENDER_NONE_ID,
+                "number_label_id": NUMBER_NONE_ID,
                 "neg_type": "englobant_neg",
                 "sample_weight": 1.5,  # poids élevé car ce sont les erreurs les plus fréquentes
                 "text": None,

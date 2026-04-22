@@ -16,7 +16,7 @@ from sklearn.metrics import f1_score, classification_report
 
 from multitask_dataset import MultiTaskSpanDataset, make_collate_fn
 from multitask_model import SpanMultiTaskModel
-from labels import COARSE_LABELS, FINE_LABELS, SVO_LABELS, NUM_SVO, NUM_VOICE
+from labels import COARSE_LABELS, FINE_LABELS, SVO_LABELS, NUM_SVO, NUM_VOICE, NUM_GENDER, NUM_NUMBER
 
 # ──────────────────────────────────────────────────────────
 #  Inline Hard Negative Mining — constantes
@@ -206,6 +206,7 @@ def run_epoch(
         lambda_svo_boundary=1.0,
         lambda_svo=1.0,
         lambda_voice=0.5,
+        lambda_morpho=0.3,
         lambda_compat=0.0,
         accum_steps=1,
         log_every=50,
@@ -307,6 +308,9 @@ def run_epoch(
     all_svo_true, all_svo_pred = [], []
     # voice positive-only (spans avec voice_label != VOICE_NONE_ID)
     all_voice_true, all_voice_pred = [], []
+    # morpho positive-only (spans SVO actifs)
+    all_gender_true, all_gender_pred = [], []
+    all_number_true, all_number_pred = [], []
 
     # inline HN mining : id → list[(err_type|None, pred_coarse, pred_fine)]
     hn_results_by_id: dict[str, list] = {} if collect_hn else None
@@ -331,6 +335,8 @@ def run_epoch(
         svo_boundary_labels = batch["svo_boundary_labels"].to(device)
         svo_labels = batch["svo_labels"].to(device)
         voice_labels = batch["voice_labels"].to(device)
+        gender_labels = batch["gender_labels"].to(device)
+        number_labels = batch["number_labels"].to(device)
         sample_weights = batch["sample_weights"].to(device)
 
         # Sanity check avant forward
@@ -343,6 +349,8 @@ def run_epoch(
                 == svo_boundary_labels.size(0)
                 == svo_labels.size(0)
                 == voice_labels.size(0)
+                == gender_labels.size(0)
+                == number_labels.size(0)
                 == sample_weights.size(0)
         ):
             raise ValueError(
@@ -372,6 +380,8 @@ def run_epoch(
                 svo_boundary_labels_loss = svo_boundary_labels[si]
                 svo_labels_loss = svo_labels[si]
                 voice_labels_loss = voice_labels[si]
+                gender_labels_loss = gender_labels[si]
+                number_labels_loss = number_labels[si]
                 sample_weights_loss = sample_weights[si]
             else:
                 boundary_labels_loss = boundary_labels
@@ -380,6 +390,8 @@ def run_epoch(
                 svo_boundary_labels_loss = svo_boundary_labels
                 svo_labels_loss = svo_labels
                 voice_labels_loss = voice_labels
+                gender_labels_loss = gender_labels
+                number_labels_loss = number_labels
                 sample_weights_loss = sample_weights
 
             # Sanity check après forward / avant loss
@@ -409,6 +421,8 @@ def run_epoch(
                 svo_boundary_labels=svo_boundary_labels_loss,
                 svo_labels=svo_labels_loss,
                 voice_labels=voice_labels_loss,
+                gender_labels=gender_labels_loss,
+                number_labels=number_labels_loss,
                 sample_weights=sample_weights_loss,
                 boundary_class_weights=boundary_class_weights,
                 coarse_class_weights=coarse_class_weights,
@@ -418,6 +432,7 @@ def run_epoch(
                 lambda_svo_boundary=lambda_svo_boundary,
                 lambda_svo=lambda_svo,
                 lambda_voice=lambda_voice,
+                lambda_morpho=lambda_morpho,
                 focal_gamma=focal_gamma,
             )
 
@@ -468,6 +483,8 @@ def run_epoch(
             svob_true = svo_boundary_labels.detach().cpu()[si_cpu].tolist()
             svo_true = svo_labels.detach().cpu()[si_cpu].tolist()
             voice_true = voice_labels.detach().cpu()[si_cpu].tolist()
+            gender_true = gender_labels.detach().cpu()[si_cpu].tolist()
+            number_true = number_labels.detach().cpu()[si_cpu].tolist()
         else:
             b_true = boundary_labels.detach().cpu().tolist()
             c_true = coarse_labels.detach().cpu().tolist()
@@ -475,9 +492,13 @@ def run_epoch(
             svob_true = svo_boundary_labels.detach().cpu().tolist()
             svo_true = svo_labels.detach().cpu().tolist()
             voice_true = voice_labels.detach().cpu().tolist()
+            gender_true = gender_labels.detach().cpu().tolist()
+            number_true = number_labels.detach().cpu().tolist()
 
         svo_pred_raw = outputs["svo_logits"].argmax(dim=-1).detach().cpu().tolist()
         voice_pred_raw = outputs["voice_logits"].argmax(dim=-1).detach().cpu().tolist()
+        gender_pred_raw = outputs["gender_logits"].argmax(dim=-1).detach().cpu().tolist()
+        number_pred_raw = outputs["number_logits"].argmax(dim=-1).detach().cpu().tolist()
 
         # Accumulate boundary / coarse
         all_b_true.extend(b_true)
@@ -512,6 +533,15 @@ def run_epoch(
             if vt < NUM_VOICE:
                 all_voice_true.append(vt)
                 all_voice_pred.append(vp)
+        # Morpho : sur spans SVO actifs uniquement
+        for svot, gt, gp, nt, np_ in zip(svo_true, gender_true, gender_pred_raw, number_true, number_pred_raw):
+            if svot < NUM_SVO:
+                if gt < NUM_GENDER:
+                    all_gender_true.append(gt)
+                    all_gender_pred.append(gp)
+                if nt < NUM_NUMBER:
+                    all_number_true.append(nt)
+                    all_number_pred.append(np_)
 
         # ── Inline HN mining : collecter erreurs par candidat ────────────────
         if collect_hn:
@@ -546,7 +576,14 @@ def run_epoch(
                 else:
                     err = None
 
-                raw_results[in_idx] = (err, pred_coarse, pred_fine)
+                # SVO boundary mining : FP/FN sur la tête verbe/pronom
+                svob_p_i = svob_pred[out_idx]; svob_l_i = svob_true[out_idx]
+                if svob_p_i != svob_l_i:
+                    svo_b_err = "FP_SVO_BOUNDARY" if (svob_l_i == 0 and svob_p_i == 1) else "FN_SVO_BOUNDARY"
+                else:
+                    svo_b_err = None
+
+                raw_results[in_idx] = (err, pred_coarse, pred_fine, svo_b_err)
 
             per_row: dict[int, list] = defaultdict(list)
             for in_idx, bi in enumerate(pos_map):
@@ -584,6 +621,16 @@ def run_epoch(
             all_voice_true,
             all_voice_pred,
         ) if all_voice_true else 0.0,
+        "gender_macro_f1": safe_macro_f1_local(
+            all_gender_true,
+            all_gender_pred,
+            labels=list(range(NUM_GENDER - 1))  # excl. NONE
+        ) if all_gender_true else 0.0,
+        "number_macro_f1": safe_macro_f1_local(
+            all_number_true,
+            all_number_pred,
+            labels=list(range(NUM_NUMBER - 1))  # excl. NONE
+        ) if all_number_true else 0.0,
         "boundary_report": classification_report(
             all_b_true,
             all_b_pred,
@@ -656,20 +703,29 @@ def apply_inline_hn(
                 stats["decayed"] += 1
                 continue
 
-            err, pred_coarse, pred_fine = entry
-            if err is None:
+            err, pred_coarse, pred_fine, svo_b_err = entry
+            if err is None and svo_b_err is None:
                 w = c.get("sample_weight", 1.0)
                 c["sample_weight"] = max(min_weight, 1.0 + (w - 1.0) * decay)
                 stats["decayed"] += 1
             else:
-                base = boosts.get(err, 2.0)
-                if err == "FP_BOUNDARY" and pred_coarse in _LOW_PRECISION_COARSE:
-                    base *= _FP_LOW_PREC_EXTRA
-                if err == "FINE_ERR" and pred_fine in _LOW_F1_FINE:
-                    base *= _FINE_ERR_EXTRA
-                c["sample_weight"] = min(max_weight, c.get("sample_weight", 1.0) * base)
-                c["neg_type"] = err
-                stats[err] += 1
+                new_w = c.get("sample_weight", 1.0)
+                if err is not None:
+                    base = boosts.get(err, 2.0)
+                    if err == "FP_BOUNDARY" and pred_coarse in _LOW_PRECISION_COARSE:
+                        base *= _FP_LOW_PREC_EXTRA
+                    if err == "FINE_ERR" and pred_fine in _LOW_F1_FINE:
+                        base *= _FINE_ERR_EXTRA
+                    new_w *= base
+                    c["neg_type"] = err
+                    stats[err] += 1
+                if svo_b_err is not None:
+                    svo_base = boosts.get(svo_b_err, 2.0)
+                    new_w *= svo_base
+                    if "neg_type" not in c or c.get("neg_type") == "unknown":
+                        c["neg_type"] = svo_b_err
+                    stats[svo_b_err] += 1
+                c["sample_weight"] = min(max_weight, new_w)
 
     return dict(stats)
 
@@ -704,6 +760,8 @@ def main():
                         help="Pondération de la loss voice ACTIVE/PASSIVE (défaut=0.5)")
     parser.add_argument("--lambda-svo-boundary", type=float, default=1.0,
                         help="Pondération de la loss svo_boundary (détection verbes/pronoms, défaut=1.0)")
+    parser.add_argument("--lambda-morpho", type=float, default=0.3,
+                        help="Pondération de la loss morpho gender+number (défaut=0.3)")
     parser.add_argument("--lambda-compat", type=float, default=0.2)
     parser.add_argument("--focal-gamma", type=float, default=0.0,
                         help="Focal loss gamma pour boundary (0=CE, 2.0=focal)")
@@ -762,6 +820,10 @@ def main():
                         help="Boost COARSE_ERR (défaut=2.5)")
     parser.add_argument("--hn-boost-fine",   type=float, default=2.0,
                         help="Boost FINE_ERR (défaut=2.0)")
+    parser.add_argument("--hn-boost-fp-svo",  type=float, default=3.0,
+                        help="Boost FP_SVO_BOUNDARY : span prédit verbe/pronom mais pas gold (défaut=3.0)")
+    parser.add_argument("--hn-boost-fn-svo",  type=float, default=2.0,
+                        help="Boost FN_SVO_BOUNDARY : span gold verbe/pronom non détecté (défaut=2.0)")
     parser.add_argument("--hn-decay",        type=float, default=0.85,
                         help="Décroissance des poids bien prédits (défaut=0.85)")
     parser.add_argument("--hn-max-weight",   type=float, default=8.0,
@@ -876,10 +938,12 @@ def main():
 
     # Boosts HN inline
     hn_boosts = {
-        "FP_BOUNDARY": args.hn_boost_fp,
-        "FN_BOUNDARY": args.hn_boost_fn,
-        "COARSE_ERR":  args.hn_boost_coarse,
-        "FINE_ERR":    args.hn_boost_fine,
+        "FP_BOUNDARY":     args.hn_boost_fp,
+        "FN_BOUNDARY":     args.hn_boost_fn,
+        "COARSE_ERR":      args.hn_boost_coarse,
+        "FINE_ERR":        args.hn_boost_fine,
+        "FP_SVO_BOUNDARY": args.hn_boost_fp_svo,
+        "FN_SVO_BOUNDARY": args.hn_boost_fn_svo,
     }
     use_inline_hn = args.hn_every > 0
     if use_inline_hn:
@@ -949,6 +1013,7 @@ def main():
             lambda_svo_boundary=args.lambda_svo_boundary,
             lambda_svo=args.lambda_svo,
             lambda_voice=args.lambda_voice,
+            lambda_morpho=args.lambda_morpho,
             lambda_compat=args.lambda_compat,
             accum_steps=args.accum_steps,
             log_every=args.log_every,
@@ -990,6 +1055,7 @@ def main():
             lambda_svo_boundary=args.lambda_svo_boundary,
             lambda_svo=args.lambda_svo,
             lambda_voice=args.lambda_voice,
+            lambda_morpho=args.lambda_morpho,
             lambda_compat=args.lambda_compat,
             accum_steps=args.accum_steps,
             log_every=args.log_every,
@@ -1087,6 +1153,7 @@ def main():
         lambda_svo_boundary=args.lambda_svo_boundary,
         lambda_svo=args.lambda_svo,
         lambda_voice=args.lambda_voice,
+        lambda_morpho=args.lambda_morpho,
         lambda_compat=args.lambda_compat,
         accum_steps=args.accum_steps,
         log_every=args.log_every,

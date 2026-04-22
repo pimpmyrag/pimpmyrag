@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModel
-from labels import NUM_FINE, NUM_SVO, NUM_VOICE, build_coarse_to_fine_mask
+from labels import NUM_FINE, NUM_SVO, NUM_VOICE, NUM_GENDER, NUM_NUMBER, build_coarse_to_fine_mask
 
 
 from labels import FINE_LABELS
@@ -51,6 +51,9 @@ class SpanMultiTaskModel(nn.Module):
         self.svo_boundary_head = nn.Linear(span_hidden_dim, 2)
         # Head voice : ACTIVE / PASSIVE  (prédite sur les svo_verb uniquement)
         self.voice_head = nn.Linear(span_hidden_dim, NUM_VOICE)
+        # Têtes morpho : gender + number (prédits sur les spans SVO actifs)
+        self.gender_head = nn.Linear(span_hidden_dim, NUM_GENDER)  # Masc, Fem, NONE
+        self.number_head = nn.Linear(span_hidden_dim, NUM_NUMBER)  # Sing, Plur, NONE
 
         # Coarse → fine mask
         self.register_buffer("coarse_fine_mask", build_coarse_to_fine_mask())
@@ -108,6 +111,8 @@ class SpanMultiTaskModel(nn.Module):
             "svo_boundary_logits": self.svo_boundary_head(span_h),
             "svo_logits": self.svo_head(span_h),
             "voice_logits": self.voice_head(span_h),
+            "gender_logits": self.gender_head(span_h),
+            "number_logits": self.number_head(span_h),
         }
 
     def compute_loss(
@@ -119,6 +124,8 @@ class SpanMultiTaskModel(nn.Module):
             svo_boundary_labels,
             svo_labels,
             voice_labels,
+            gender_labels,
+            number_labels,
             sample_weights,
             boundary_class_weights=None,
             coarse_class_weights=None,
@@ -129,6 +136,7 @@ class SpanMultiTaskModel(nn.Module):
             lambda_svo_boundary=1.0,
             lambda_svo=1.0,
             lambda_voice=0.5,
+            lambda_morpho=0.3,
             lambda_compat=0.0,
             focal_gamma=0.0,
     ):
@@ -140,12 +148,14 @@ class SpanMultiTaskModel(nn.Module):
         """
         device = outputs["boundary_logits"].device
 
-        b_logits          = outputs["boundary_logits"]
-        c_logits          = outputs["coarse_logits"]
-        f_logits          = outputs["fine_logits"]
-        svo_b_logits      = outputs["svo_boundary_logits"]
-        svo_logits        = outputs["svo_logits"]
-        voice_logits      = outputs["voice_logits"]
+        b_logits      = outputs["boundary_logits"]
+        c_logits      = outputs["coarse_logits"]
+        f_logits      = outputs["fine_logits"]
+        svo_b_logits  = outputs["svo_boundary_logits"]
+        svo_logits    = outputs["svo_logits"]
+        voice_logits  = outputs["voice_logits"]
+        g_logits      = outputs["gender_logits"]
+        n_logits      = outputs["number_logits"]
 
         boundary_labels      = boundary_labels.to(device=device, dtype=torch.long)
         coarse_labels        = coarse_labels.to(device=device, dtype=torch.long)
@@ -153,6 +163,8 @@ class SpanMultiTaskModel(nn.Module):
         svo_boundary_labels  = svo_boundary_labels.to(device=device, dtype=torch.long)
         svo_labels           = svo_labels.to(device=device, dtype=torch.long)
         voice_labels         = voice_labels.to(device=device, dtype=torch.long)
+        gender_labels        = gender_labels.to(device=device, dtype=torch.long)
+        number_labels        = number_labels.to(device=device, dtype=torch.long)
         sample_weights       = sample_weights.to(device=device, dtype=torch.float32)
 
         if boundary_class_weights is not None:
@@ -197,7 +209,7 @@ class SpanMultiTaskModel(nn.Module):
         else:
             loss_svo = torch.tensor(0.0, device=device)
 
-        # ── 5) Voice (svo_verb uniquement) ─────────────────────────
+        # ── 6) Voice (svo_verb uniquement) ─────────────────────────────
         # VOICE_NONE_ID = NUM_VOICE (sentinel pour les spans non-verb)
         voice_mask = (voice_labels < voice_logits.size(-1))
         if voice_mask.any():
@@ -206,14 +218,31 @@ class SpanMultiTaskModel(nn.Module):
         else:
             loss_voice = torch.tensor(0.0, device=device)
 
+        # ── 7) Morpho : gender + number (spans SVO actifs) ─────────
+        # Supervisés uniquement sur les spans SVO gold (svo_label < NUM_SVO)
+        svo_active = (svo_labels < svo_logits.size(-1))
+        gender_mask = svo_active & (gender_labels < g_logits.size(-1))
+        number_mask = svo_active & (number_labels < n_logits.size(-1))
+        if gender_mask.any():
+            loss_gender = (F.cross_entropy(g_logits[gender_mask], gender_labels[gender_mask], reduction="none")
+                           * sample_weights[gender_mask]).mean()
+        else:
+            loss_gender = torch.tensor(0.0, device=device)
+        if number_mask.any():
+            loss_number = (F.cross_entropy(n_logits[number_mask], number_labels[number_mask], reduction="none")
+                           * sample_weights[number_mask]).mean()
+        else:
+            loss_number = torch.tensor(0.0, device=device)
+
         # ── Total ──────────────────────────────────────────────────
         total_loss = (
-            lambda_boundary     * loss_b
-            + lambda_coarse     * loss_c
-            + lambda_fine       * loss_f
+            lambda_boundary       * loss_b
+            + lambda_coarse       * loss_c
+            + lambda_fine         * loss_f
             + lambda_svo_boundary * loss_svo_b
-            + lambda_svo        * loss_svo
-            + lambda_voice      * loss_voice
+            + lambda_svo          * loss_svo
+            + lambda_voice        * loss_voice
+            + lambda_morpho       * (loss_gender + loss_number)
         )
 
         return {

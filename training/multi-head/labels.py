@@ -185,3 +185,21 @@ VOICE_NONE_ID = NUM_VOICE   # sentinel
 
 # Ensemble des labels silver SVO (pour le routage dans build_multitask_dataset)
 ALL_SVO_LABELS: set[str] = set(SVO_LABELS)
+
+# ─────────────────────────────────────────────────────────────
+# MORPHO LABELS  (gender + number, pour la coréf future)
+# Supervisés sur tous les spans SVO actifs (svo_label != SVO_NONE_ID)
+# ─────────────────────────────────────────────────────────────
+
+GENDER_LABELS  = ["Masc", "Fem", "NONE"]   # 0, 1, 2
+GENDER2ID      = {x: i for i, x in enumerate(GENDER_LABELS)}
+ID2GENDER      = {i: x for x, i in GENDER2ID.items()}
+NUM_GENDER     = len(GENDER_LABELS)
+GENDER_NONE_ID = GENDER2ID["NONE"]         # = 2
+
+NUMBER_LABELS  = ["Sing", "Plur", "NONE"]  # 0, 1, 2
+NUMBER2ID      = {x: i for i, x in enumerate(NUMBER_LABELS)}
+ID2NUMBER      = {i: x for x, i in NUMBER2ID.items()}
+NUM_NUMBER     = len(NUMBER_LABELS)
+NUMBER_NONE_ID = NUMBER2ID["NONE"]         # = 2
+

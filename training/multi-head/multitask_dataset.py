@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset
 
-from labels import SVO_NONE_ID, VOICE_NONE_ID
+from labels import SVO_NONE_ID, VOICE_NONE_ID, GENDER_NONE_ID, NUMBER_NONE_ID
 
 
 class MultiTaskSpanDataset(Dataset):
@@ -79,6 +79,8 @@ class MultiTaskSpanDataset(Dataset):
                 "fine_label_id": c["fine_label_id"],
                 "svo_label_id": c.get("svo_label_id", SVO_NONE_ID),
                 "voice_label_id": c.get("voice_label_id", VOICE_NONE_ID),
+                "gender_label_id": c.get("gender_label_id", GENDER_NONE_ID),
+                "number_label_id": c.get("number_label_id", NUMBER_NONE_ID),
                 "sample_weight": c.get("sample_weight", 1.0),
                 "neg_type": c.get("neg_type", "unknown"),
             })
@@ -108,6 +110,8 @@ def make_collate_fn(tokenizer):
         svo_boundary_labels = []
         svo_labels = []
         voice_labels = []
+        gender_labels = []
+        number_labels = []
         sample_weights = []
 
         ids = []
@@ -146,6 +150,8 @@ def make_collate_fn(tokenizer):
                 fine_labels.append(c["fine_label_id"])
                 svo_labels.append(c["svo_label_id"])
                 voice_labels.append(c["voice_label_id"])
+                gender_labels.append(c["gender_label_id"])
+                number_labels.append(c["number_label_id"])
                 sample_weights.append(c["sample_weight"])
 
             spans.append(sample_spans)
@@ -161,6 +167,8 @@ def make_collate_fn(tokenizer):
             "fine_labels": torch.tensor(fine_labels, dtype=torch.long),
             "svo_labels": torch.tensor(svo_labels, dtype=torch.long),
             "voice_labels": torch.tensor(voice_labels, dtype=torch.long),
+            "gender_labels": torch.tensor(gender_labels, dtype=torch.long),
+            "number_labels": torch.tensor(number_labels, dtype=torch.long),
             "sample_weights": torch.tensor(sample_weights, dtype=torch.float32),
             "invalid_candidate_count": invalid_candidate_count,
         }
