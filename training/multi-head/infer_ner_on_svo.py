@@ -78,11 +78,17 @@ def process(args):
     with open(input_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if line:
-                examples.append(json.loads(line))
+            if not line:
+                continue
+            ex = json.loads(line)
+            if args.only_with_obl:
+                if not any(sp["label"] == "svo_iobj" for sp in ex.get("spans", [])):
+                    continue
+            examples.append(ex)
 
     n_total = len(examples)
-    print(f"[INFER] {n_total} exemples chargés.")
+    qualifier = " (filtrés : contiennent svo_iobj)" if args.only_with_obl else ""
+    print(f"[INFER] {n_total} exemples chargés{qualifier}.")
 
     # Paramètres inférence NER
     infer_kwargs = dict(
@@ -173,6 +179,8 @@ def main():
     parser.add_argument("--topk-coarse",    type=int,   default=2)
     parser.add_argument("--post-process",   action="store_true",
                         help="Appliquer post_process_dynamic (NMS + seuils dynamiques)")
+    parser.add_argument("--only-with-obl",  action="store_true",
+                        help="Ne traiter que les exemples contenant au moins un svo_iobj")
     args = parser.parse_args()
     process(args)
 
