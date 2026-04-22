@@ -5,8 +5,8 @@ Soumet toutes les requêtes en batch, poll le résultat, parse et écrit.
 
 Usage:
   python3 scripts/preannotate_claude_batch.py \
-    --input data/wikinews_ready_for_mistral.jsonl \
-    --output data/wikinews_claude_annotated.jsonl \
+    --input data/train_wiki_svo_ner.jsonl \
+    --output data/train_wiki_claude_annotated.jsonl \
     --batch-size 5
 """
 import argparse
@@ -21,7 +21,7 @@ import httpx
 
 # ─── Taxonomie et prompt (identique à la version Mistral) ───
 
-TAXONOMY = """## Taxonomie NER — 32 labels fins groupés en 8 catégories
+TAXONOMY = """## Taxonomie NER — 31 labels fins groupés en 8 catégories
 
 ### PER (Personnes)
 - **hint_person_name** : nom propre de personne ("Emmanuel Macron", "Jean Dupont")
@@ -57,10 +57,9 @@ TAXONOMY = """## Taxonomie NER — 32 labels fins groupés en 8 catégories
 - **hint_object_name** : objet nommé / marque ("iPhone", "Rafale", "Falcon 9")
 
 ### VALUE (Valeurs)
-- **hint_quantity** : quantité avec unité ("15 kilomètres", "trois tonnes", "200 mégawatts")
-- **hint_measure** : mesure physique ("37°C", "magnitude 6,2", "120 dB")
+- **hint_measure** : mesure physique avec unité ("35 nœuds", "52 000 m³", "37°C", "120 dB", "15 km")
 - **hint_percentage** : pourcentage ("45 %", "un tiers")
-- **hint_count** : nombre de choses ("trois personnes", "200 soldats")
+- **hint_count** : nombre de choses ou personnes ("trois personnes", "200 soldats", "six buts")
 - **hint_money** : montant monétaire ("15 millions d'euros", "2,5 milliards de dollars")
 - **hint_rate** : taux, ratio ("3,5 %", "1 pour 1000")
 
@@ -119,29 +118,55 @@ IMPORTANT : "start" et "end" doivent correspondre EXACTEMENT à text[start:end] 
 Ne retourne RIEN d'autre que le JSON.
 """
 
+def repair_offset(text: str, span_text: str, hint_start: int, hint_end: int,
+                  window: int = 60) -> tuple[int, int] | None:
+    """
+    Tente de retrouver la bonne position de span_text dans text.
+    1. Cherche dans une fenêtre autour de l'offset suggéré par Claude.
+    2. Si non trouvé, cherche dans tout le texte (première occurrence).
+    3. Retourne (start, end) corrigés, ou None si introuvable.
+    """
+    if not span_text:
+        return None
+    # Fenêtre locale
+    lo = max(0, hint_start - window)
+    hi = min(len(text), hint_end + window)
+    idx = text.find(span_text, lo, hi)
+    if idx != -1:
+        return idx, idx + len(span_text)
+    # Recherche globale
+    idx = text.find(span_text)
+    if idx != -1:
+        return idx, idx + len(span_text)
+    return None
+
+
 VALID_LABELS = {
     "hint_person_name", "hint_person_role", "hint_norp", "hint_group_role",
     "hint_org_name", "hint_gpe", "hint_fac_name", "hint_loc_generic",
     "hint_infra", "hint_weapon", "hint_vehicle", "hint_substance",
     "hint_food", "hint_tool", "hint_object_generic", "hint_object_name",
     "hint_event_nominal", "hint_event_named", "hint_time_date",
-    "hint_time_clock", "hint_time_duration", "hint_quantity", "hint_measure",
+    "hint_time_clock", "hint_time_duration", "hint_measure",
     "hint_percentage", "hint_count", "hint_money", "hint_rate",
     "hint_law", "hint_work_of_art", "hint_concept", "hint_disease", "hint_language",
 }
 
 
 def build_user_prompt(batch: list[dict]) -> str:
+    """
+    Construit le prompt utilisateur à partir des items.
+    Chaque item a un champ "spans" contenant les spans hint_* prédits par le modèle
+    (marqués _predicted=True) ainsi que les spans svo_*/pron_* (ignorés ici).
+    """
     parts = []
     for item in batch:
-        preds = []
-        for p in item.get("predictions", []):
-            preds.append({
-                "label": p.get("fine", ""),
-                "start": p.get("char_start", 0),
-                "end": p.get("char_end", 0),
-                "text": p.get("text", ""),
-            })
+        # Extraire uniquement les spans hint_* prédits par le modèle
+        preds = [
+            {"label": sp["label"], "start": sp["start"], "end": sp["end"], "text": sp["text"]}
+            for sp in item.get("spans", [])
+            if sp.get("label", "").startswith("hint_")
+        ]
         parts.append(
             f'ID: {item["id"]}\n'
             f'Phrase: "{item["text"]}"\n'
@@ -179,7 +204,7 @@ def parse_response(response_text: str) -> list[dict]:
 
 # ─── Étape 1 : Créer le fichier JSONL de requêtes pour le Batch API ───
 
-def create_batch_requests(candidates: list[dict], batch_size: int, output_jsonl: str, args_model: str = "claude-sonnet-4-20250514"):
+def create_batch_requests(candidates: list[dict], batch_size: int, output_jsonl: str, args_model: str = "claude-sonnet-4-6"):
     """Crée le fichier JSONL des requêtes batch Claude."""
     batches = []
     for i in range(0, len(candidates), batch_size):
@@ -312,8 +337,11 @@ def fetch_results(api_key: str, batch_id: str) -> list[dict]:
 # ─── Étape 5 : Parser et écrire ───
 
 def process_results(results: list[dict], batches: list[list[dict]], output: str):
-    """Parse les résultats batch et écrit le JSONL final."""
-    # Indexer les batches par custom_id
+    """
+    Parse les résultats batch et écrit le JSONL final.
+    Les spans svo_*/pron_* de l'input sont PRÉSERVÉS dans la sortie,
+    seules les annotations hint_* sont remplacées par celles de Claude.
+    """
     batch_by_id = {f"batch_{i}": batch for i, batch in enumerate(batches)}
 
     label_stats = Counter()
@@ -328,7 +356,6 @@ def process_results(results: list[dict], batches: list[list[dict]], output: str)
             batch = batch_by_id.get(custom_id, [])
 
             if result_type == "succeeded":
-                # Extraire le texte de la réponse
                 message = result["result"]["message"]
                 content_blocks = message.get("content", [])
                 response_text = ""
@@ -341,19 +368,36 @@ def process_results(results: list[dict], batches: list[list[dict]], output: str)
 
                 for item in batch:
                     item_id = item["id"]
+                    # Spans non-NER (svo_*, pron_*) à conserver tels quels
+                    svo_spans = [
+                        sp for sp in item.get("spans", [])
+                        if not sp.get("label", "").startswith("hint_")
+                    ]
+
                     if item_id in result_by_id:
                         corrected = result_by_id[item_id]
-                        valid_spans = []
+                        ner_spans = []
                         for s in corrected.get("spans", []):
                             if all(k in s for k in ("label", "start", "end", "text")):
                                 if s["label"] in VALID_LABELS:
-                                    valid_spans.append(s)
-                                    label_stats[s["label"]] += 1
+                                    span_text = s["text"]
+                                    start, end = s["start"], s["end"]
+                                    if item["text"][start:end] == span_text:
+                                        ner_spans.append(s)
+                                        label_stats[s["label"]] += 1
+                                    else:
+                                        # Tentative de réparation
+                                        fixed = repair_offset(item["text"], span_text, start, end)
+                                        if fixed is not None:
+                                            ner_spans.append({**s, "start": fixed[0], "end": fixed[1]})
+                                            label_stats[s["label"]] += 1
+                                            label_stats["_repaired"] += 1
+                                        else:
+                                            label_stats["_dropped"] += 1
                         record = {
                             "id": item_id,
                             "text": item["text"],
-                            "spans": valid_spans,
-                            "source_title": item.get("source_title", ""),
+                            "spans": svo_spans + ner_spans,
                         }
                     else:
                         record = _make_fallback(item)
@@ -362,55 +406,56 @@ def process_results(results: list[dict], batches: list[list[dict]], output: str)
                     out.write(json.dumps(record, ensure_ascii=False) + "\n")
                     n_processed += 1
             else:
-                # Erreur — fallback
                 n_errors += 1
                 error_msg = result.get("result", {}).get("error", {}).get("message", "unknown")
                 print(f"  ❌ {custom_id}: {error_msg}")
                 for item in batch:
-                    record = _make_fallback(item)
-                    out.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    out.write(json.dumps(_make_fallback(item), ensure_ascii=False) + "\n")
                     n_processed += 1
 
     print(f"\n{'='*60}")
     print(f"✅ {n_processed} phrases traitées → {output}")
     print(f"❌ {n_errors} batches en erreur")
     print(f"⚠️  {n_fallback} phrases sans match ID (fallback)")
+    if label_stats.get("_repaired"):
+        print(f"🔧 {label_stats['_repaired']} spans avec offset réparé automatiquement")
+    if label_stats.get("_dropped"):
+        print(f"⚠️  {label_stats['_dropped']} spans irrécupérables supprimés (texte introuvable)")
     print(f"\n📊 Distribution des labels annotés :")
     for label, count in label_stats.most_common():
-        print(f"  {label:<25} {count:>6}")
+        if not label.startswith("_"):
+            print(f"  {label:<25} {count:>6}")
 
 
 def _make_fallback(item: dict) -> dict:
-    preds_as_spans = [
-        {"label": p.get("fine",""), "start": p.get("char_start",0),
-         "end": p.get("char_end",0), "text": p.get("text","")}
-        for p in item.get("predictions", [])
-    ]
+    """Fallback : on garde les spans tels quels (hint_* prédits + svo_*)."""
     return {
         "id": item["id"],
         "text": item["text"],
-        "spans": preds_as_spans,
-        "source_title": item.get("source_title", ""),
+        "spans": item.get("spans", []),
         "_fallback": True,
     }
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True, help="JSONL candidates")
-    parser.add_argument("--output", required=True, help="JSONL sortie annotée")
+    parser.add_argument("--input", required=True, help="JSONL candidates (train_wiki_svo_ner.jsonl)")
+    parser.add_argument("--output", required=True, help="JSONL sortie annotée par Claude")
     parser.add_argument("--api-key", default=None)
     parser.add_argument("--batch-size", type=int, default=5, help="Phrases par requête")
     parser.add_argument("--max-sentences", type=int, default=None)
     parser.add_argument("--poll-interval", type=int, default=30, help="Intervalle de polling (s)")
-    parser.add_argument("--model", default="claude-3-5-sonnet-20241022")
-    # Sous-commandes
+    parser.add_argument("--model", default="claude-sonnet-4-6")
     parser.add_argument("--batch-id", default=None, help="Reprendre un batch existant (skip submit)")
     parser.add_argument("--requests-file", default="data/_claude_batch_requests.jsonl")
+    parser.add_argument("--results-file", default=None,
+                        help="Fichier de résultats JSONL déjà téléchargé (skip submit+poll+fetch)")
     args = parser.parse_args()
 
     api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    # La clé n'est nécessaire que si on doit soumettre/poller/fetcher le batch
+    need_api = not args.results_file
+    if need_api and not api_key:
         print("❌ Clé API manquante. --api-key ou ANTHROPIC_API_KEY")
         sys.exit(1)
 
@@ -447,10 +492,26 @@ def main():
         print("✅ Rien à traiter!")
         return
 
-    # Étape 1 : Créer les requêtes batch
+    # Reconstruire les batches (toujours nécessaire pour process_results)
     batches_list = []
     for i in range(0, len(candidates), args.batch_size):
         batches_list.append(candidates[i : i + args.batch_size])
+
+    # ── Cas : résultats déjà téléchargés localement ──
+    if args.results_file:
+        print(f"📂 Lecture des résultats locaux depuis {args.results_file}…")
+        results = []
+        with open(args.results_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        results.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+        print(f"📥 {len(results)} résultats chargés depuis le fichier local")
+        process_results(results, batches_list, args.output)
+        return
 
     if not args.batch_id:
         # Créer le fichier de requêtes

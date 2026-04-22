@@ -25,13 +25,16 @@ from pathlib import Path
 
 import torch
 
+import torch
 from test_model_sentences_v3 import (
-    load_model_and_tokenizer,
     predict_texts_batch,
     post_process_dynamic,
     dedupe_overlaps,
     pick_device,
 )
+from test_model_sentences_v3 import load_model_and_tokenizer as _load_model_and_tokenizer
+from multitask_model import SpanMultiTaskModel
+from transformers import AutoTokenizer
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -52,6 +55,31 @@ def ner_pred_to_span(pred: dict) -> dict:
     }
 
 
+def load_model_and_tokenizer_compat(model_name, checkpoint_path, tokenizer_path, device):
+    """Comme load_model_and_tokenizer mais avec strict=False pour compatibilité checkpoint ancien."""
+    try:
+        model, tokenizer = _load_model_and_tokenizer(model_name, checkpoint_path, tokenizer_path, device)
+        return model, tokenizer
+    except RuntimeError as e:
+        if "Missing key" not in str(e) and "Unexpected key" not in str(e):
+            raise
+        print(f"[INFER] ⚠️  Chargement strict échoué ({e})")
+        print("[INFER]    → Rechargement avec strict=False (heads manquantes initialisées aléatoirement)")
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path or model_name, use_fast=True)
+        if getattr(tokenizer, "model_max_length", None) is None or tokenizer.model_max_length > 100000:
+            tokenizer.model_max_length = 128
+        model = SpanMultiTaskModel(model_name=model_name).to(device).float()
+        ckpt = torch.load(checkpoint_path, map_location=device)
+        state = ckpt["model_state"] if isinstance(ckpt, dict) and "model_state" in ckpt else ckpt
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        if missing:
+            print(f"[INFER]    Clés manquantes (ignorées) : {missing}")
+        if unexpected:
+            print(f"[INFER]    Clés inattendues (ignorées) : {unexpected}")
+        model.eval()
+        return model, tokenizer
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Pipeline
 # ─────────────────────────────────────────────────────────────────────────────
@@ -61,7 +89,7 @@ def process(args):
     print(f"[INFER] device = {device}")
 
     print(f"[INFER] Chargement du modèle {args.checkpoint}…")
-    model, tokenizer = load_model_and_tokenizer(
+    model, tokenizer = load_model_and_tokenizer_compat(
         model_name=args.model_name,
         checkpoint_path=args.checkpoint,
         tokenizer_path=args.tokenizer_path,

@@ -609,6 +609,8 @@ def main():
                         help="Afficher les triplets (S,V,O) reconstruits")
     parser.add_argument("--no-triplets", action="store_true")
     parser.add_argument("--text", action="append", default=[])
+    parser.add_argument("--input-text", default=None,
+                        help="Texte passé directement en argument (alternative à --text)")
     parser.add_argument("--input-file", default=None)
     parser.add_argument("--json-out", default=None)
     parser.add_argument("--batch-size", type=int, default=32)
@@ -628,6 +630,8 @@ def main():
     )
 
     texts = list(args.text)
+    if args.input_text:
+        texts.append(args.input_text)
     if args.input_file:
         with open(args.input_file, "r", encoding="utf-8") as f:
             texts.extend([line.rstrip("\n") for line in f if line.strip()])
