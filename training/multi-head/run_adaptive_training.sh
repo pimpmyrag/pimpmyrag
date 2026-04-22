@@ -13,10 +13,18 @@ if [ -f venv/bin/activate ]; then
     echo "🐍 Activation venv local"
     source venv/bin/activate
 else
-    echo "🐍 Pas de venv détecté — vérification des dépendances"
+    echo "🐍 Pas de venv détecté — installation des dépendances"
+    # Toujours forcer l'install des packages critiques pour DeBERTa v3
+    pip install -q sentencepiece protobuf
     if [ -f requirements.txt ]; then
         pip install -q -r requirements.txt
     fi
+fi
+
+# Vérification sentencepiece (requis par DeBERTa v3)
+if ! python3 -c "import sentencepiece" 2>/dev/null; then
+    echo "⚠️  sentencepiece manquant — install forcé"
+    pip install sentencepiece protobuf
 fi
 
 # ── Détection device & batch size ────────────────────────
