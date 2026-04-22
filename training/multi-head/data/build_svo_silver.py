@@ -54,6 +54,12 @@ AUX_DEPRELS   = {"aux", "aux:pass", "cop"}
 # Sous-arbres exclus du span NP pour éviter les relatives longues
 EXCLUDE_FROM_NP = {"relcl", "acl", "advcl", "ccomp", "xcomp", "parataxis"}
 
+# Dépendances incluses pour former le span "tête NE" (NE multi-tokens)
+# Exclut déterminants, adjectifs, numéraux → garde uniquement les composantes lexicales du nom
+NE_INCLUDE_DEPRELS = {"flat", "flat:name", "nmod:name", "compound", "goeswith"}
+# Dépendances des conjonctions coordonnées → chaque conjoint est un span séparé
+CONJ_DEPRELS = {"conj"}
+
 # Pronoms personnels français (liste fermée)
 FR_PERS_PRONOUNS = {
     "je", "j", "me", "m", "moi",
@@ -129,6 +135,31 @@ def charspan(indices: list[int], by_idx: dict, sent_text: str,
     return cs, ce, sent_text[cs - sent_offset: ce - sent_offset]
 
 
+def head_ne_indices(root_idx: int, children: dict, by_idx: dict) -> list[int]:
+    """
+    Retourne les indices du token tête + ses dépendants NE (flat, compound…),
+    sans les déterminants, adjectifs, numéraux, etc.
+    Utilisé pour aligner les frontières SVO sur celles du NER (tête nominale NE).
+    """
+    res = [root_idx]
+    for c in children.get(root_idx, []):
+        if c in by_idx and by_idx[c].deprel in NE_INCLUDE_DEPRELS:
+            res.extend(head_ne_indices(c, children, by_idx))
+    return res
+
+
+def collect_conjoints(root_idx: int, children: dict, by_idx: dict) -> list[int]:
+    """
+    Retourne les indices des tokens directement liés par conj au root
+    (conjonction de coordination : Pierre [et] Paul).
+    Chaque conjoint sera émis comme span séparé.
+    """
+    return [
+        c for c in children.get(root_idx, [])
+        if c in by_idx and by_idx[c].deprel in CONJ_DEPRELS
+    ]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Extraction SVO + pronoms pour une phrase
 # ─────────────────────────────────────────────────────────────────────────────
@@ -196,20 +227,36 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str) -> list[dict]:
             else:
                 continue
 
-            np_idx = subtree(child_idx, children, by_idx, exclude=EXCLUDE_FROM_NP)
-            cs, ce, txt = charspan(np_idx, by_idx, sent_text, sent_offset)
-            if len(txt.strip()) < 2:
-                continue
+            # Collecter les conjoints (Pierre [et] Paul → deux spans séparés)
+            conjoints = [child_idx] + collect_conjoints(child_idx, children, by_idx)
 
-            spans.append({
-                "start":      cs,
-                "end":        ce,
-                "text":       txt,
-                "label":      arg_label,
-                "voice":      voice,
-                "head_lemma": child.lemma,
-                "head_upos":  child.upos,
-            })
+            for cj_idx in conjoints:
+                if cj_idx not in by_idx:
+                    continue
+                cj = by_idx[cj_idx]
+
+                # Span "tête NE" : tête + flat/compound uniquement (aligne avec NER)
+                ne_idx = head_ne_indices(cj_idx, children, by_idx)
+                cs, ce, txt = charspan(ne_idx, by_idx, sent_text, sent_offset)
+                if len(txt.strip()) < 1:
+                    continue
+
+                # Span complet du NP (conservé comme info contexte)
+                full_idx = subtree(cj_idx, children, by_idx, exclude=EXCLUDE_FROM_NP)
+                fcs, fce, ftxt = charspan(full_idx, by_idx, sent_text, sent_offset)
+
+                spans.append({
+                    "start":           cs,    # frontière tête NE (aligne NER)
+                    "end":             ce,
+                    "text":            txt,
+                    "label":           arg_label,
+                    "voice":           voice,
+                    "head_lemma":      cj.lemma,
+                    "head_upos":       cj.upos,
+                    "full_np_start":   fcs,   # GN complet conservé en métadonnée
+                    "full_np_end":     fce,
+                    "full_np_text":    ftxt,
+                })
 
     # ── Pronoms personnels (avec features morpho) ─────────────────────────────
     for tok in tokens:
