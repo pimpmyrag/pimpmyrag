@@ -66,21 +66,20 @@ log_file="logs/adaptive.log"
 echo "🚀 Démarrage training adaptatif — $(date)" | tee $log_file
 
 # ── Fusion silver (auto-détection des sources disponibles) ───────────────────
-# Ajouter une source : créer le fichier et il sera inclus automatiquement au prochain run.
+# Dataset v3 = source principale (NER gold/silver + spans UD/SVO Stanza, re-splitté stratifié)
 # Format : chemin:weight  (weight=1.0 = poids normal, <1.0 = silver de moindre qualité)
-SILVER_SOURCES="$DATA/train_svo_silver.jsonl:1.0"
-[ -f "$DATA/train_obliques_wiki.jsonl"  ] && SILVER_SOURCES="$SILVER_SOURCES $DATA/train_obliques_wiki.jsonl:0.6"
-[ -f "$DATA/train_svo_de.jsonl"         ] && SILVER_SOURCES="$SILVER_SOURCES $DATA/train_svo_de.jsonl:0.8"
-[ -f "$DATA/train_svo_en.jsonl"         ] && SILVER_SOURCES="$SILVER_SOURCES $DATA/train_svo_en.jsonl:0.8"
+SILVER_SOURCES="$DATA/train_v3.jsonl:1.0"
+[ -f "$DATA/train_svo_de.jsonl"  ] && SILVER_SOURCES="$SILVER_SOURCES $DATA/train_svo_de.jsonl:0.8"
+[ -f "$DATA/train_svo_en.jsonl"  ] && SILVER_SOURCES="$SILVER_SOURCES $DATA/train_svo_en.jsonl:0.8"
 # Ajouter d'autres sources ici au fur et à mesure
 
-echo "📦 Fusion silver train..." | tee -a $log_file
+echo "📦 Fusion silver train (base: train_v3.jsonl)..." | tee -a $log_file
 python3 merge_silver.py --sources $SILVER_SOURCES --out $DATA/train_svo_silver_merged.jsonl | tee -a $log_file
 TRAIN_SILVER="$DATA/train_svo_silver_merged.jsonl"
 
-# Val/test : pas de fusion (une seule source, toujours FR gold)
-VAL_SILVER="$DATA/val_svo_silver.jsonl"
-TEST_SILVER="$DATA/test_svo_silver.jsonl"
+# Val/test : v3 (NER + UD, répartition stratifiée sur labels rares)
+VAL_SILVER="$DATA/val_v3.jsonl"
+TEST_SILVER="$DATA/test_v3.jsonl"
 
 rebuild_dataset() {
     local level=$1
