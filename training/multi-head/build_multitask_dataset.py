@@ -435,6 +435,12 @@ def make_multitask_row(row, tokenizer, hard_per_gold=6, soft_factor=2.0, max_spa
         if c["text"] is None:
             c["text"] = text[c["char_start"]:c["char_end"]]
 
+    # Appliquer le _source_weight de merge_silver.py si présent
+    source_weight = row.get("_source_weight", 1.0)
+    if source_weight != 1.0:
+        for c in candidates:
+            c["sample_weight"] = c.get("sample_weight", 1.0) * source_weight
+
     return {
         "id": row["id"],
         "text": text,

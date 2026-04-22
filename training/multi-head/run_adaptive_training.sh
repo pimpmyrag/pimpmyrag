@@ -65,15 +65,32 @@ mkdir -p logs
 log_file="logs/adaptive.log"
 echo "🚀 Démarrage training adaptatif — $(date)" | tee $log_file
 
+# ── Fusion silver (auto-détection des sources disponibles) ───────────────────
+# Ajouter une source : créer le fichier et il sera inclus automatiquement au prochain run.
+# Format : chemin:weight  (weight=1.0 = poids normal, <1.0 = silver de moindre qualité)
+SILVER_SOURCES="$DATA/train_svo_silver.jsonl:1.0"
+[ -f "$DATA/train_obliques_wiki.jsonl"  ] && SILVER_SOURCES="$SILVER_SOURCES $DATA/train_obliques_wiki.jsonl:0.6"
+[ -f "$DATA/train_svo_de.jsonl"         ] && SILVER_SOURCES="$SILVER_SOURCES $DATA/train_svo_de.jsonl:0.8"
+[ -f "$DATA/train_svo_en.jsonl"         ] && SILVER_SOURCES="$SILVER_SOURCES $DATA/train_svo_en.jsonl:0.8"
+# Ajouter d'autres sources ici au fur et à mesure
+
+echo "📦 Fusion silver train..." | tee -a $log_file
+python3 merge_silver.py --sources $SILVER_SOURCES --out $DATA/train_svo_silver_merged.jsonl | tee -a $log_file
+TRAIN_SILVER="$DATA/train_svo_silver_merged.jsonl"
+
+# Val/test : pas de fusion (une seule source, toujours FR gold)
+VAL_SILVER="$DATA/val_svo_silver.jsonl"
+TEST_SILVER="$DATA/test_svo_silver.jsonl"
+
 rebuild_dataset() {
     local level=$1
     local hard=${HARD_PER_GOLD[$level]}
     local soft=${SOFT_FACTORS[$level]}
     local name=${LEVEL_NAMES[$level]}
     echo "🔧 Build dataset niveau $level ($name) — hard_per_gold=$hard soft_factor=$soft" | tee -a $log_file
-    # Utiliser les fichiers SVO silver (NER + SVO fusionnés)
+    # Utiliser le silver fusionné (NER + SVO + obliques + langues supplémentaires)
     python3 build_multitask_dataset.py \
-        --input  $DATA/train_svo_silver.jsonl \
+        --input  $TRAIN_SILVER \
         --output $DATA/train.adaptive.multitask.jsonl \
         --model-name $MODEL \
         --hard-per-gold $hard \
@@ -84,7 +101,7 @@ rebuild_dataset() {
 # Build val/test une seule fois
 echo "📦 Build val/test datasets..." | tee -a $log_file
 python3 build_multitask_dataset.py \
-    --input  $DATA/val_svo_silver.jsonl \
+    --input  $VAL_SILVER \
     --output $DATA/val.multitask.jsonl \
     --model-name $MODEL \
     --hard-per-gold 6 \
@@ -92,7 +109,7 @@ python3 build_multitask_dataset.py \
     --max-span-len 12
 
 python3 build_multitask_dataset.py \
-    --input  $DATA/test_svo_silver.jsonl \
+    --input  $TEST_SILVER \
     --output $DATA/test.multitask.jsonl \
     --model-name $MODEL \
     --hard-per-gold 6 \
