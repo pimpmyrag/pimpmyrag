@@ -43,6 +43,7 @@ Usage
 import argparse
 import json
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -358,6 +359,10 @@ def process_file(
     out_examples_count = 0
     label_counts: Counter = Counter()
 
+    t_start   = time.time()
+    t_last    = t_start
+    cnt_last  = 0  # out_examples_count au dernier log
+
     # Buffer pour le traitement par batch Stanza
     batch_rows: list[dict] = []
     batch_texts: list[str] = []
@@ -442,7 +447,16 @@ def process_file(
             if len(batch_texts) >= batch_size:
                 flush_batch(f_out)
                 if (n_total_in % 2000) == 0:
-                    print(f"  [ligne {line_idx + 1}] {n_total_in} traitées → {out_examples_count} avec SVO"
+                    now      = time.time()
+                    elapsed  = now - t_start
+                    delta_t  = now - t_last
+                    delta_n  = out_examples_count - cnt_last
+                    rate_now = delta_n / delta_t if delta_t > 0 else 0.0
+                    rate_avg = out_examples_count / elapsed if elapsed > 0 else 0.0
+                    t_last   = now
+                    cnt_last = out_examples_count
+                    print(f"  [ligne {line_idx + 1}] {n_total_in} lues → {out_examples_count} sélectionnées"
+                          f" | {rate_now:.1f} ex/s (inst)  {rate_avg:.1f} ex/s (moy)"
                           f" | {dict(label_counts.most_common(4))}")
 
             if max_examples > 0 and out_examples_count >= max_examples:
@@ -452,8 +466,10 @@ def process_file(
         # Flush du dernier batch partiel
         flush_batch(f_out)
 
+    elapsed_total = time.time() - t_start
+    rate_total    = out_examples_count / elapsed_total if elapsed_total > 0 else 0.0
     print(f"\n[SVO] ✅ {out_examples_count} exemples écrits → {output_path}")
-    print(f"[SVO]    (source: {n_total_in} lignes traitées)")
+    print(f"[SVO]    (source: {n_total_in} lignes traitées | durée: {elapsed_total:.1f}s | {rate_total:.1f} ex/s)")
     print("\n[SVO] Répartition des nouveaux labels :")
     for label, count in sorted(label_counts.items()):
         print(f"  {label:<20} : {count:>6}")
