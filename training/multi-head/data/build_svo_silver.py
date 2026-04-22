@@ -56,7 +56,8 @@ import stanza
 
 SUBJ_DEPRELS  = {"nsubj", "nsubj:pass", "csubj", "csubj:pass"}
 OBJ_DEPRELS   = {"obj", "ccomp", "xcomp"}
-IOBJ_DEPRELS  = {"iobj", "obl"}
+# Stanza fr utilise obl:mod / obl:arg / obl:agent — pas "obl" nu
+IOBJ_DEPRELS  = {"iobj", "obl", "obl:mod", "obl:arg", "obl:agent", "obl:comp"}
 AUX_DEPRELS   = {"aux", "aux:pass", "cop"}
 
 # Sous-arbres exclus du span NP pour éviter les relatives longues
@@ -154,6 +155,22 @@ def head_ne_indices(root_idx: int, children: dict, by_idx: dict) -> list[int]:
         if c in by_idx and by_idx[c].deprel in NE_INCLUDE_DEPRELS:
             res.extend(head_ne_indices(c, children, by_idx))
     return res
+
+
+def iobj_indices_with_case(root_idx: int, children: dict, by_idx: dict) -> list[int]:
+    """
+    Pour un span svo_iobj nominal : retourne la préposition (case) + la tête NE.
+    Ex : "à Paris" → [idx_à, idx_Paris]
+         "pour les réfugiés" → [idx_pour, idx_réfugiés]
+    Si pas de case, retourne juste head_ne_indices (GP sans préposition explicite).
+    """
+    # Chercher le token case (préposition) enfant de root_idx
+    case_tokens = [
+        c for c in children.get(root_idx, [])
+        if c in by_idx and by_idx[c].deprel in {"case", "mark"}
+    ]
+    ne_idx = head_ne_indices(root_idx, children, by_idx)
+    return sorted(set(case_tokens + ne_idx))
 
 
 def collect_conjoints(root_idx: int, children: dict, by_idx: dict) -> list[int]:
@@ -255,18 +272,19 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str,
                     continue
                 cj = by_idx[cj_idx]
 
-                # Span "tête NE" : tête + flat/compound uniquement (aligne avec NER)
-                ne_idx = head_ne_indices(cj_idx, children, by_idx)
+                # Span : pour iobj → inclure la préposition (case) pour avoir "à Paris"
+                # Pour subject/object → head NE uniquement (aligne avec NER)
+                if arg_label == "svo_iobj":
+                    ne_idx = iobj_indices_with_case(cj_idx, children, by_idx)
+                else:
+                    ne_idx = head_ne_indices(cj_idx, children, by_idx)
                 cs, ce, txt = charspan(ne_idx, by_idx, sent_text, sent_offset)
                 if len(txt.strip()) < 1:
                     continue
 
-                # Filtrer svo_iobj clitiques : déjà capturés comme pron_obj,
-                # et causent chevauchement + signal contradictoire au modèle.
-                # On filtre aussi les pronoms relatifs (dont, que, où) et
-                # les formes impératives inversées (-moi, -toi…).
-                # Un vrai oblique intéressant est un GP nominal (> 2 chars, pas clitique,
-                # contient au moins une lettre alphabétique).
+                # Filtrer svo_iobj : on ne veut que les obliques nominaux (NOUN/PROPN)
+                # avec une préposition explicite (case enfant) → "à Paris", "pour les partis"
+                # Les pronoms clitiques, relatifs et artefacts sont exclus.
                 if arg_label == "svo_iobj":
                     import re as _re
                     txt_lc = txt.strip().lower().rstrip("'")
@@ -275,9 +293,11 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str,
                         "-moi", "-toi", "-lui", "-nous", "-vous", "-leur",
                         "-le", "-la", "-les", "-en", "-y",
                     }
+                    # Doit être NOUN ou PROPN, avoir au moins une lettre, pas clitique
                     if (txt_lc in _IOBJ_NOISE
                             or len(txt.strip()) <= 2
-                            or not _re.search(r'[a-zA-ZÀ-ÿ]', txt)):
+                            or not _re.search(r'[a-zA-ZÀ-ÿ]', txt)
+                            or cj.upos not in {"NOUN", "PROPN", "NUM"}):
                         continue
 
                 # Span complet du NP (conservé comme info contexte)
