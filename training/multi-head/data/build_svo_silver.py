@@ -22,6 +22,13 @@ Métadonnées par span
   voice       : "ACTIVE" | "PASSIVE"
   head_lemma  : lemme du mot tête du span
   head_upos   : POS universel du mot tête
+  # tous les arguments (nsubj/nobj/obl) :
+  gender      : "Masc" | "Fem" | null
+  number      : "Sing" | "Plur" | null
+  person      : "1" | "2" | "3" | null  (surtout utile pour les pronoms)
+  animacy     : "Anim" | "Inan" | null
+  definiteness: "Def" | "Ind" | null
+  full_np_start/end/text : GN complet (sous-arbre sans relative) conservé en métadonnée
   # pronoms seulement :
   pron_person : "1" | "2" | "3"
   pron_number : "Sing" | "Plur"
@@ -245,6 +252,8 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str) -> list[dict]:
                 full_idx = subtree(cj_idx, children, by_idx, exclude=EXCLUDE_FROM_NP)
                 fcs, fce, ftxt = charspan(full_idx, by_idx, sent_text, sent_offset)
 
+                # Features morpho du token tête (utiles pour la coréf)
+                cj_word = sentence.words[cj.idx - 1]
                 spans.append({
                     "start":           cs,    # frontière tête NE (aligne NER)
                     "end":             ce,
@@ -253,6 +262,12 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str) -> list[dict]:
                     "voice":           voice,
                     "head_lemma":      cj.lemma,
                     "head_upos":       cj.upos,
+                    # Morphologie (coréf)
+                    "gender":          _feat(cj_word, "Gender"),    # Masc | Fem | null
+                    "number":          _feat(cj_word, "Number"),    # Sing | Plur | null
+                    "person":          _feat(cj_word, "Person"),    # 1 | 2 | 3 | null
+                    "animacy":         _feat(cj_word, "Animacy"),   # Anim | Inan | null
+                    "definiteness":    _feat(cj_word, "Definite"),  # Def | Ind | null
                     "full_np_start":   fcs,   # GN complet conservé en métadonnée
                     "full_np_end":     fce,
                     "full_np_text":    ftxt,
