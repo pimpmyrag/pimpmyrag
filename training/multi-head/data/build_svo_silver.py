@@ -261,6 +261,14 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str,
                 if len(txt.strip()) < 1:
                     continue
 
+                # Filtrer svo_iobj clitiques : déjà capturés comme pron_obj,
+                # et causent chevauchement + signal contradictoire au modèle.
+                # Un vrai oblique intéressant est un GP nominal (> 2 chars, pas clitique).
+                if arg_label == "svo_iobj":
+                    txt_lc = txt.strip().lower().rstrip("'")
+                    if txt_lc in FR_PERS_PRONOUNS or len(txt.strip()) <= 2:
+                        continue
+
                 # Span complet du NP (conservé comme info contexte)
                 full_idx = subtree(cj_idx, children, by_idx, exclude=EXCLUDE_FROM_NP)
                 fcs, fce, ftxt = charspan(full_idx, by_idx, sent_text, sent_offset)
