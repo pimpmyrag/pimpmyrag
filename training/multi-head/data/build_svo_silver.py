@@ -172,15 +172,21 @@ def collect_conjoints(root_idx: int, children: dict, by_idx: dict) -> list[int]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def extract_sentence(sentence, sent_offset: int, orig_text: str,
-                     require_obl: bool = False) -> list[dict]:
+                     require_obl: bool = False,
+                     max_sent_tokens: int = 0) -> list[dict]:
     """
     Retourne une liste de spans SVO + pronoms au format dict :
       {"start", "end", "text", "label", "voice", "head_lemma", "head_upos",
        "pron_person"?, "pron_number"?, "pron_gender"?}
     Si require_obl=True, retourne [] si la phrase ne contient aucun oblique (obl/iobj).
+    Si max_sent_tokens > 0, retourne [] si la phrase dépasse ce nombre de tokens Stanza.
     """
     tokens = [Tok(w, sent_offset) for w in sentence.words if w.start_char is not None]
     if not tokens:
+        return []
+
+    # Filtre longueur (évite les phrases trop longues pour DeBERTa)
+    if max_sent_tokens > 0 and len(tokens) > max_sent_tokens:
         return []
 
     # Filtre : la phrase doit contenir au moins un oblique
@@ -336,14 +342,17 @@ def process_file(
     max_examples: int = 0,
     resume_from: int = 0,
     require_obl: bool = False,
+    max_sent_tokens: int = 0,
+    max_sents: int = 0,
 ):
     """
     Traitement en streaming : lecture ligne par ligne + écriture au fil de l'eau.
-    - batch_size   : nb de phrases envoyées à Stanza en une fois (throughput x3-5)
-    - max_examples : arrêter après N exemples produits (0 = illimité)
-    - resume_from  : reprendre à partir de la ligne N du fichier source (0 = début)
-                     utile si le processus a crashé en cours de route
-    - require_obl  : ne conserver que les phrases contenant au moins un oblique (obl/iobj)
+    - batch_size      : nb de phrases envoyées à Stanza en une fois (throughput x3-5)
+    - max_examples    : arrêter après N exemples produits (0 = illimité)
+    - resume_from     : reprendre à partir de la ligne N du fichier source (0 = début)
+    - require_obl     : ne conserver que les phrases contenant au moins un oblique (obl/iobj)
+    - max_sent_tokens : ignorer les phrases Stanza dépassant N tokens (0 = illimité)
+    - max_sents       : ne traiter que les N premières phrases d'un exemple (0 = toutes)
     """
     n_total_in = 0
     out_examples_count = 0
@@ -369,9 +378,11 @@ def process_file(
             text = ex.get("text", "")
             all_new_spans: list[dict] = []
             char_offset = 0
-            for sent in doc.sentences:
+            sents = doc.sentences if max_sents == 0 else doc.sentences[:max_sents]
+            for sent in sents:
                 new_spans = extract_sentence(sent, char_offset, text,
-                                             require_obl=require_obl)
+                                             require_obl=require_obl,
+                                             max_sent_tokens=max_sent_tokens)
                 all_new_spans.extend(new_spans)
                 char_offset += len(sent.text)
                 rest = text[char_offset:]
@@ -475,6 +486,10 @@ def main():
                         help="Reprendre à partir de la ligne N du fichier source (après un crash)")
     parser.add_argument("--require-obl", action="store_true",
                         help="Ne garder que les phrases contenant au moins un oblique (obl/iobj)")
+    parser.add_argument("--max-sent-tokens", type=int, default=0,
+                        help="Ignorer les phrases Stanza > N tokens (0=illimité, ex: 128 pour DeBERTa)")
+    parser.add_argument("--max-sents", type=int, default=0,
+                        help="Ne traiter que les N premières phrases par exemple (0=toutes)")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -505,6 +520,8 @@ def main():
             max_examples=args.max_examples,
             resume_from=args.resume_from,
             require_obl=args.require_obl,
+            max_sent_tokens=args.max_sent_tokens,
+            max_sents=args.max_sents,
         )
         print()
 
