@@ -188,7 +188,9 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
     # Log résumé SVO depuis le log epoch
     svo_f1=$(grep "SVO F1=" $epoch_log | tail -1 | grep -oE "SVO F1=[0-9.]+" | cut -d= -f2 || echo "?")
     voice_f1=$(grep "Voice F1=" $epoch_log | tail -1 | grep -oE "Voice F1=[0-9.]+" | head -1 | cut -d= -f2 || echo "?")
-    echo "📊 Epoch $current_epoch — Val Score=$val_score SVO_F1=$svo_f1 Voice_F1=$voice_f1 (best=$best_score)" | tee -a $log_file
+    gender_f1=$(grep "Gender F1=" $epoch_log | tail -1 | grep -oE "Gender F1=[0-9.]+" | cut -d= -f2 || echo "?")
+    number_f1=$(grep "Number F1=" $epoch_log | tail -1 | grep -oE "Number F1=[0-9.]+" | cut -d= -f2 || echo "?")
+    echo "📊 Epoch $current_epoch — Val Score=$val_score SVO_F1=$svo_f1 Voice_F1=$voice_f1 Gender_F1=$gender_f1 Number_F1=$number_f1 (best=$best_score)" | tee -a $log_file
 
     improved=$(python3 -c "print('yes' if float('$val_score') > float('$best_score') + $MIN_DELTA else 'no')")
 

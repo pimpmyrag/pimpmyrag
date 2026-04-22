@@ -22,7 +22,7 @@ from labels import COARSE_LABELS, FINE_LABELS, SVO_LABELS, NUM_SVO, NUM_VOICE, N
 #  Inline Hard Negative Mining — constantes
 # ──────────────────────────────────────────────────────────
 _LOW_PRECISION_COARSE = {"VALUE", "EVENT", "TIME", "ABSTRACT"}
-_LOW_F1_FINE = {"hint_quantity", "hint_measure", "hint_rate", "hint_infra", "hint_object_generic"}
+_LOW_F1_FINE = {"hint_measure", "hint_rate", "hint_infra", "hint_object_generic"}
 _FP_LOW_PREC_EXTRA = 1.5
 _FINE_ERR_EXTRA    = 1.4
 
@@ -1082,7 +1082,9 @@ def main():
             f"Coarse F1={train_metrics['coarse_macro_f1']:.4f} | "
             f"Fine F1={train_metrics['fine_macro_f1']:.4f} | "
             f"SVO F1={train_metrics['svo_macro_f1']:.4f} | "
-            f"Voice F1={train_metrics['voice_macro_f1']:.4f}"
+            f"Voice F1={train_metrics['voice_macro_f1']:.4f} | "
+            f"Gender F1={train_metrics['gender_macro_f1']:.4f} | "
+            f"Number F1={train_metrics['number_macro_f1']:.4f}"
         )
         print(
             f"Val   loss={val_metrics['loss']:.4f} | "
@@ -1091,6 +1093,8 @@ def main():
             f"Fine F1={val_metrics['fine_macro_f1']:.4f} | "
             f"SVO F1={val_metrics['svo_macro_f1']:.4f} | "
             f"Voice F1={val_metrics['voice_macro_f1']:.4f} | "
+            f"Gender F1={val_metrics['gender_macro_f1']:.4f} | "
+            f"Number F1={val_metrics['number_macro_f1']:.4f} | "
             f"Score={score:.4f}"
         )
 
@@ -1102,6 +1106,8 @@ def main():
         print(val_metrics["fine_report"])
         print("[VAL svo]")
         print(val_metrics["svo_report"])
+        if val_metrics.get("gender_macro_f1", 0) > 0:
+            print(f"[VAL morpho]  Gender F1={val_metrics['gender_macro_f1']:.4f}  Number F1={val_metrics['number_macro_f1']:.4f}")
 
         torch.save({
             "epoch": epoch,
@@ -1167,6 +1173,8 @@ def main():
     print(f"Fine     F1={test_metrics['fine_macro_f1']:.4f}")
     print(f"SVO      F1={test_metrics['svo_macro_f1']:.4f}")
     print(f"Voice    F1={test_metrics['voice_macro_f1']:.4f}")
+    print(f"Gender   F1={test_metrics['gender_macro_f1']:.4f}")
+    print(f"Number   F1={test_metrics['number_macro_f1']:.4f}")
 
     print("\n[TEST boundary]")
     print(test_metrics["boundary_report"])
@@ -1174,6 +1182,10 @@ def main():
     print(test_metrics["coarse_report"])
     print("[TEST fine]")
     print(test_metrics["fine_report"])
+    print("[TEST svo]")
+    print(test_metrics["svo_report"])
+    if test_metrics.get("gender_macro_f1", 0) > 0:
+        print(f"[TEST morpho]  Gender F1={test_metrics['gender_macro_f1']:.4f}  Number F1={test_metrics['number_macro_f1']:.4f}")
 
 
 if __name__ == "__main__":
