@@ -28,17 +28,28 @@ python3 -m pip install -q --upgrade sentencepiece protobuf
 
 # Fix : torchvision incompatible avec torch peut bloquer l'import de DebertaV2Model
 # (RuntimeError: operator torchvision::nms does not exist)
-# torchvision n'est pas nécessaire pour l'entraînement NER/SVO → on le désinstalle
-if python3 -c "import torchvision" 2>/dev/null; then
-    echo "⚠️  torchvision détecté — désinstallation pour éviter le conflit DebertaV2Model..."
-    python3 -m pip uninstall -y torchvision 2>/dev/null || true
-fi
+# Stratégie : essayer d'installer la version compatible, sinon purge totale.
+echo "🔧 Fix torchvision/torch version mismatch..."
+TORCH_MINOR=$(python3 -c "import torch; v=torch.__version__.split('.'); print(int(v[1].split('+')[0]))" 2>/dev/null || echo "4")
+TORCHVISION_MINOR=$((TORCH_MINOR + 1))
+# Tenter install version compatible (torch 2.N → torchvision 0.(N+1).*)
+python3 -m pip install -q --upgrade "torchvision==0.${TORCHVISION_MINOR}.*" 2>/dev/null && \
+    echo "✅ torchvision 0.${TORCHVISION_MINOR} installé" || {
+    echo "⚠️  Install torchvision compatible échouée — purge complète..."
+    python3 -m pip uninstall -y torchvision torchaudio 2>/dev/null || true
+    # Supprimer aussi les .so résiduels qui peuvent encore déclencher l'enregistrement des ops
+    SITE=$(python3 -c "import site; pkgs=site.getsitepackages(); print(pkgs[0] if pkgs else '')" 2>/dev/null || echo "")
+    if [ -n "$SITE" ]; then
+        find "$SITE" -name "*torchvision*" \( -name "*.so" -o -name "*.dist-info" -type d \) \
+            -exec rm -rf {} + 2>/dev/null || true
+    fi
+}
 
 # Sanity check : DeBERTa v2 importable
 if ! python3 -c "from transformers import DebertaV2Model; print('✅ DebertaV2Model OK')" 2>/dev/null; then
     echo "⚠️  DebertaV2Model non importable — tentative de réinstall transformers + sentencepiece"
-    python3 -m pip install --upgrade sentencepiece protobuf
-    python3 -m pip install --upgrade "transformers>=4.40.0"
+    python3 -m pip install -q --upgrade sentencepiece protobuf
+    python3 -m pip install -q --upgrade "transformers>=4.40.0"
     python3 -c "from transformers import DebertaV2Model; print('✅ DebertaV2Model OK après réinstall')"
 fi
 
