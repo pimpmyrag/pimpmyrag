@@ -152,6 +152,10 @@ def main():
         data_dir / "val_v2.jsonl",
         data_dir / "test_v2.jsonl",
         data_dir / "train_wiki_svo_ner.jsonl",
+        data_dir / "train_svo_silver.jsonl",
+        data_dir / "val_svo_silver.jsonl",
+        data_dir / "test_svo_silver.jsonl",
+        data_dir / "train_wiki_claude_annotated.jsonl",
     ]
 
     for src in targets:
