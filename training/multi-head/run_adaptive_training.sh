@@ -22,16 +22,16 @@ else
     fi
 fi
 
-# Vérification sentencepiece (requis par DeBERTa v3)
-if ! python3 -c "import sentencepiece" 2>/dev/null; then
-    echo "⚠️  sentencepiece manquant — install forcé"
-    python3 -m pip install sentencepiece protobuf
-fi
+# Vérification / install forcé des dépendances DeBERTa v3
+echo "🔍 Vérification dépendances DeBERTa v3..."
+python3 -m pip install -q --upgrade sentencepiece protobuf
 
-# Vérification protobuf
-if ! python3 -c "import google.protobuf" 2>/dev/null; then
-    echo "⚠️  protobuf manquant — install forcé"
-    python3 -m pip install protobuf
+# Sanity check : DeBERTa v2 importable
+if ! python3 -c "from transformers import DebertaV2Model; print('✅ DebertaV2Model OK')" 2>/dev/null; then
+    echo "⚠️  DebertaV2Model non importable — tentative de réinstall transformers + sentencepiece"
+    python3 -m pip install --upgrade sentencepiece protobuf
+    python3 -m pip install --upgrade "transformers>=4.40.0"
+    python3 -c "from transformers import DebertaV2Model; print('✅ DebertaV2Model OK après réinstall')"
 fi
 
 # ── Détection device & batch size ────────────────────────
