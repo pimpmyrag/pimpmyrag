@@ -171,14 +171,20 @@ def collect_conjoints(root_idx: int, children: dict, by_idx: dict) -> list[int]:
 # Extraction SVO + pronoms pour une phrase
 # ─────────────────────────────────────────────────────────────────────────────
 
-def extract_sentence(sentence, sent_offset: int, orig_text: str) -> list[dict]:
+def extract_sentence(sentence, sent_offset: int, orig_text: str,
+                     require_obl: bool = False) -> list[dict]:
     """
     Retourne une liste de spans SVO + pronoms au format dict :
       {"start", "end", "text", "label", "voice", "head_lemma", "head_upos",
        "pron_person"?, "pron_number"?, "pron_gender"?}
+    Si require_obl=True, retourne [] si la phrase ne contient aucun oblique (obl/iobj).
     """
     tokens = [Tok(w, sent_offset) for w in sentence.words if w.start_char is not None]
     if not tokens:
+        return []
+
+    # Filtre : la phrase doit contenir au moins un oblique
+    if require_obl and not any(t.deprel in IOBJ_DEPRELS for t in tokens):
         return []
 
     sent_text = sentence.text
@@ -329,13 +335,15 @@ def process_file(
     batch_size: int = 64,
     max_examples: int = 0,
     resume_from: int = 0,
+    require_obl: bool = False,
 ):
     """
     Traitement en streaming : lecture ligne par ligne + écriture au fil de l'eau.
-    - batch_size : nb de phrases envoyées à Stanza en une fois (throughput x3-5)
+    - batch_size   : nb de phrases envoyées à Stanza en une fois (throughput x3-5)
     - max_examples : arrêter après N exemples produits (0 = illimité)
-    - resume_from : reprendre à partir de la ligne N du fichier source (0 = début)
-                    utile si le processus a crashé en cours de route
+    - resume_from  : reprendre à partir de la ligne N du fichier source (0 = début)
+                     utile si le processus a crashé en cours de route
+    - require_obl  : ne conserver que les phrases contenant au moins un oblique (obl/iobj)
     """
     n_total_in = 0
     out_examples_count = 0
@@ -362,7 +370,8 @@ def process_file(
             all_new_spans: list[dict] = []
             char_offset = 0
             for sent in doc.sentences:
-                new_spans = extract_sentence(sent, char_offset, text)
+                new_spans = extract_sentence(sent, char_offset, text,
+                                             require_obl=require_obl)
                 all_new_spans.extend(new_spans)
                 char_offset += len(sent.text)
                 rest = text[char_offset:]
@@ -464,6 +473,8 @@ def main():
                         help="Arrêter après N exemples produits (0=illimité, utile pour tester)")
     parser.add_argument("--resume-from", type=int, default=0,
                         help="Reprendre à partir de la ligne N du fichier source (après un crash)")
+    parser.add_argument("--require-obl", action="store_true",
+                        help="Ne garder que les phrases contenant au moins un oblique (obl/iobj)")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -493,6 +504,7 @@ def main():
             batch_size=args.batch,
             max_examples=args.max_examples,
             resume_from=args.resume_from,
+            require_obl=args.require_obl,
         )
         print()
 
