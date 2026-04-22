@@ -65,8 +65,9 @@ def main():
     )
     args = parser.parse_args()
 
-    seen_ids: set[str] = set()
-    rows: list[dict] = []
+    # rows_by_id : dict id → row  (fusion de spans si même ID dans plusieurs sources)
+    rows_by_id: dict[str, dict] = {}
+    rows_order: list[str] = []  # ordre d'insertion (pour le shuffle)
     source_stats: dict[str, dict] = {}
 
     for spec in args.sources:
@@ -88,7 +89,7 @@ def main():
             continue
 
         n_added = 0
-        n_dup = 0
+        n_merged = 0
         label_counts: Counter = Counter()
 
         with open(path, encoding="utf-8") as f:
@@ -102,17 +103,28 @@ def main():
                     continue
 
                 uid = str(row.get("id", ""))
-                if uid in seen_ids:
-                    n_dup += 1
-                    continue
-                seen_ids.add(uid)
 
                 # Compter les labels pour les stats
                 for sp in row.get("spans", []):
                     label_counts[sp.get("label", "?")] += 1
 
-                # Stocker le weight source dans les métadonnées
-                # → build_multitask_dataset.py l'utilisera pour pondérer les candidats
+                if uid in rows_by_id:
+                    # Même ID : fusionner les spans (ajouter ceux absents par clé start/end/label)
+                    existing = rows_by_id[uid]
+                    existing_keys = {
+                        (sp.get("start"), sp.get("end"), sp.get("label"))
+                        for sp in existing.get("spans", [])
+                    }
+                    new_spans = [
+                        sp for sp in row.get("spans", [])
+                        if (sp.get("start"), sp.get("end"), sp.get("label")) not in existing_keys
+                    ]
+                    if new_spans:
+                        existing.setdefault("spans", []).extend(new_spans)
+                    n_merged += 1
+                    continue
+
+                # Nouveau ID
                 if weight != 1.0:
                     row["_source_weight"] = weight
 
@@ -122,17 +134,19 @@ def main():
                     for c in row["candidates"]:
                         c["sample_weight"] = c.get("sample_weight", 1.0) * weight
 
-                rows.append(row)
+                rows_by_id[uid] = row
+                rows_order.append(uid)
                 n_added += 1
 
         source_stats[path.name] = {
             "added": n_added,
-            "duplicates": n_dup,
+            "merged": n_merged,
             "weight": weight,
             "labels": dict(label_counts.most_common()),
         }
-        print(f"  {path.name:<50} {n_added:>6} exemples  weight={weight:.2f}"
-              + (f"  ({n_dup} doublons ignorés)" if n_dup else ""))
+        print(f"  {path.name:<50} {n_added:>6} nouveaux  {n_merged:>6} fusionnés  weight={weight:.2f}")
+
+    rows = [rows_by_id[uid] for uid in rows_order]
 
     if not rows:
         print("❌ Aucun exemple chargé — vérifier les chemins des sources.")
