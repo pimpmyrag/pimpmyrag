@@ -26,6 +26,14 @@ fi
 echo "🔍 Vérification dépendances DeBERTa v3..."
 python3 -m pip install -q --upgrade sentencepiece protobuf
 
+# Fix : torchvision incompatible avec torch peut bloquer l'import de DebertaV2Model
+# (RuntimeError: operator torchvision::nms does not exist)
+# torchvision n'est pas nécessaire pour l'entraînement NER/SVO → on le désinstalle
+if python3 -c "import torchvision" 2>/dev/null; then
+    echo "⚠️  torchvision détecté — désinstallation pour éviter le conflit DebertaV2Model..."
+    python3 -m pip uninstall -y torchvision 2>/dev/null || true
+fi
+
 # Sanity check : DeBERTa v2 importable
 if ! python3 -c "from transformers import DebertaV2Model; print('✅ DebertaV2Model OK')" 2>/dev/null; then
     echo "⚠️  DebertaV2Model non importable — tentative de réinstall transformers + sentencepiece"
