@@ -69,17 +69,22 @@ echo "🚀 Démarrage training adaptatif — $(date)" | tee $log_file
 # Dataset v3 = source principale (NER gold/silver + spans UD/SVO Stanza, re-splitté stratifié)
 # Format : chemin:weight  (weight=1.0 = poids normal, <1.0 = silver de moindre qualité)
 SILVER_SOURCES="$DATA/train_v3.jsonl:1.0"
-[ -f "$DATA/train_svo_de.jsonl"  ] && SILVER_SOURCES="$SILVER_SOURCES $DATA/train_svo_de.jsonl:0.8"
-[ -f "$DATA/train_svo_en.jsonl"  ] && SILVER_SOURCES="$SILVER_SOURCES $DATA/train_svo_en.jsonl:0.8"
+[ -f "$DATA/train_svo_silver.jsonl" ] && SILVER_SOURCES="$SILVER_SOURCES $DATA/train_svo_silver.jsonl:1.0"
+[ -f "$DATA/train_svo_de.jsonl"     ] && SILVER_SOURCES="$SILVER_SOURCES $DATA/train_svo_de.jsonl:0.8"
+[ -f "$DATA/train_svo_en.jsonl"     ] && SILVER_SOURCES="$SILVER_SOURCES $DATA/train_svo_en.jsonl:0.8"
 # Ajouter d'autres sources ici au fur et à mesure
 
 echo "📦 Fusion silver train (base: train_v3.jsonl)..." | tee -a $log_file
 python3 merge_silver.py --sources $SILVER_SOURCES --out $DATA/train_svo_silver_merged.jsonl | tee -a $log_file
 TRAIN_SILVER="$DATA/train_svo_silver_merged.jsonl"
 
-# Val/test : v3 (NER + UD, répartition stratifiée sur labels rares)
+# Val/test : silver Stanza si disponible (contient SVO), sinon fallback sur v3 (NER seul)
 VAL_SILVER="$DATA/val_v3.jsonl"
 TEST_SILVER="$DATA/test_v3.jsonl"
+[ -f "$DATA/val_svo_silver.jsonl"  ] && VAL_SILVER="$DATA/val_svo_silver.jsonl"
+[ -f "$DATA/test_svo_silver.jsonl" ] && TEST_SILVER="$DATA/test_svo_silver.jsonl"
+echo "📊 Val  source : $VAL_SILVER"  | tee -a $log_file
+echo "📊 Test source : $TEST_SILVER" | tee -a $log_file
 
 rebuild_dataset() {
     local level=$1
