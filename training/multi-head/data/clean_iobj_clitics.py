@@ -25,14 +25,33 @@ CLITICS = {
     "nous", "vous",
     "ils", "elles", "les", "leur", "eux",
     "y", "en",
+    # Pronoms relatifs / conjonctions parasites
+    "dont", "que", "qui", "où", "quoi",
+    # Forme impérative inversée (-moi, -toi, -lui…)
+    "-moi", "-toi", "-lui", "-nous", "-vous", "-leur",
+    "-le", "-la", "-les", "-en", "-y",
 }
+
+# Artéfacts d'encodage et tokens corrompus
+import re
+_GARBAGE_IOBJ = re.compile(r'^[\W\d]{1,4}$', re.UNICODE)  # seulement ponctuation/chiffres/symbols
 
 
 def is_clitic_iobj(sp: dict) -> bool:
     if sp.get("label") != "svo_iobj":
         return False
-    txt = sp.get("text", "").strip().lower().rstrip("'")
-    return txt in CLITICS or len(sp.get("text", "").strip()) <= 2
+    raw = sp.get("text", "")
+    txt = raw.strip().lower().rstrip("'")
+    # Trop court
+    if len(raw.strip()) <= 2:
+        return True
+    # Clitique ou pronom relatif
+    if txt in CLITICS:
+        return True
+    # Artefact encodage (pas de lettre alphabétique)
+    if not re.search(r'[a-zA-ZÀ-ÿ]', raw):
+        return True
+    return False
 
 
 def clean_file(src: Path, dst: Path, dry_run: bool = False) -> dict:

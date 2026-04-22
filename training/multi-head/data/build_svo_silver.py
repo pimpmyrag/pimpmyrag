@@ -263,10 +263,21 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str,
 
                 # Filtrer svo_iobj clitiques : déjà capturés comme pron_obj,
                 # et causent chevauchement + signal contradictoire au modèle.
-                # Un vrai oblique intéressant est un GP nominal (> 2 chars, pas clitique).
+                # On filtre aussi les pronoms relatifs (dont, que, où) et
+                # les formes impératives inversées (-moi, -toi…).
+                # Un vrai oblique intéressant est un GP nominal (> 2 chars, pas clitique,
+                # contient au moins une lettre alphabétique).
                 if arg_label == "svo_iobj":
+                    import re as _re
                     txt_lc = txt.strip().lower().rstrip("'")
-                    if txt_lc in FR_PERS_PRONOUNS or len(txt.strip()) <= 2:
+                    _IOBJ_NOISE = FR_PERS_PRONOUNS | {
+                        "dont", "que", "qui", "où", "quoi",
+                        "-moi", "-toi", "-lui", "-nous", "-vous", "-leur",
+                        "-le", "-la", "-les", "-en", "-y",
+                    }
+                    if (txt_lc in _IOBJ_NOISE
+                            or len(txt.strip()) <= 2
+                            or not _re.search(r'[a-zA-ZÀ-ÿ]', txt)):
                         continue
 
                 # Span complet du NP (conservé comme info contexte)
