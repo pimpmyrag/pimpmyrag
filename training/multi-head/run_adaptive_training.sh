@@ -13,44 +13,10 @@ if [ -f venv/bin/activate ]; then
     echo "🐍 Activation venv local"
     source venv/bin/activate
 else
-    echo "🐍 Pas de venv détecté — installation des dépendances"
-    # Toujours forcer l'install des packages critiques pour DeBERTa v3
-    # Utiliser python3 -m pip pour garantir le bon interpréteur
-    python3 -m pip install -q sentencepiece protobuf
+    echo "🐍 Pas de venv détecté — vérification des dépendances"
     if [ -f requirements.txt ]; then
-        python3 -m pip install -q -r requirements.txt
+        pip install -q -r requirements.txt
     fi
-fi
-
-# Vérification / install forcé des dépendances DeBERTa v3
-echo "🔍 Vérification dépendances DeBERTa v3..."
-python3 -m pip install -q --upgrade sentencepiece protobuf
-
-# Fix : torchvision incompatible avec torch peut bloquer l'import de DebertaV2Model
-# (RuntimeError: operator torchvision::nms does not exist)
-# Stratégie : essayer d'installer la version compatible, sinon purge totale.
-echo "🔧 Fix torchvision/torch version mismatch..."
-TORCH_MINOR=$(python3 -c "import torch; v=torch.__version__.split('.'); print(int(v[1].split('+')[0]))" 2>/dev/null || echo "4")
-TORCHVISION_MINOR=$((TORCH_MINOR + 1))
-# Tenter install version compatible (torch 2.N → torchvision 0.(N+1).*)
-python3 -m pip install -q --upgrade "torchvision==0.${TORCHVISION_MINOR}.*" 2>/dev/null && \
-    echo "✅ torchvision 0.${TORCHVISION_MINOR} installé" || {
-    echo "⚠️  Install torchvision compatible échouée — purge complète..."
-    python3 -m pip uninstall -y torchvision torchaudio 2>/dev/null || true
-    # Supprimer aussi les .so résiduels qui peuvent encore déclencher l'enregistrement des ops
-    SITE=$(python3 -c "import site; pkgs=site.getsitepackages(); print(pkgs[0] if pkgs else '')" 2>/dev/null || echo "")
-    if [ -n "$SITE" ]; then
-        find "$SITE" -name "*torchvision*" \( -name "*.so" -o -name "*.dist-info" -type d \) \
-            -exec rm -rf {} + 2>/dev/null || true
-    fi
-}
-
-# Sanity check : DeBERTa v2 importable
-if ! python3 -c "from transformers import DebertaV2Model; print('✅ DebertaV2Model OK')" 2>/dev/null; then
-    echo "⚠️  DebertaV2Model non importable — tentative de réinstall transformers + sentencepiece"
-    python3 -m pip install -q --upgrade sentencepiece protobuf
-    python3 -m pip install -q --upgrade "transformers>=4.40.0"
-    python3 -c "from transformers import DebertaV2Model; print('✅ DebertaV2Model OK après réinstall')"
 fi
 
 # ── Détection device & batch size ────────────────────────
