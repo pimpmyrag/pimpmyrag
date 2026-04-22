@@ -275,6 +275,22 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str,
                 # Span : pour iobj → inclure la préposition (case) pour avoir "à Paris"
                 # Pour subject/object → head NE uniquement (aligne avec NER)
                 if arg_label == "svo_iobj":
+                    # ── Filtre 0 : exiger une préposition (case) explicite ──────────────
+                    # En français, tout oblique nominal a une préposition case enfant.
+                    # Sans case → clitique pronominal ("lui", "en", "y", "leur"...) → skip.
+                    case_children = [
+                        c for c in children.get(cj_idx, [])
+                        if c in by_idx and by_idx[c].deprel in {"case", "mark"}
+                    ]
+                    if not case_children:
+                        continue
+                    # ── Filtre 1 : tête doit être NOUN / PROPN / NUM ───────────────────
+                    if cj.upos not in {"NOUN", "PROPN", "NUM"}:
+                        continue
+                    # ── Filtre 2 : texte tête ne doit pas être un pronom ──────────────
+                    head_lc = cj.text.strip().lower().rstrip("'")
+                    if head_lc in FR_PERS_PRONOUNS:
+                        continue
                     ne_idx = iobj_indices_with_case(cj_idx, children, by_idx)
                 else:
                     ne_idx = head_ne_indices(cj_idx, children, by_idx)
@@ -282,22 +298,19 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str,
                 if len(txt.strip()) < 1:
                     continue
 
-                # Filtrer svo_iobj : on ne veut que les obliques nominaux (NOUN/PROPN)
-                # avec une préposition explicite (case enfant) → "à Paris", "pour les partis"
-                # Les pronoms clitiques, relatifs et artefacts sont exclus.
+                # Filtrer svo_iobj : vérifications complémentaires sur le span complet
                 if arg_label == "svo_iobj":
                     import re as _re
                     txt_lc = txt.strip().lower().rstrip("'")
+                    # Longueur minimale + au moins une lettre + pas un mot de bruit
                     _IOBJ_NOISE = FR_PERS_PRONOUNS | {
                         "dont", "que", "qui", "où", "quoi",
                         "-moi", "-toi", "-lui", "-nous", "-vous", "-leur",
                         "-le", "-la", "-les", "-en", "-y",
                     }
-                    # Doit être NOUN ou PROPN, avoir au moins une lettre, pas clitique
-                    if (txt_lc in _IOBJ_NOISE
-                            or len(txt.strip()) <= 2
+                    if (len(txt.strip()) <= 2
                             or not _re.search(r'[a-zA-ZÀ-ÿ]', txt)
-                            or cj.upos not in {"NOUN", "PROPN", "NUM"}):
+                            or txt_lc in _IOBJ_NOISE):
                         continue
 
                 # Span complet du NP (conservé comme info contexte)
