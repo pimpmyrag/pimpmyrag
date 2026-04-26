@@ -1,10 +1,9 @@
 services:
   - type: web
     name: ner-demo
-    runtime: java
-    rootDir: .
-    buildCommand: ./gradlew :ner-demo:bootJar -x test
-    startCommand: bash scripts/render/start-ner-demo-render.sh
+    runtime: docker
+    dockerfilePath: ./ner-demo/Dockerfile
+    dockerContext: .
     healthCheckPath: /
     envVars:
       - key: JAVA_TOOL_OPTIONS
