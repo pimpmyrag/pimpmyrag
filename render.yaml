@@ -8,6 +8,9 @@ services:
     port: 10000
     plan: standard
     envVars:
+      # Skip LFS download during git clone (quota GitHub LFS épuisé + ces fichiers inutiles au build)
+      - key: GIT_LFS_SKIP_SMUDGE
+        value: "1"
       - key: JAVA_TOOL_OPTIONS
         # Heap réduit à 1g : le modèle ONNX (708MB) est en mémoire native (off-heap).
         # Budget mémoire Standard (2GB) : 1GB heap + 708MB ONNX + ~200MB OS/JVM ≈ 1.9GB
