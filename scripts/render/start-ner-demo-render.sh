@@ -15,7 +15,7 @@ mkdir -p "$ASSET_BASE_DIR/model" "$TOKENIZER_BASE_DIR"
 download_file() {
   local url="$1"
   local out="$2"
-  echo "[render] download: $url -> $out"
+  echo "[render] download: $url -> $out" >&2
   curl -fL --retry 5 --retry-delay 2 -o "$out" "$url"
 }
 
@@ -97,7 +97,7 @@ resolve_tokenizer() {
   # Fallback : tokenizer versionné dans le dépôt (training/multi-head/tokenizer_export_clean)
   local repo_tokenizer="$ROOT_DIR/training/multi-head/tokenizer_export_clean"
   if [[ -d "$repo_tokenizer" && -f "$repo_tokenizer/tokenizer.json" ]]; then
-    echo "[render] tokenizer trouvé dans le repo : $repo_tokenizer"
+    echo "[render] tokenizer trouvé dans le repo : $repo_tokenizer" >&2
     echo "$repo_tokenizer"
     return
   fi
