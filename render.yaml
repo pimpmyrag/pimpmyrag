@@ -5,6 +5,7 @@ services:
     dockerfilePath: ./ner-demo/Dockerfile
     dockerContext: .
     healthCheckPath: /
+    port: 10000
     envVars:
       - key: JAVA_TOOL_OPTIONS
         value: -Xms512m -Xmx2g

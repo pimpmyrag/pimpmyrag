@@ -132,5 +132,13 @@ if [[ "${DRY_RUN:-0}" == "1" ]]; then
   exit 0
 fi
 
-exec java -jar "$APP_JAR"
+SERVER_PORT="${PORT:-8080}"
+echo "[render] starting on port $SERVER_PORT"
+echo "[render] JAR=$APP_JAR"
+
+exec java \
+  ${JAVA_TOOL_OPTIONS:--Xms512m -Xmx2g} \
+  -Dserver.port="$SERVER_PORT" \
+  -Dspring.profiles.active="${SPRING_PROFILES_ACTIVE:-render}" \
+  -jar "$APP_JAR"
 

@@ -34,6 +34,6 @@ COPY training/multi-head/tokenizer_export_clean/ training/multi-head/tokenizer_e
 COPY scripts/render/ scripts/render/
 RUN chmod +x scripts/render/start-ner-demo-render.sh
 
-EXPOSE 8080
+EXPOSE 10000
 CMD ["bash", "scripts/render/start-ner-demo-render.sh"]
 
