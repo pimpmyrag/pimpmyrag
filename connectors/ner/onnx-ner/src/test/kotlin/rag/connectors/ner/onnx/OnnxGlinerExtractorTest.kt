@@ -155,6 +155,7 @@ class WithHopFromTest {
         number = null,
         feats = null,
         sentenceSpan = 0 until 20,
+        confidence = 0.70f
     )
 
     @Test

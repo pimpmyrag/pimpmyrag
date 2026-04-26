@@ -41,7 +41,12 @@ fun mergeNerLabelWithUDV2(
     nerEntities: List<Entity>,
     udDoc: UDDocument
 ): List<Entity> {
-    val raw = nerEntities.flatMap { enrichOneV2(it, udDoc) }.pruneOverlapsByConfidence()
+    // NB: pruneOverlapsByConfidence() est intentionnellement absent ici.
+    // Cette fonction produit intentionnellement des candidats chevauchants
+    // (entité base + split rôle/nom + expansions syntaxiques).
+    // Le pruning par confiance doit se faire en aval, après la classification
+    // fine-grained (buildEntityCandidates → pruneKeepLongestSameHint).
+    val raw = nerEntities.flatMap { enrichOneV2(it, udDoc) }
     return dedupeEntities(raw)
 }
 
