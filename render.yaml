@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: ner-demo
+    runtime: java
+    rootDir: .
+    buildCommand: ./gradlew :ner-demo:bootJar -x test
+    startCommand: java -jar $(ls ner-demo/build/libs/*.jar | grep -v -- '-plain.jar' | head -n 1)
+    healthCheckPath: /
+    envVars:
+      - key: JAVA_TOOL_OPTIONS
+        value: -Xms512m -Xmx2g
+      - key: NER_MODEL_PATH
+        sync: false
+      - key: NER_TOKENIZER_PATH
+        sync: false
+
