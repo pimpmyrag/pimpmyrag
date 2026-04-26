@@ -3,9 +3,9 @@ plugins {
     kotlin("plugin.spring")
     id("org.springframework.boot")
     id("io.spring.dependency-management")
-    // com.vaadin plugin incompatible avec Gradle 9 (utilise ResolvedConfiguration.getFiles() supprimé)
-    // → Vaadin tourne en dev-mode avec Node.js 20 installé dans l'image Docker
-    // Pour passer en production mode : downgrader Gradle à 8.x (gradle-wrapper.properties)
+    // Le plugin Vaadin est incompatible avec Gradle 9 (ResolvedConfiguration.getFiles() supprimé).
+    // Pour le build Docker, on utilise temporairement Gradle 8.13 (voir ner-demo/Dockerfile).
+    id("com.vaadin") version "24.7.2"
 }
 
 dependencyManagement {
