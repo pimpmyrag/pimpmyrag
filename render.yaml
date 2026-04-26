@@ -8,9 +8,8 @@ services:
     envVars:
       - key: JAVA_TOOL_OPTIONS
         value: -Xms512m -Xmx2g
-      # REQUIRED: URL publique du fichier ONNX (ex. HuggingFace / S3 / Drive)
       - key: MODEL_URL
-        sync: false
+        value: https://github.com/pimpmyrag/pimpmyrag/releases/download/v1.0.0-ner-model/best_model_multitask_full.onnx
       # OPTIONAL: SHA-256 du modèle pour vérification d'intégrité
       - key: MODEL_SHA256
         value: ""
