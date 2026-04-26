@@ -134,3 +134,8 @@ init_commits.sh
 !docker-resources/onnx_converter_bundle/models/bge-m3-mac/config.json
 !docker-resources/onnx_converter_bundle/models/bge-m3-mac/special_tokens_map.json
 
+# ── Données d'entraînement volumineuses (hors LFS, hors repo)
+training/multi-head/data/*.multitask.jsonl
+# ── Anciens modèles ONNX supersédés (hors repo)
+debertav3-ner/*.onnx
+debertav3-ner/*.onnx.data
