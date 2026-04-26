@@ -6,6 +6,7 @@ services:
     dockerContext: .
     healthCheckPath: /
     port: 10000
+    plan: standard
     envVars:
       - key: JAVA_TOOL_OPTIONS
         value: -Xms512m -Xmx2g

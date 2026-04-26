@@ -3,7 +3,9 @@ plugins {
     kotlin("plugin.spring")
     id("org.springframework.boot")
     id("io.spring.dependency-management")
-    // Note: com.vaadin plugin retiré (incompatible Gradle 9) — dev mode géré par Spring Boot auto-config
+    // com.vaadin plugin incompatible avec Gradle 9 (utilise ResolvedConfiguration.getFiles() supprimé)
+    // → Vaadin tourne en dev-mode avec Node.js 20 installé dans l'image Docker
+    // Pour passer en production mode : downgrader Gradle à 8.x (gradle-wrapper.properties)
 }
 
 dependencyManagement {
