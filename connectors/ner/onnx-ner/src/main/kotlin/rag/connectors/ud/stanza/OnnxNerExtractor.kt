@@ -1002,11 +1002,15 @@ fun main(args: Array<String>) {
         )
         return
     }
-    //modelPath: "/Users/simon_longuet/IdeaProjects/pimpmyrag/training/training_package/training_output_deberta/best_model_v6.onnx"
-    //tokenizerDir: "/Users/simon_longuet/IdeaProjects/pimpmyrag/debertav3-ner/tokenizer_from_hf"
-
-    val onnxPath = "/Users/simon_longuet/IdeaProjects/pimpmyrag/training/training_package/training_output_deberta/best_model_v6.onnx"
-    val tokenizerDir = "/Users/simon_longuet/IdeaProjects/pimpmyrag/deberta/tokenizer_export"
+    // chemins relatifs à la racine du repo — override via propriétés système si besoin
+    val repoRoot = System.getProperty("ner.repo.root",
+        generateSequence(java.io.File(System.getProperty("user.dir"))) { it.parentFile }
+            .firstOrNull { it.resolve("gradlew").exists() }?.absolutePath
+            ?: System.getProperty("user.dir"))
+    val onnxPath = System.getProperty("ner.model.path",
+        "$repoRoot/training/training_package/training_output_deberta/best_model_v6.onnx")
+    val tokenizerDir = System.getProperty("ner.tokenizer.dir",
+        "$repoRoot/deberta/tokenizer_export")
 
     OnnxSpanNerExtractor(
         modelPath = onnxPath,

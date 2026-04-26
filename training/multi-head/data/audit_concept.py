@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Audit élargi pour hint_concept dans le dataset existant."""
 import json
+from pathlib import Path
 from collections import Counter
+
+_DATA_DIR = Path(__file__).parent
 
 concept_kw = [
     'isme', 'iste',
@@ -15,7 +18,7 @@ concept_kw = [
 
 results = []
 for split in ['train.jsonl', 'val.jsonl', 'test.jsonl']:
-    path = f'/Users/simon_longuet/IdeaProjects/pimpmyrag/training/multi-head/data/{split}'
+    path = _DATA_DIR / split
     with open(path, encoding='utf-8') as f:
         for line in f:
             row = json.loads(line)

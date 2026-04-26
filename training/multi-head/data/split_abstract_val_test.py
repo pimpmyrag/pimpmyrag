@@ -7,7 +7,7 @@ Prend les dernières lignes abstract_* du train, en répartit vers val et test.
 import json, random
 from pathlib import Path
 
-base = Path('/Users/simon_longuet/IdeaProjects/pimpmyrag/training/multi-head/data')
+base = Path(__file__).parent
 random.seed(42)
 
 # Lire le train et séparer les lignes abstract des autres

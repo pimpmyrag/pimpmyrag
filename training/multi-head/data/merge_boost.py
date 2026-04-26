@@ -4,7 +4,7 @@ import json, random
 from pathlib import Path
 from collections import Counter
 
-base = Path('/Users/simon_longuet/IdeaProjects/pimpmyrag/training/multi-head/data')
+base = Path(__file__).parent
 random.seed(77)
 
 rows = []

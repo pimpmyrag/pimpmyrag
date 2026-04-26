@@ -7,7 +7,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-base = Path('/Users/simon_longuet/IdeaProjects/pimpmyrag/training/multi-head/data')
+base = Path(__file__).parent
 
 # 1. Fusionner les nouveaux fichiers dans train.jsonl
 new_files = ['abstract_sentences.jsonl', 'abstract_sentences_extra.jsonl']

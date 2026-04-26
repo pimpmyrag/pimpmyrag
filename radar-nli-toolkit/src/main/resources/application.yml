@@ -15,8 +15,8 @@ onnx:
     label:
 
       # RoBERTa XLM-R BIO — 13 labels coarses (F1=0.8537) — INT8 (75% plus petit, 2.79× plus rapide)
-      modelPath: "/Users/simon_longuet/IdeaProjects/pimpmyrag/training/training_package/training_output/model_v5.onnx"
-      tokenizerDir: "/Users/simon_longuet/IdeaProjects/pimpmyrag/training/training_package/training_output/checkpoint-7800"
+      modelPath: "${NER_LABEL_MODEL_PATH:training/training_package/training_output/model_v5.onnx}"
+      tokenizerDir: "${NER_LABEL_TOKENIZER_DIR:training/training_package/training_output/checkpoint-7800}"
       maxLen: 128
       maxSeqLen: 128
       useGpu: false
@@ -25,8 +25,8 @@ onnx:
     ud:
       # DeBERTa-v3 SpanClassifier — 22 hints fins (Macro F1=0.883) — INT8 valide (218MB)
       # v4 (Apr 6) > v3 (Apr 2, F1=0.875) — coarse_ids inclus
-      modelPath: "/Users/simon_longuet/IdeaProjects/pimpmyrag/training/training_package/training_output_deberta/best_model_v6.onnx"
-      tokenizerDir: "/Users/simon_longuet/IdeaProjects/pimpmyrag/deberta/tokenizer_export"
+      modelPath: "${NER_UD_MODEL_PATH:training/training_package/training_output_deberta/best_model_v6.onnx}"
+      tokenizerDir: "${NER_UD_TOKENIZER_DIR:deberta/tokenizer_export}"
       maxLen: 128
       useGpu: false
       useCoreMl: false
@@ -36,9 +36,9 @@ onnx:
 
   embedding:
     # Chemin vers le modèle bge-m3 quantifié pour Mac (ARM64)
-    modelPath: "/Users/simon_longuet/IdeaProjects/pimpmyrag/docker-resources/onnx_converter_bundle/models/bge-m3-mac/model_quantized.onnx"
+    modelPath: "${EMBED_MODEL_PATH:docker-resources/onnx_converter_bundle/models/bge-m3-mac/model_quantized.onnx}"
     # Répertoire contenant le tokenizer pour bge-m3
-    tokenizerDir: "/Users/simon_longuet/IdeaProjects/pimpmyrag/docker-resources/onnx_converter_bundle/models/bge-m3-mac/"
+    tokenizerDir: "${EMBED_TOKENIZER_DIR:docker-resources/onnx_converter_bundle/models/bge-m3-mac/}"
     # bge-m3 nécessite une normalisation L2 pour des scores de similarité corrects
     l2Normalize: true
     # Longueur de séquence maximale, 512 est une valeur standard pour bge-m3

@@ -1,9 +1,10 @@
 """Test rapide : tokenizer local + SpanClassifier + forward pass avec masquage coarse."""
+import os
 import torch
 from transformers import AutoTokenizer
 from model import SpanClassifier, COARSE_TO_FINE
 
-TOKENIZER_PATH = '/Users/simon_longuet/IdeaProjects/pimpmyrag/debertav3-ner/tokenizer_from_hf'
+TOKENIZER_PATH = os.environ.get('NER_TOKENIZER_PATH', 'debertav3-ner/tokenizer_from_hf')
 MODEL_NAME     = 'microsoft/deberta-v3-base'
 
 print('1. Chargement tokenizer local...')
