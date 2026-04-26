@@ -38,5 +38,6 @@ include(
     "connectors:document-store:mongodb",
     "connectors:vector:qadrant",
     ":radar-nli-toolkit",
+    ":ner-demo",
 
 )

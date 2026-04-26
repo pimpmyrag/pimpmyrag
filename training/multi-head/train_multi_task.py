@@ -1,0 +1,1192 @@
+from __future__ import annotations
+
+import os
+os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
+
+import argparse
+import json
+from collections import Counter
+
+import torch
+from torch.utils.data import DataLoader
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from transformers import AutoTokenizer
+from sklearn.metrics import f1_score, classification_report
+
+from multitask_dataset import MultiTaskSpanDataset, make_collate_fn
+from multitask_model import SpanMultiTaskModel
+from labels import COARSE_LABELS, FINE_LABELS, SVO_LABELS, NUM_SVO, NUM_VOICE, NUM_GENDER, NUM_NUMBER
+
+# ──────────────────────────────────────────────────────────
+#  Inline Hard Negative Mining — constantes
+# ──────────────────────────────────────────────────────────
+_LOW_PRECISION_COARSE = {"VALUE", "EVENT", "TIME", "ABSTRACT"}
+_LOW_F1_FINE = {"hint_measure", "hint_rate", "hint_infra", "hint_object_generic"}
+_FP_LOW_PREC_EXTRA = 1.5
+_FINE_ERR_EXTRA    = 1.4
+
+
+# ──────────────────────────────────────────────────────────
+#  EMA — Exponential Moving Average des poids du modèle
+# ──────────────────────────────────────────────────────────
+class ModelEMA:
+    """
+    Maintient une copie lissée des poids du modèle.
+    Gain typique : +0.5 à +1.5% sur val score sans autre changement.
+    """
+    def __init__(self, model: torch.nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.shadow: dict[str, torch.Tensor] = {
+            k: v.clone().float().detach()
+            for k, v in model.state_dict().items()
+        }
+
+    @torch.no_grad()
+    def update(self, model: torch.nn.Module):
+        for k, v in model.state_dict().items():
+            self.shadow[k] = self.decay * self.shadow[k] + (1.0 - self.decay) * v.float().detach()
+
+    def apply(self, model: torch.nn.Module) -> dict:
+        """Injecte les poids EMA dans le modèle. Retourne l'état original."""
+        original = {k: v.clone() for k, v in model.state_dict().items()}
+        ema_state = {k: v.to(dtype=model.state_dict()[k].dtype) for k, v in self.shadow.items()}
+        model.load_state_dict(ema_state)
+        return original
+
+    def restore(self, model: torch.nn.Module, original_state: dict):
+        model.load_state_dict(original_state)
+
+    def state_dict(self):
+        return self.shadow
+
+
+# ──────────────────────────────────────────────────────────
+#  Layer-wise LR decay
+# ──────────────────────────────────────────────────────────
+def get_layerwise_param_groups(model, base_lr: float, head_lr: float, decay: float = 0.9):
+    """
+    Crée des groupes de paramètres avec LR décroissant par couche.
+    - Têtes (boundary/coarse/fine/MLP) : head_lr
+    - Couche transformer i (depuis le haut) : base_lr * decay^(num_layers - 1 - i)
+    - Embeddings : base_lr * decay^num_layers  (LR le plus faible)
+
+    decay=1.0 → pas de decay (comportement original).
+    """
+    head_params = (
+        list(model.span_mlp.parameters())
+        + list(model.boundary_head.parameters())
+        + list(model.coarse_head.parameters())
+        + list(model.fine_head.parameters())
+        + list(model.width_emb.parameters())
+    )
+    seen = {id(p) for p in head_params}
+    param_groups = [{"params": head_params, "lr": head_lr, "name": "heads"}]
+
+    if decay >= 1.0:
+        enc_params = [p for p in model.encoder.parameters() if id(p) not in seen]
+        param_groups.append({"params": enc_params, "lr": base_lr, "name": "encoder"})
+        return param_groups
+
+    encoder = model.encoder
+    # DeBERTa-v3 : encoder.encoder.layer
+    try:
+        layers = encoder.encoder.layer
+    except AttributeError:
+        enc_params = [p for p in encoder.parameters() if id(p) not in seen]
+        param_groups.append({"params": enc_params, "lr": base_lr, "name": "encoder"})
+        return param_groups
+
+    num_layers = len(layers)
+
+    # Embeddings — LR le plus faible
+    try:
+        emb_params = [p for p in encoder.embeddings.parameters() if id(p) not in seen]
+        if emb_params:
+            emb_lr = base_lr * (decay ** num_layers)
+            param_groups.append({"params": emb_params, "lr": emb_lr, "name": "embeddings"})
+            seen.update(id(p) for p in emb_params)
+    except AttributeError:
+        pass
+
+    # Couches transformer — decay croissant vers le bas
+    for i, layer in enumerate(layers):
+        layer_lr = base_lr * (decay ** (num_layers - 1 - i))
+        layer_p = [p for p in layer.parameters() if id(p) not in seen]
+        if layer_p:
+            param_groups.append({"params": layer_p, "lr": layer_lr, "name": f"layer_{i}"})
+            seen.update(id(p) for p in layer_p)
+
+    # Reste (pooler, etc.)
+    remaining = [p for p in encoder.parameters() if id(p) not in seen]
+    if remaining:
+        param_groups.append({"params": remaining, "lr": base_lr, "name": "encoder_other"})
+
+    return param_groups
+
+
+def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
+    """
+    Calcule des poids de classes à partir du dataset multitask enrichi.
+
+    - power=1.0  -> inverse-fréquence brut
+    - power=0.5  -> inverse-fréquence tempéré (recommandé)
+    - power=0.0  -> tous les poids = 1.0
+
+    Retourne:
+      boundary_w, coarse_w, fine_w, boundary_counts, coarse_counts, fine_counts
+    """
+    boundary_counts = Counter()
+    coarse_counts = Counter()
+    fine_counts = Counter()
+
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            row = json.loads(line)
+            for c in row["candidates"]:
+                boundary_counts[c["boundary_label"]] += 1
+                coarse_counts[c["coarse_label_id"]] += 1
+                fine_counts[c["fine_label_id"]] += 1
+
+    def make_weights(counts, num_classes, power=0.5):
+        total = sum(counts.values())
+        weights = torch.ones(num_classes, dtype=torch.float32)
+
+        if total == 0:
+            return weights
+
+        for i in range(num_classes):
+            n_i = counts.get(i, 0)
+            if n_i > 0:
+                inv_freq = total / (num_classes * n_i)
+                weights[i] = float(inv_freq) ** float(power)
+            else:
+                # classe absente du training -> poids neutre
+                weights[i] = 1.0
+
+        # normalisation: moyenne = 1.0
+        weights = weights / weights.mean()
+        return weights
+
+    return (
+        make_weights(boundary_counts, 2, power=power),
+        make_weights(coarse_counts, len(COARSE_LABELS), power=power),
+        make_weights(fine_counts, len(FINE_LABELS), power=power),
+        boundary_counts,
+        coarse_counts,
+        fine_counts,
+    )
+
+
+def apply_class_weight_floor(weights: torch.Tensor, class_idx: int, min_value: float) -> torch.Tensor:
+    """Applique un plancher minimal à une classe sans re-normaliser ensuite."""
+    weights = weights.clone()
+    weights[class_idx] = max(weights[class_idx].item(), float(min_value))
+    return weights
+
+
+def safe_macro_f1(y_true, y_pred, labels=None):
+    if not y_true:
+        return 0.0
+    return f1_score(y_true, y_pred, average="macro", labels=labels, zero_division=0)
+
+
+def run_epoch(
+        loader,
+        model,
+        optimizer,
+        device,
+        train: bool,
+        boundary_class_weights=None,
+        coarse_class_weights=None,
+        fine_class_weights=None,
+        lambda_boundary=1.0,
+        lambda_coarse=1.0,
+        lambda_fine=1.2,
+        lambda_svo_boundary=1.0,
+        lambda_svo=1.0,
+        lambda_voice=0.5,
+        lambda_morpho=0.3,
+        lambda_compat=0.0,
+        accum_steps=1,
+        log_every=50,
+        focal_gamma=0.0,
+        ema: "ModelEMA | None" = None,
+        collect_hn: bool = False,
+):
+    """
+    Version adaptée à l'architecture :
+      - boundary : binaire
+      - coarse   : 6 familles + NONE
+      - fine     : 22 labels positifs uniquement
+      - fine loss : positive-only
+      - fine metrics : positive-only
+      - fine prediction : masquage coarse -> fine
+
+    Retourne:
+      metrics = {
+          "loss": float,
+          "boundary_f1": float,
+          "coarse_macro_f1": float,
+          "fine_macro_f1": float,              # positive-only
+          "boundary_report": str,
+          "coarse_report": str,
+          "fine_report": str,                  # positive-only
+      }
+    """
+
+    import torch
+    from sklearn.metrics import f1_score, classification_report
+
+    def safe_macro_f1_local(y_true, y_pred, labels=None):
+        if not y_true:
+            return 0.0
+        return f1_score(
+            y_true,
+            y_pred,
+            average="macro",
+            labels=labels,
+            zero_division=0
+        )
+
+    def masked_fine_predictions(fine_logits, coarse_preds, coarse_fine_mask):
+        """
+        Applique un masquage coarse -> fine.
+
+        Args:
+            fine_logits: [N, F]
+            coarse_preds: [N]
+            coarse_fine_mask: [C, F] bool
+
+        Returns:
+            pred_fine: list[int] de taille N
+                - label fine prédit si coarse != NONE et masque valide
+                - -1 si coarse = NONE ou aucun fine autorisé
+        """
+        if fine_logits.numel() == 0:
+            return []
+
+        device_local = fine_logits.device
+        coarse_preds_t = torch.as_tensor(coarse_preds, dtype=torch.long, device=device_local)
+
+        # [N, F]
+        allowed = coarse_fine_mask[coarse_preds_t]
+
+        # rows sans aucun label fine autorisé (ex: coarse=NONE)
+        no_valid = ~allowed.any(dim=-1)
+
+        masked_logits = fine_logits.clone()
+        masked_logits = masked_logits.masked_fill(~allowed, -1e9)
+
+        pred = masked_logits.argmax(dim=-1)
+
+        # pour les coarse=NONE / rows invalides, on force une prédiction invalide
+        pred = pred.masked_fill(no_valid, -1)
+
+        return pred.detach().cpu().tolist()
+
+    if train:
+        model.train()
+        optimizer.zero_grad()
+    else:
+        model.eval()
+
+    losses = []
+
+    all_b_true, all_b_pred = [], []
+    all_c_true, all_c_pred = [], []
+
+    # fine positive-only
+    all_f_true_pos, all_f_pred_pos = [], []
+
+    # coarse positive-only (boundary=1 uniquement pour les métriques)
+    all_c_true_pos, all_c_pred_pos = [], []
+
+    # svo_boundary
+    all_svob_true, all_svob_pred = [], []
+    # SVO positive-only (spans avec svo_label != SVO_NONE_ID)
+    all_svo_true, all_svo_pred = [], []
+    # voice positive-only (spans avec voice_label != VOICE_NONE_ID)
+    all_voice_true, all_voice_pred = [], []
+    # morpho positive-only (spans SVO actifs)
+    all_gender_true, all_gender_pred = [], []
+    all_number_true, all_number_pred = [], []
+
+    # inline HN mining : id → list[(err_type|None, pred_coarse, pred_fine)]
+    hn_results_by_id: dict[str, list] = {} if collect_hn else None
+
+    coarse_fine_mask = getattr(model, "coarse_fine_mask", None)
+    if coarse_fine_mask is None:
+        raise ValueError(
+            "Le modèle n'expose pas `coarse_fine_mask`. "
+            "Assure-toi d'utiliser la version modifiée de multitask_model.py."
+        )
+
+    coarse_fine_mask = coarse_fine_mask.to(device)
+
+    for step, batch in enumerate(loader, start=1):
+        input_ids = batch["input_ids"].to(device)
+        attention_mask = batch["attention_mask"].to(device)
+        spans = batch["spans"]
+
+        boundary_labels = batch["boundary_labels"].to(device)
+        coarse_labels = batch["coarse_labels"].to(device)
+        fine_labels = batch["fine_labels"].to(device)
+        svo_boundary_labels = batch["svo_boundary_labels"].to(device)
+        svo_labels = batch["svo_labels"].to(device)
+        voice_labels = batch["voice_labels"].to(device)
+        gender_labels = batch["gender_labels"].to(device)
+        number_labels = batch["number_labels"].to(device)
+        sample_weights = batch["sample_weights"].to(device)
+
+        # Sanity check avant forward
+        num_spans = sum(len(x) for x in spans)
+        if not (
+                num_spans
+                == boundary_labels.size(0)
+                == coarse_labels.size(0)
+                == fine_labels.size(0)
+                == svo_boundary_labels.size(0)
+                == svo_labels.size(0)
+                == voice_labels.size(0)
+                == gender_labels.size(0)
+                == number_labels.size(0)
+                == sample_weights.size(0)
+        ):
+            raise ValueError(
+                "Mismatch batch avant forward: "
+                f"num_spans={num_spans}, "
+                f"boundary={boundary_labels.size(0)}, "
+                f"coarse={coarse_labels.size(0)}, "
+                f"fine={fine_labels.size(0)}, "
+                f"sample_weights={sample_weights.size(0)}, "
+                f"ids={batch.get('ids')}"
+            )
+
+        with torch.set_grad_enabled(train):
+            outputs = model({
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "spans": spans,
+            })
+
+            # Si le modèle renvoie span_indices, on aligne tout sur les spans gardés
+            span_indices = outputs.get("span_indices", None)
+            if span_indices is not None:
+                si = span_indices.to(device=device, dtype=torch.long)
+                boundary_labels_loss = boundary_labels[si]
+                coarse_labels_loss = coarse_labels[si]
+                fine_labels_loss = fine_labels[si]
+                svo_boundary_labels_loss = svo_boundary_labels[si]
+                svo_labels_loss = svo_labels[si]
+                voice_labels_loss = voice_labels[si]
+                gender_labels_loss = gender_labels[si]
+                number_labels_loss = number_labels[si]
+                sample_weights_loss = sample_weights[si]
+            else:
+                boundary_labels_loss = boundary_labels
+                coarse_labels_loss = coarse_labels
+                fine_labels_loss = fine_labels
+                svo_boundary_labels_loss = svo_boundary_labels
+                svo_labels_loss = svo_labels
+                voice_labels_loss = voice_labels
+                gender_labels_loss = gender_labels
+                number_labels_loss = number_labels
+                sample_weights_loss = sample_weights
+
+            # Sanity check après forward / avant loss
+            num_logits = outputs["fine_logits"].size(0)
+            if not (
+                    num_logits
+                    == boundary_labels_loss.size(0)
+                    == coarse_labels_loss.size(0)
+                    == fine_labels_loss.size(0)
+                    == sample_weights_loss.size(0)
+            ):
+                raise ValueError(
+                    "Mismatch logits/labels après forward: "
+                    f"logits={num_logits}, "
+                    f"boundary={boundary_labels_loss.size(0)}, "
+                    f"coarse={coarse_labels_loss.size(0)}, "
+                    f"fine={fine_labels_loss.size(0)}, "
+                    f"sample_weights={sample_weights_loss.size(0)}, "
+                    f"ids={batch.get('ids')}"
+                )
+
+            loss_dict = model.compute_loss(
+                outputs=outputs,
+                boundary_labels=boundary_labels_loss,
+                coarse_labels=coarse_labels_loss,
+                fine_labels=fine_labels_loss,
+                svo_boundary_labels=svo_boundary_labels_loss,
+                svo_labels=svo_labels_loss,
+                voice_labels=voice_labels_loss,
+                gender_labels=gender_labels_loss,
+                number_labels=number_labels_loss,
+                sample_weights=sample_weights_loss,
+                boundary_class_weights=boundary_class_weights,
+                coarse_class_weights=coarse_class_weights,
+                lambda_boundary=lambda_boundary,
+                lambda_coarse=lambda_coarse,
+                lambda_fine=lambda_fine,
+                lambda_svo_boundary=lambda_svo_boundary,
+                lambda_svo=lambda_svo,
+                lambda_voice=lambda_voice,
+                lambda_morpho=lambda_morpho,
+                focal_gamma=focal_gamma,
+            )
+
+            loss = loss_dict["loss"] / accum_steps
+
+            if train:
+                loss.backward()
+
+        if train and (step % accum_steps == 0):
+            optimizer.step()
+            optimizer.zero_grad()
+            if ema is not None:
+                ema.update(model)
+
+        losses.append(loss_dict["loss"].item())
+
+        if (step % log_every == 0) or (step == 1):
+            mode = "TRAIN" if train else "EVAL"
+            try:
+                total_steps = len(loader)
+            except Exception:
+                total_steps = "?"
+            avg_loss = sum(losses) / max(1, len(losses))
+            print(
+                f"[{mode}] step={step}/{total_steps} "
+                f"loss={loss_dict['loss'].item():.4f} "
+                f"avg_loss={avg_loss:.4f}"
+            )
+
+        # Predictions
+        b_pred = outputs["boundary_logits"].argmax(dim=-1).detach().cpu().tolist()
+        c_pred = outputs["coarse_logits"].argmax(dim=-1).detach().cpu().tolist()
+        svob_pred = outputs["svo_boundary_logits"].argmax(dim=-1).detach().cpu().tolist()
+
+        # Fine prédite avec masquage coarse -> fine
+        f_pred = masked_fine_predictions(
+            outputs["fine_logits"],
+            c_pred,
+            coarse_fine_mask,
+        )
+
+        # Vérité terrain alignée sur les spans scorés
+        if span_indices is not None:
+            si_cpu = span_indices.detach().cpu().to(dtype=torch.long)
+            b_true = boundary_labels.detach().cpu()[si_cpu].tolist()
+            c_true = coarse_labels.detach().cpu()[si_cpu].tolist()
+            f_true = fine_labels.detach().cpu()[si_cpu].tolist()
+            svob_true = svo_boundary_labels.detach().cpu()[si_cpu].tolist()
+            svo_true = svo_labels.detach().cpu()[si_cpu].tolist()
+            voice_true = voice_labels.detach().cpu()[si_cpu].tolist()
+            gender_true = gender_labels.detach().cpu()[si_cpu].tolist()
+            number_true = number_labels.detach().cpu()[si_cpu].tolist()
+        else:
+            b_true = boundary_labels.detach().cpu().tolist()
+            c_true = coarse_labels.detach().cpu().tolist()
+            f_true = fine_labels.detach().cpu().tolist()
+            svob_true = svo_boundary_labels.detach().cpu().tolist()
+            svo_true = svo_labels.detach().cpu().tolist()
+            voice_true = voice_labels.detach().cpu().tolist()
+            gender_true = gender_labels.detach().cpu().tolist()
+            number_true = number_labels.detach().cpu().tolist()
+
+        svo_pred_raw = outputs["svo_logits"].argmax(dim=-1).detach().cpu().tolist()
+        voice_pred_raw = outputs["voice_logits"].argmax(dim=-1).detach().cpu().tolist()
+        gender_pred_raw = outputs["gender_logits"].argmax(dim=-1).detach().cpu().tolist()
+        number_pred_raw = outputs["number_logits"].argmax(dim=-1).detach().cpu().tolist()
+
+        # Accumulate boundary / coarse
+        all_b_true.extend(b_true)
+        all_b_pred.extend(b_pred)
+
+        all_c_true.extend(c_true)
+        all_c_pred.extend(c_pred)
+
+
+        # Coarse metrics = POSITIVE ONLY (boundary=1)
+        for bt, ct, cp in zip(b_true, c_true, c_pred):
+            if bt == 1:
+                all_c_true_pos.append(ct)
+                all_c_pred_pos.append(cp)
+
+        all_svob_true.extend(svob_true)
+        all_svob_pred.extend(svob_pred)
+
+        # Fine metrics = POSITIVE ONLY
+        for bt, ft, fp in zip(b_true, f_true, f_pred):
+            if bt == 1:
+                all_f_true_pos.append(ft)
+                all_f_pred_pos.append(fp)
+
+        # SVO metrics = silver spans uniquement (svo_label < NUM_SVO)
+
+        for svot, svop in zip(svo_true, svo_pred_raw):
+            if svot < NUM_SVO:
+                all_svo_true.append(svot)
+                all_svo_pred.append(svop)
+        for vt, vp in zip(voice_true, voice_pred_raw):
+            if vt < NUM_VOICE:
+                all_voice_true.append(vt)
+                all_voice_pred.append(vp)
+        # Morpho : sur spans SVO actifs uniquement
+        for svot, gt, gp, nt, np_ in zip(svo_true, gender_true, gender_pred_raw, number_true, number_pred_raw):
+            if svot < NUM_SVO:
+                if gt < NUM_GENDER:
+                    all_gender_true.append(gt)
+                    all_gender_pred.append(gp)
+                if nt < NUM_NUMBER:
+                    all_number_true.append(nt)
+                    all_number_pred.append(np_)
+
+        # ── Inline HN mining : collecter erreurs par candidat ────────────────
+        if collect_hn:
+            from collections import defaultdict
+            pos_map = []
+            for bi, sample_spans in enumerate(spans):
+                for _ in range(len(sample_spans)):
+                    pos_map.append(bi)
+
+            n_global = len(pos_map)
+            si_list = (
+                span_indices.detach().cpu().tolist()
+                if span_indices is not None
+                else list(range(n_global))
+            )
+
+            raw_results: list = [None] * n_global
+            for out_idx, in_idx in enumerate(si_list):
+                bp = b_pred[out_idx]; bl = b_true[out_idx]
+                cp = c_pred[out_idx]; cl = c_true[out_idx]
+                fp_ = f_pred[out_idx]; fl = f_true[out_idx]
+
+                pred_coarse = COARSE_LABELS[cp] if cp < len(COARSE_LABELS) else "?"
+                pred_fine   = FINE_LABELS[fp_]  if fp_ < len(FINE_LABELS)  else "?"
+
+                if bp != bl:
+                    err = "FP_BOUNDARY" if (bl == 0 and bp == 1) else "FN_BOUNDARY"
+                elif bl == 1 and cp != cl:
+                    err = "COARSE_ERR"
+                elif bl == 1 and fp_ != fl:
+                    err = "FINE_ERR"
+                else:
+                    err = None
+
+                # SVO boundary mining : FP/FN sur la tête verbe/pronom
+                svob_p_i = svob_pred[out_idx]; svob_l_i = svob_true[out_idx]
+                if svob_p_i != svob_l_i:
+                    svo_b_err = "FP_SVO_BOUNDARY" if (svob_l_i == 0 and svob_p_i == 1) else "FN_SVO_BOUNDARY"
+                else:
+                    svo_b_err = None
+
+                raw_results[in_idx] = (err, pred_coarse, pred_fine, svo_b_err)
+
+            per_row: dict[int, list] = defaultdict(list)
+            for in_idx, bi in enumerate(pos_map):
+                per_row[bi].append(raw_results[in_idx])
+
+            for bi, row_results in per_row.items():
+                hn_results_by_id[batch["ids"][bi]] = row_results
+
+    if train and (len(loader) % accum_steps != 0):
+        optimizer.step()
+        optimizer.zero_grad()
+        if ema is not None:
+            ema.update(model)
+
+    metrics = {
+        "loss": sum(losses) / max(1, len(losses)),
+        "boundary_f1": safe_macro_f1_local(all_b_true, all_b_pred),
+        "coarse_macro_f1": safe_macro_f1_local(
+            all_c_true_pos,
+            all_c_pred_pos,
+            labels=list(range(len(COARSE_LABELS) - 1))  # excl. NONE
+        ),
+        "fine_macro_f1": safe_macro_f1_local(
+            all_f_true_pos,
+            all_f_pred_pos,
+            labels=list(range(len(FINE_LABELS)))
+        ),
+        "svo_boundary_f1": safe_macro_f1_local(all_svob_true, all_svob_pred),
+        "svo_macro_f1": safe_macro_f1_local(
+            all_svo_true,
+            all_svo_pred,
+            labels=list(range(NUM_SVO))
+        ) if all_svo_true else 0.0,
+        "voice_macro_f1": safe_macro_f1_local(
+            all_voice_true,
+            all_voice_pred,
+        ) if all_voice_true else 0.0,
+        "gender_macro_f1": safe_macro_f1_local(
+            all_gender_true,
+            all_gender_pred,
+            labels=list(range(NUM_GENDER - 1))  # excl. NONE
+        ) if all_gender_true else 0.0,
+        "number_macro_f1": safe_macro_f1_local(
+            all_number_true,
+            all_number_pred,
+            labels=list(range(NUM_NUMBER - 1))  # excl. NONE
+        ) if all_number_true else 0.0,
+        "boundary_report": classification_report(
+            all_b_true,
+            all_b_pred,
+            digits=3,
+            zero_division=0
+        ) if all_b_true else "N/A",
+        "coarse_report": classification_report(
+            all_c_true_pos,
+            all_c_pred_pos,
+            labels=list(range(len(COARSE_LABELS) - 1)),  # excl. NONE
+            target_names=COARSE_LABELS[:-1],
+            digits=3,
+            zero_division=0
+        ) if all_c_true_pos else "N/A",
+        "fine_report": classification_report(
+            all_f_true_pos,
+            all_f_pred_pos,
+            labels=list(range(len(FINE_LABELS))),
+            target_names=FINE_LABELS,
+            digits=3,
+            zero_division=0
+        ) if all_f_true_pos else "N/A",
+        "svo_report": classification_report(
+            all_svo_true,
+            all_svo_pred,
+            labels=list(range(NUM_SVO)),
+            target_names=SVO_LABELS,
+            digits=3,
+            zero_division=0
+        ) if all_svo_true else "N/A",
+        "hn_results_by_id": hn_results_by_id,  # None si collect_hn=False
+    }
+
+    return metrics
+
+
+def apply_inline_hn(
+    train_ds: "MultiTaskSpanDataset",
+    results_by_id: dict,
+    boosts: dict,
+    decay: float,
+    max_weight: float,
+    min_weight: float,
+) -> dict:
+    """
+    Met à jour in-memory les sample_weights de train_ds.rows
+    à partir des erreurs collectées pendant l'epoch de training.
+    Retourne un dict de stats pour le logging.
+    """
+    from collections import Counter
+    stats: Counter = Counter()
+
+    # Construire un index id → row_index pour un accès rapide
+    id_to_idx = {row["id"]: i for i, row in enumerate(train_ds.rows)}
+
+    for rid, row_results in results_by_id.items():
+        idx = id_to_idx.get(rid)
+        if idx is None:
+            continue
+        row = train_ds.rows[idx]
+        valid_cands = [c for c in row["candidates"] if _hn_is_valid(c)]
+
+        for i, c in enumerate(valid_cands):
+            if i >= len(row_results):
+                break
+            entry = row_results[i]
+            if entry is None:
+                w = c.get("sample_weight", 1.0)
+                c["sample_weight"] = max(min_weight, 1.0 + (w - 1.0) * decay)
+                stats["decayed"] += 1
+                continue
+
+            err, pred_coarse, pred_fine, svo_b_err = entry
+            if err is None and svo_b_err is None:
+                w = c.get("sample_weight", 1.0)
+                c["sample_weight"] = max(min_weight, 1.0 + (w - 1.0) * decay)
+                stats["decayed"] += 1
+            else:
+                new_w = c.get("sample_weight", 1.0)
+                if err is not None:
+                    base = boosts.get(err, 2.0)
+                    if err == "FP_BOUNDARY" and pred_coarse in _LOW_PRECISION_COARSE:
+                        base *= _FP_LOW_PREC_EXTRA
+                    if err == "FINE_ERR" and pred_fine in _LOW_F1_FINE:
+                        base *= _FINE_ERR_EXTRA
+                    new_w *= base
+                    c["neg_type"] = err
+                    stats[err] += 1
+                if svo_b_err is not None:
+                    svo_base = boosts.get(svo_b_err, 2.0)
+                    new_w *= svo_base
+                    if "neg_type" not in c or c.get("neg_type") == "unknown":
+                        c["neg_type"] = svo_b_err
+                    stats[svo_b_err] += 1
+                c["sample_weight"] = min(max_weight, new_w)
+
+    return dict(stats)
+
+
+def _hn_is_valid(c: dict) -> bool:
+    ts, te = c.get("tok_start"), c.get("tok_end")
+    return isinstance(ts, int) and isinstance(te, int) and ts >= 0 and te >= ts
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train", required=True)
+    parser.add_argument("--val", required=True)
+    parser.add_argument("--test", required=True)
+
+    parser.add_argument("--model-name", default="microsoft/deberta-v3-base")
+    parser.add_argument("--tokenizer-path", default=None)
+    parser.add_argument("--max-length", type=int, default=128)
+
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--lr", type=float, default=2e-5)
+    parser.add_argument("--accum-steps", type=int, default=1)
+    parser.add_argument("--log-every", type=int, default=50)
+
+    parser.add_argument("--lambda-boundary", type=float, default=1.0)
+    parser.add_argument("--lambda-coarse", type=float, default=1.0)
+    parser.add_argument("--lambda-fine", type=float, default=1.2)
+    parser.add_argument("--lambda-svo", type=float, default=1.0,
+                        help="Pondération de la loss SVO (défaut=1.0)")
+    parser.add_argument("--lambda-voice", type=float, default=0.5,
+                        help="Pondération de la loss voice ACTIVE/PASSIVE (défaut=0.5)")
+    parser.add_argument("--lambda-svo-boundary", type=float, default=1.0,
+                        help="Pondération de la loss svo_boundary (détection verbes/pronoms, défaut=1.0)")
+    parser.add_argument("--lambda-morpho", type=float, default=0.3,
+                        help="Pondération de la loss morpho gender+number (défaut=0.3)")
+    parser.add_argument("--lambda-compat", type=float, default=0.2)
+    parser.add_argument("--focal-gamma", type=float, default=0.0,
+                        help="Focal loss gamma pour boundary (0=CE, 2.0=focal)")
+    parser.add_argument("--head-lr-multiplier", type=float, default=5.0,
+                        help="Multiplicateur LR pour les heads vs encoder")
+    parser.add_argument("--layer-lr-decay", type=float, default=0.9,
+                        help="Decay LR par couche (1.0=désactivé, 0.9=recommandé)")
+    parser.add_argument("--ema-decay", type=float, default=0.999,
+                        help="Decay EMA (0.0=désactivé, 0.999=recommandé)")
+    parser.add_argument("--warmup-epochs", type=int, default=1,
+                        help="Nombre d'epochs de linear warmup LR")
+    parser.add_argument("--label-smoothing", type=float, default=0.0,
+                        help="Label smoothing pour coarse/fine CE")
+
+    parser.add_argument("--device", choices=["cpu", "mps", "cuda"], default=None)
+    parser.add_argument("--class-weights", choices=["none", "auto"], default="auto")
+    parser.add_argument(
+        "--class-weight-power",
+        type=float,
+        default=0.5,
+        help="Puissance appliquée aux poids inverse-fréquence. 1.0 = brut, 0.5 = tempéré (recommandé)."
+    )
+    parser.add_argument(
+        "--min-coarse-none-weight",
+        type=float,
+        default=0.05,
+        help="Poids minimum autorisé pour la classe NONE de la tête coarse."
+    )
+    parser.add_argument(
+        "--min-fine-none-weight",
+        type=float,
+        default=0.05,
+        help="Poids minimum autorisé pour la classe NONE de la tête fine."
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Chemin vers un checkpoint pour reprendre le training."
+    )
+    parser.add_argument(
+        "--start-epoch",
+        type=int,
+        default=None,
+        help="Force l'epoch de départ quand on reprend depuis un checkpoint."
+    )
+
+    # ── Inline Hard Negative Mining ──────────────────────────────────────────
+    parser.add_argument("--hn-every",        type=int,   default=0,
+                        help="Appliquer le HN mining toutes les N epochs (0=désactivé)")
+    parser.add_argument("--hn-boost-fp",     type=float, default=3.5,
+                        help="Boost FP_BOUNDARY (défaut=3.5)")
+    parser.add_argument("--hn-boost-fn",     type=float, default=2.0,
+                        help="Boost FN_BOUNDARY (défaut=2.0)")
+    parser.add_argument("--hn-boost-coarse", type=float, default=2.5,
+                        help="Boost COARSE_ERR (défaut=2.5)")
+    parser.add_argument("--hn-boost-fine",   type=float, default=2.0,
+                        help="Boost FINE_ERR (défaut=2.0)")
+    parser.add_argument("--hn-boost-fp-svo",  type=float, default=3.0,
+                        help="Boost FP_SVO_BOUNDARY : span prédit verbe/pronom mais pas gold (défaut=3.0)")
+    parser.add_argument("--hn-boost-fn-svo",  type=float, default=2.0,
+                        help="Boost FN_SVO_BOUNDARY : span gold verbe/pronom non détecté (défaut=2.0)")
+    parser.add_argument("--hn-decay",        type=float, default=0.85,
+                        help="Décroissance des poids bien prédits (défaut=0.85)")
+    parser.add_argument("--hn-max-weight",   type=float, default=8.0,
+                        help="Poids maximum (défaut=8.0)")
+    parser.add_argument("--hn-min-weight",   type=float, default=0.3,
+                        help="Poids minimum (défaut=0.3)")
+
+    args = parser.parse_args()
+
+    if args.device:
+        device = args.device
+    else:
+        device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+
+    print(f"✅ device = {device}")
+
+    tokenizer_source = args.tokenizer_path or args.model_name
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
+
+    train_ds = MultiTaskSpanDataset(args.train, tokenizer, max_length=args.max_length)
+    val_ds = MultiTaskSpanDataset(args.val, tokenizer, max_length=args.max_length)
+    test_ds = MultiTaskSpanDataset(args.test, tokenizer, max_length=args.max_length)
+
+    collate_fn = make_collate_fn(tokenizer)
+
+    pin_memory = (device == "cuda")
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=collate_fn,
+        pin_memory=pin_memory,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=args.batch_size,
+        shuffle=False,
+        collate_fn=collate_fn,
+        pin_memory=pin_memory,
+    )
+    test_loader = DataLoader(
+        test_ds,
+        batch_size=args.batch_size,
+        shuffle=False,
+        collate_fn=collate_fn,
+        pin_memory=pin_memory,
+    )
+
+    model = SpanMultiTaskModel(model_name=args.model_name).to(device).float()
+    total_epochs = args.epochs
+
+    # Differential LR avec layer-wise decay
+    head_lr = args.lr * args.head_lr_multiplier
+    param_groups = get_layerwise_param_groups(model, args.lr, head_lr, decay=args.layer_lr_decay)
+    optimizer = AdamW(param_groups)
+
+    # Log LR par couche
+    print(f"📐 Layer-wise LR decay={args.layer_lr_decay}")
+    for g in param_groups:
+        print(f"   {g.get('name', '?'):<20} lr={g['lr']:.2e}")
+    print(f"📐 Focal gamma: {args.focal_gamma}")
+
+    boundary_w = coarse_w = fine_w = None
+    if args.class_weights == "auto":
+        (
+            boundary_w,
+            coarse_w,
+            fine_w,
+            boundary_counts,
+            coarse_counts,
+            fine_counts,
+        ) = compute_class_weights_from_multitask_jsonl(
+            args.train,
+            power=args.class_weight_power,
+        )
+
+        coarse_none_idx = len(COARSE_LABELS) - 1
+        fine_none_idx = len(FINE_LABELS) - 1
+
+        coarse_w = apply_class_weight_floor(
+            coarse_w,
+            coarse_none_idx,
+            args.min_coarse_none_weight,
+        )
+        fine_w = apply_class_weight_floor(
+            fine_w,
+            fine_none_idx,
+            args.min_fine_none_weight,
+        )
+
+        print("⚖️ class weights auto activés")
+        print(f"   class_weight_power       = {args.class_weight_power}")
+        print(f"   min_coarse_none_weight   = {args.min_coarse_none_weight}")
+        print(f"   min_fine_none_weight     = {args.min_fine_none_weight}")
+
+        print("\n[boundary counts / weights]")
+        for i in range(2):
+            print(f"  class {i}: count={boundary_counts.get(i, 0)} weight={boundary_w[i].item():.6f}")
+
+        print("\n[coarse counts / weights]")
+        for i, name in enumerate(COARSE_LABELS):
+            print(f"  {name:<10} count={coarse_counts.get(i, 0):>8} weight={coarse_w[i].item():.6f}")
+
+        print("\n[fine counts / weights]")
+        for i, name in enumerate(FINE_LABELS):
+            print(f"  {name:<22} count={fine_counts.get(i, 0):>8} weight={fine_w[i].item():.6f}")
+    else:
+        print("⚖️ class weights désactivés")
+
+    best_score = -1.0
+    start_epoch = 1
+
+    # Boosts HN inline
+    hn_boosts = {
+        "FP_BOUNDARY":     args.hn_boost_fp,
+        "FN_BOUNDARY":     args.hn_boost_fn,
+        "COARSE_ERR":      args.hn_boost_coarse,
+        "FINE_ERR":        args.hn_boost_fine,
+        "FP_SVO_BOUNDARY": args.hn_boost_fp_svo,
+        "FN_SVO_BOUNDARY": args.hn_boost_fn_svo,
+    }
+    use_inline_hn = args.hn_every > 0
+    if use_inline_hn:
+        print(f"🎯 Inline HN mining activé toutes les {args.hn_every} epoch(s)")
+        print(f"   boosts = {hn_boosts}")
+        print(f"   decay={args.hn_decay}, max_weight={args.hn_max_weight}")
+
+    # LR scheduler basé sur les epochs
+    warmup_epochs_count = min(args.warmup_epochs, total_epochs)
+    warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=warmup_epochs_count)
+    cosine_scheduler = CosineAnnealingLR(optimizer, T_max=max(1, total_epochs - warmup_epochs_count))
+    scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
+                             milestones=[warmup_epochs_count])
+
+    # EMA
+    use_ema = args.ema_decay > 0.0
+    ema = ModelEMA(model, decay=args.ema_decay) if use_ema else None
+    if use_ema:
+        print(f"📐 EMA activé (decay={args.ema_decay})")
+
+    # Reprise éventuelle depuis checkpoint
+    if args.resume is not None:
+        print(f"⤴️ Reprise depuis checkpoint: {args.resume}")
+        ckpt = torch.load(args.resume, map_location=device)
+        model.load_state_dict(ckpt["model_state"])
+
+        if "optim_state" in ckpt and ckpt["optim_state"] is not None:
+            try:
+                optimizer.load_state_dict(ckpt["optim_state"])
+            except Exception as e:
+                print(f"⚠️ Impossible de recharger l'optimizer state: {e}")
+
+        if use_ema and "ema_state" in ckpt and ckpt["ema_state"] is not None:
+            ema.shadow = {k: v.clone() for k, v in ckpt["ema_state"].items()}
+            print("📐 EMA state rechargé depuis checkpoint")
+
+        if args.start_epoch is not None:
+            start_epoch = args.start_epoch
+        else:
+            start_epoch = int(ckpt.get("epoch", 0)) + 1
+
+        best_score = ckpt.get("best_score", -1.0)
+
+        print(
+            f"✅ checkpoint rechargé | start_epoch={start_epoch} | best_score={best_score:.4f}"
+        )
+
+    for epoch in range(start_epoch, args.epochs + 1):
+        # Log LR
+        head_lrs = [pg['lr'] for pg in optimizer.param_groups if pg.get('name') == 'heads']
+        enc_lrs = [pg['lr'] for pg in optimizer.param_groups if pg.get('name', '').startswith('layer_')]
+        top_lr = enc_lrs[-1] if enc_lrs else args.lr
+        print(f"\n🔧 Epoch {epoch} | LR top_layer={top_lr:.2e}, heads={head_lrs[0] if head_lrs else '?':.2e}")
+
+        train_metrics = run_epoch(
+            train_loader,
+            model,
+            optimizer,
+            device,
+            train=True,
+            boundary_class_weights=boundary_w,
+            coarse_class_weights=coarse_w,
+            fine_class_weights=fine_w,
+            lambda_boundary=args.lambda_boundary,
+            lambda_coarse=args.lambda_coarse,
+            lambda_fine=args.lambda_fine,
+            lambda_svo_boundary=args.lambda_svo_boundary,
+            lambda_svo=args.lambda_svo,
+            lambda_voice=args.lambda_voice,
+            lambda_morpho=args.lambda_morpho,
+            lambda_compat=args.lambda_compat,
+            accum_steps=args.accum_steps,
+            log_every=args.log_every,
+            focal_gamma=args.focal_gamma,
+            ema=ema,
+            collect_hn=use_inline_hn and (epoch % args.hn_every == 0),
+        )
+
+        # ── Inline HN mining — mise à jour des poids in-memory ────────────────
+        if use_inline_hn and (epoch % args.hn_every == 0):
+            hn_res = train_metrics.get("hn_results_by_id")
+            if hn_res:
+                hn_stats = apply_inline_hn(
+                    train_ds,
+                    hn_res,
+                    boosts=hn_boosts,
+                    decay=args.hn_decay,
+                    max_weight=args.hn_max_weight,
+                    min_weight=args.hn_min_weight,
+                )
+                print(f"   🔍 HN mining epoch {epoch} : {hn_stats}")
+
+        # Validation avec poids EMA si activé
+        if use_ema:
+            original_state = ema.apply(model)
+
+        val_metrics = run_epoch(
+            val_loader,
+            model,
+            optimizer,
+            device,
+            train=False,
+            boundary_class_weights=boundary_w,
+            coarse_class_weights=coarse_w,
+            fine_class_weights=fine_w,
+            lambda_boundary=args.lambda_boundary,
+            lambda_coarse=args.lambda_coarse,
+            lambda_fine=args.lambda_fine,
+            lambda_svo_boundary=args.lambda_svo_boundary,
+            lambda_svo=args.lambda_svo,
+            lambda_voice=args.lambda_voice,
+            lambda_morpho=args.lambda_morpho,
+            lambda_compat=args.lambda_compat,
+            accum_steps=args.accum_steps,
+            log_every=args.log_every,
+            focal_gamma=args.focal_gamma,
+        )
+
+        if use_ema:
+            ema.restore(model, original_state)
+
+        # Step scheduler after each epoch
+        scheduler.step()
+
+        score = (
+            val_metrics["boundary_f1"]
+            + val_metrics["coarse_macro_f1"]
+            + val_metrics["fine_macro_f1"]
+            + val_metrics["svo_macro_f1"]
+        ) / 4.0
+
+        print(f"\n📅 Epoch {epoch}")
+        print(
+            f"Train loss={train_metrics['loss']:.4f} | "
+            f"Boundary F1={train_metrics['boundary_f1']:.4f} | "
+            f"Coarse F1={train_metrics['coarse_macro_f1']:.4f} | "
+            f"Fine F1={train_metrics['fine_macro_f1']:.4f} | "
+            f"SVO F1={train_metrics['svo_macro_f1']:.4f} | "
+            f"Voice F1={train_metrics['voice_macro_f1']:.4f} | "
+            f"Gender F1={train_metrics['gender_macro_f1']:.4f} | "
+            f"Number F1={train_metrics['number_macro_f1']:.4f}"
+        )
+        print(
+            f"Val   loss={val_metrics['loss']:.4f} | "
+            f"Boundary F1={val_metrics['boundary_f1']:.4f} | "
+            f"Coarse F1={val_metrics['coarse_macro_f1']:.4f} | "
+            f"Fine F1={val_metrics['fine_macro_f1']:.4f} | "
+            f"SVO F1={val_metrics['svo_macro_f1']:.4f} | "
+            f"Voice F1={val_metrics['voice_macro_f1']:.4f} | "
+            f"Gender F1={val_metrics['gender_macro_f1']:.4f} | "
+            f"Number F1={val_metrics['number_macro_f1']:.4f} | "
+            f"Score={score:.4f}"
+        )
+
+        print("\n[VAL boundary]")
+        print(val_metrics["boundary_report"])
+        print("[VAL coarse]")
+        print(val_metrics["coarse_report"])
+        print("[VAL fine]")
+        print(val_metrics["fine_report"])
+        print("[VAL svo]")
+        print(val_metrics["svo_report"])
+        if val_metrics.get("gender_macro_f1", 0) > 0:
+            print(f"[VAL morpho]  Gender F1={val_metrics['gender_macro_f1']:.4f}  Number F1={val_metrics['number_macro_f1']:.4f}")
+
+        torch.save({
+            "epoch": epoch,
+            "model_state": model.state_dict(),
+            "optim_state": optimizer.state_dict(),
+            "best_score": best_score,
+            "ema_state": ema.state_dict() if use_ema else None,
+        }, "checkpoint_last_multitask.pt")
+
+        if score > best_score:
+            best_score = score
+            # Sauvegarder les poids EMA si activé (meilleure version lissée)
+            if use_ema:
+                save_state = ema.apply(model)
+            torch.save({
+                "epoch": epoch,
+                "model_state": model.state_dict(),
+                "optim_state": optimizer.state_dict(),
+                "best_score": best_score,
+                "ema_state": ema.state_dict() if use_ema else None,
+            }, "checkpoint_best_multitask.pt")
+            torch.save(model.state_dict(), "best_model_multitask.pt")
+            if use_ema:
+                ema.restore(model, save_state)
+            print("✅ nouveau best model sauvegardé")
+
+    print("\n✅ Fin training, évaluation test sur le best model")
+
+    best_ckpt_path = "checkpoint_best_multitask.pt"
+    if os.path.exists(best_ckpt_path):
+        ckpt = torch.load(best_ckpt_path, map_location=device)
+        model.load_state_dict(ckpt["model_state"])
+        print(f"✅ Best model chargé depuis {best_ckpt_path}")
+    else:
+        print("⚠️ Pas de checkpoint best trouvé — évaluation avec le modèle courant")
+
+    test_metrics = run_epoch(
+        test_loader,
+        model,
+        optimizer,
+        device,
+        train=False,
+        boundary_class_weights=boundary_w,
+        coarse_class_weights=coarse_w,
+        fine_class_weights=fine_w,
+        lambda_boundary=args.lambda_boundary,
+        lambda_coarse=args.lambda_coarse,
+        lambda_fine=args.lambda_fine,
+        lambda_svo_boundary=args.lambda_svo_boundary,
+        lambda_svo=args.lambda_svo,
+        lambda_voice=args.lambda_voice,
+        lambda_morpho=args.lambda_morpho,
+        lambda_compat=args.lambda_compat,
+        accum_steps=args.accum_steps,
+        log_every=args.log_every,
+        focal_gamma=args.focal_gamma,
+    )
+
+    print("\n🎯 TEST")
+    print(f"Loss={test_metrics['loss']:.4f}")
+    print(f"Boundary F1={test_metrics['boundary_f1']:.4f}")
+    print(f"Coarse   F1={test_metrics['coarse_macro_f1']:.4f}")
+    print(f"Fine     F1={test_metrics['fine_macro_f1']:.4f}")
+    print(f"SVO      F1={test_metrics['svo_macro_f1']:.4f}")
+    print(f"Voice    F1={test_metrics['voice_macro_f1']:.4f}")
+    print(f"Gender   F1={test_metrics['gender_macro_f1']:.4f}")
+    print(f"Number   F1={test_metrics['number_macro_f1']:.4f}")
+
+    print("\n[TEST boundary]")
+    print(test_metrics["boundary_report"])
+    print("[TEST coarse]")
+    print(test_metrics["coarse_report"])
+    print("[TEST fine]")
+    print(test_metrics["fine_report"])
+    print("[TEST svo]")
+    print(test_metrics["svo_report"])
+    if test_metrics.get("gender_macro_f1", 0) > 0:
+        print(f"[TEST morpho]  Gender F1={test_metrics['gender_macro_f1']:.4f}  Number F1={test_metrics['number_macro_f1']:.4f}")
+
+
+if __name__ == "__main__":
+    main()

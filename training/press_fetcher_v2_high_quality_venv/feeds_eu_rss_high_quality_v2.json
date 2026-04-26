@@ -1,0 +1,382 @@
+{
+  "version": "v2-high-quality",
+  "generated_at": "2026-04-12T16:20:35",
+  "feeds": [
+    {
+      "source": "BBC News",
+      "lang": "en",
+      "url": "https://feeds.bbci.co.uk/news/rss.xml",
+      "category": "general"
+    },
+    {
+      "source": "BBC News",
+      "lang": "en",
+      "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+      "category": "world"
+    },
+    {
+      "source": "BBC News",
+      "lang": "en",
+      "url": "https://feeds.bbci.co.uk/news/business/rss.xml",
+      "category": "business"
+    },
+    {
+      "source": "BBC News",
+      "lang": "en",
+      "url": "https://feeds.bbci.co.uk/news/technology/rss.xml",
+      "category": "tech"
+    },
+    {
+      "source": "BBC News",
+      "lang": "en",
+      "url": "https://feeds.bbci.co.uk/news/health/rss.xml",
+      "category": "health"
+    },
+    {
+      "source": "Deutsche Welle",
+      "lang": "en",
+      "url": "https://rss.dw.com/rdf/rss-en-all",
+      "category": "general"
+    },
+    {
+      "source": "Deutsche Welle",
+      "lang": "en",
+      "url": "https://rss.dw.com/rdf/rss-en-top",
+      "category": "top"
+    },
+    {
+      "source": "Deutsche Welle",
+      "lang": "en",
+      "url": "https://rss.dw.com/rdf/rss-en-world",
+      "category": "world"
+    },
+    {
+      "source": "Deutsche Welle",
+      "lang": "en",
+      "url": "https://rss.dw.com/rdf/rss-en-eu",
+      "category": "europe"
+    },
+    {
+      "source": "Deutsche Welle",
+      "lang": "en",
+      "url": "https://rss.dw.com/rdf/rss-en-bus",
+      "category": "business"
+    },
+    {
+      "source": "Euronews",
+      "lang": "en",
+      "url": "https://www.euronews.com/rss",
+      "category": "general"
+    },
+    {
+      "source": "Euronews",
+      "lang": "en",
+      "url": "https://www.euronews.com/rss?level=vertical&name=news",
+      "category": "news"
+    },
+    {
+      "source": "France 24",
+      "lang": "en",
+      "url": "https://www.france24.com/en/rss",
+      "category": "general"
+    },
+    {
+      "source": "RFI",
+      "lang": "en",
+      "url": "https://www.rfi.fr/en/rss",
+      "category": "general"
+    },
+    {
+      "source": "RFI",
+      "lang": "en",
+      "url": "https://www.rfi.fr/en/international/rss",
+      "category": "international"
+    },
+    {
+      "source": "Global Voices",
+      "lang": "en",
+      "url": "https://globalvoices.org/feed/",
+      "category": "general"
+    },
+    {
+      "source": "France 24",
+      "lang": "fr",
+      "url": "https://www.france24.com/fr/rss",
+      "category": "general"
+    },
+    {
+      "source": "RFI",
+      "lang": "fr",
+      "url": "https://www.rfi.fr/fr/monde/rss",
+      "category": "world"
+    },
+    {
+      "source": "Radio France",
+      "lang": "fr",
+      "url": "https://www.radiofrance.fr/rss/monde",
+      "category": "world"
+    },
+    {
+      "source": "Radio France",
+      "lang": "fr",
+      "url": "https://www.radiofrance.fr/rss/economie",
+      "category": "economy"
+    },
+    {
+      "source": "Radio France",
+      "lang": "fr",
+      "url": "https://www.radiofrance.fr/rss/politique",
+      "category": "politics"
+    },
+    {
+      "source": "Radio France",
+      "lang": "fr",
+      "url": "https://www.radiofrance.fr/rss/societe",
+      "category": "society"
+    },
+    {
+      "source": "Radio France",
+      "lang": "fr",
+      "url": "https://www.radiofrance.fr/rss/sciences-savoirs",
+      "category": "science"
+    },
+    {
+      "source": "Radio France",
+      "lang": "fr",
+      "url": "https://www.radiofrance.fr/rss/environnement",
+      "category": "environment"
+    },
+    {
+      "source": "Le Monde",
+      "lang": "fr",
+      "url": "https://www.lemonde.fr/rss/une.xml",
+      "category": "frontpage"
+    },
+    {
+      "source": "L'Obs",
+      "lang": "fr",
+      "url": "https://www.nouvelobs.com/a-la-une/rss.xml",
+      "category": "frontpage"
+    },
+    {
+      "source": "Franceinfo",
+      "lang": "fr",
+      "url": "https://www.francetvinfo.fr/titres.rss",
+      "category": "headlines"
+    },
+    {
+      "source": "La Dépêche",
+      "lang": "fr",
+      "url": "https://www.ladepeche.fr/rss.xml",
+      "category": "frontpage"
+    },
+    {
+      "source": "Sud Ouest",
+      "lang": "fr",
+      "url": "https://www.sudouest.fr/essentiel/rss.xml",
+      "category": "frontpage"
+    },
+    {
+      "source": "Ouest-France",
+      "lang": "fr",
+      "url": "https://www.ouest-france.fr/rss-en-continu.xml",
+      "category": "continuous"
+    },
+    {
+      "source": "Mediapart",
+      "lang": "fr",
+      "url": "https://www.mediapart.fr/articles/feed",
+      "category": "frontpage",
+      "notes": "Peut contenir des extraits limités"
+    },
+    {
+      "source": "Global Voices",
+      "lang": "fr",
+      "url": "https://globalvoices.org/fr/feed/",
+      "category": "general"
+    },
+    {
+      "source": "Deutsche Welle",
+      "lang": "de",
+      "url": "https://rss.dw.com/xml/rss-de-all",
+      "category": "general"
+    },
+    {
+      "source": "Deutsche Welle",
+      "lang": "de",
+      "url": "https://rss.dw.com/xml/rss-de-top",
+      "category": "top"
+    },
+    {
+      "source": "Deutsche Welle",
+      "lang": "de",
+      "url": "https://rss.dw.com/xml/rss-de-news",
+      "category": "news"
+    },
+    {
+      "source": "tagesschau",
+      "lang": "de",
+      "url": "http://www.tagesschau.de/xml/rss2",
+      "category": "news"
+    },
+    {
+      "source": "ZEIT ONLINE",
+      "lang": "de",
+      "url": "http://newsfeed.zeit.de/index",
+      "category": "general"
+    },
+    {
+      "source": "FOCUS Online",
+      "lang": "de",
+      "url": "https://rss.focus.de/fol/XML/rss_folnews.xml",
+      "category": "news"
+    },
+    {
+      "source": "FAZ",
+      "lang": "de",
+      "url": "https://www.faz.net/rss/aktuell/",
+      "category": "news"
+    },
+    {
+      "source": "El País",
+      "lang": "es",
+      "url": "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada",
+      "category": "frontpage"
+    },
+    {
+      "source": "ElDiario.es",
+      "lang": "es",
+      "url": "https://www.eldiario.es/rss/",
+      "category": "frontpage"
+    },
+    {
+      "source": "El Confidencial",
+      "lang": "es",
+      "url": "https://rss.elconfidencial.com/espana/",
+      "category": "spain"
+    },
+    {
+      "source": "Expansión",
+      "lang": "es",
+      "url": "https://e00-expansion.uecdn.es/rss/portada.xml",
+      "category": "economy"
+    },
+    {
+      "source": "El Periódico",
+      "lang": "es",
+      "url": "https://www.elperiodico.com/es/rss/rss_portada.xml",
+      "category": "frontpage"
+    },
+    {
+      "source": "Deutsche Welle",
+      "lang": "es",
+      "url": "http://rss.dw.com/rdf/rss-sp-all",
+      "category": "general"
+    },
+    {
+      "source": "Deutsche Welle",
+      "lang": "es",
+      "url": "http://rss.dw.com/rdf/rss-sp-top",
+      "category": "top"
+    },
+    {
+      "source": "Deutsche Welle",
+      "lang": "es",
+      "url": "http://rss.dw.com/rdf/rss-sp-inter",
+      "category": "international"
+    },
+    {
+      "source": "Global Voices",
+      "lang": "es",
+      "url": "https://globalvoices.org/es/feed/",
+      "category": "general"
+    },
+    {
+      "source": "RTP Notícias",
+      "lang": "pt",
+      "url": "https://www.rtp.pt/noticias/rss",
+      "category": "latest"
+    },
+    {
+      "source": "RTP Notícias",
+      "lang": "pt",
+      "url": "https://www.rtp.pt/noticias/rss/mundo",
+      "category": "world"
+    },
+    {
+      "source": "RTP Notícias",
+      "lang": "pt",
+      "url": "https://www.rtp.pt/noticias/rss/pais",
+      "category": "country"
+    },
+    {
+      "source": "RTP Notícias",
+      "lang": "pt",
+      "url": "https://www.rtp.pt/noticias/rss/economia",
+      "category": "economy"
+    },
+    {
+      "source": "RTP Notícias",
+      "lang": "pt",
+      "url": "https://www.rtp.pt/noticias/rss/desporto",
+      "category": "sports"
+    },
+    {
+      "source": "RTP Notícias",
+      "lang": "pt",
+      "url": "https://www.rtp.pt/noticias/rss/cultura",
+      "category": "culture"
+    },
+    {
+      "source": "Expresso",
+      "lang": "pt",
+      "url": "https://rss.impresa.pt/feed/latest/expresso.rss?type=ARTICLE,VIDEO,GALLERY,STREAM,PLAYLIST,EVENT&limit=20&pubsubhub=true",
+      "category": "latest"
+    },
+    {
+      "source": "Observador",
+      "lang": "pt",
+      "url": "https://observador.pt/feed/rss/opiniao",
+      "category": "opinion"
+    },
+    {
+      "source": "Global Voices",
+      "lang": "pt",
+      "url": "https://globalvoices.org/pt/feed/",
+      "category": "general"
+    },
+    {
+      "source": "ANSA",
+      "lang": "it",
+      "url": "https://www.ansa.it/sito/ansait_rss.xml",
+      "category": "general"
+    },
+    {
+      "source": "ANSA",
+      "lang": "it",
+      "url": "https://www.ansa.it/web/ansait_web_rss_homepage.xml",
+      "category": "homepage"
+    },
+    {
+      "source": "Il Sole 24 Ore",
+      "lang": "it",
+      "url": "https://www.ilsole24ore.com/rss/italia.xml",
+      "category": "italy",
+      "notes": "URL listé publiquement; vérifier disponibilité"
+    },
+    {
+      "source": "la Repubblica",
+      "lang": "it",
+      "url": "https://www.repubblica.it/rss/homepage/rss2.0.xml",
+      "category": "homepage",
+      "notes": "URL listé publiquement; vérifier disponibilité"
+    },
+    {
+      "source": "ilmanifesto",
+      "lang": "it",
+      "url": "https://ilmanifesto.it/feed/",
+      "category": "frontpage",
+      "notes": "URL listé publiquement; vérifier disponibilité"
+    }
+  ]
+}

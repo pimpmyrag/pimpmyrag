@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: ner-demo
+    runtime: java
+    rootDir: .
+    buildCommand: ./gradlew :ner-demo:bootJar -x test
+    startCommand: bash scripts/render/start-ner-demo-render.sh
+    healthCheckPath: /
+    envVars:
+      - key: JAVA_TOOL_OPTIONS
+        value: -Xms512m -Xmx2g
+      - key: MODEL_URL
+        sync: false
+      - key: MODEL_SHA256
+        sync: false
+      - key: TOKENIZER_URL
+        sync: false
+      - key: TOKENIZER_SHA256
+        sync: false
+      - key: NER_MODEL_PATH
+        sync: false
+      - key: NER_TOKENIZER_PATH
+        sync: false
+

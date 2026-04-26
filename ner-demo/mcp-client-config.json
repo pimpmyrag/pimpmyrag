@@ -1,0 +1,29 @@
+{
+  "_comment": "Configuration MCP client pour Claude Desktop / Cursor / tout client compatible MCP 1.0",
+  "_usage": "Copiez le bloc 'mcpServers' dans ~/Library/Application Support/Claude/claude_desktop_config.json (macOS)",
+
+  "mcpServers": {
+    "ner-demo": {
+      "transport": "sse",
+      "url": "http://localhost:8090/mcp/sse"
+    }
+  },
+
+  "_tools_available": {
+    "getConfig": "Lire tauBoundary / tauNone / tauCoarse / tauSvoBoundary courants",
+    "setThreshold": "Modifier un seuil (name + value) — effet immédiat",
+    "analyzeText": "Inférence NER+SVO avec scores bruts (pBoundary, pCoarse, pFine…)",
+    "scanThreshold": "Balayer une plage de valeurs pour un seuil sur un texte-test",
+    "analyzeBatch": "Stats agrégées sur un corpus (max 30 textes)"
+  },
+
+  "_example_calibration_prompt": [
+    "1. Call getConfig() to see current thresholds.",
+    "2. Call analyzeText('Le président Emmanuel Macron a signé le décret hier à l Élysée.') to see raw scores.",
+    "3. Look at pBoundary for each entity — entities near tauBoundary are fragile.",
+    "4. Call scanThreshold(text, 'tauBoundary', 0.40, 0.85, 0.05) to see the recall/precision tradeoff curve.",
+    "5. Pick the 'elbow' value and apply it with setThreshold('tauBoundary', <value>).",
+    "6. Re-run analyzeText to verify the result."
+  ]
+}
+

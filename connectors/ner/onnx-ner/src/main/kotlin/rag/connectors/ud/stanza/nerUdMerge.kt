@@ -41,12 +41,18 @@ fun mergeNerLabelWithUDV2(
     nerEntities: List<Entity>,
     udDoc: UDDocument
 ): List<Entity> {
+    // NB: pruneOverlapsByConfidence() est intentionnellement absent ici.
+    // Cette fonction produit intentionnellement des candidats chevauchants
+    // (entité base + split rôle/nom + expansions syntaxiques).
+    // Le pruning par confiance doit se faire en aval, après la classification
+    // fine-grained (buildEntityCandidates → pruneKeepLongestSameHint).
     val raw = nerEntities.flatMap { enrichOneV2(it, udDoc) }
     return dedupeEntities(raw)
 }
+
 private fun enrichOneV2(entity: Entity, udDoc: UDDocument): List<Entity> {
     val eStart = entity.span?.start ?: return listOf(entity)
-    val eEnd   = entity.span?.end   ?: return listOf(entity)
+    val eEnd = entity.span?.end ?: return listOf(entity)
     if (eStart >= eEnd) return listOf(entity)
 
     // 1) Trouver la phrase UD
@@ -129,7 +135,7 @@ private fun buildEntityFromTokens(
     udDoc: UDDocument
 ): Entity {
     val start = tokens.first().start
-    val end   = tokens.last().end
+    val end = tokens.last().end
     val udSpan = Span(start, end, tokens)
 
     return entity.copy(
@@ -152,6 +158,12 @@ private fun generateNominalExpansions(
 
     // 1) Span reconstruit simple autour de la tête
     val reconstructed = reconstructSpanV2(allTokens, head.id)
+
+    if (entity.type.equals("loc", true)) {
+        val coord = splitCoordinatedPropns(entity, sentence, reconstructed, udDoc, includeGroup = true)
+        out += coord
+    }
+
     if (reconstructed.tokens.isNotEmpty()) {
         out += entity.copy(
             text = udDoc.text.substring(reconstructed.start, reconstructed.end),
@@ -263,10 +275,10 @@ private val FLAT_DEPRELS = setOf("flat", "flat:name", "name")
  *   "président, chef de…"  → "chef" est NOUN pas PROPN → pas de split
  */
 private fun trySplitRoleAndName(
-    entity:   Entity,
-    trimmed:  List<UDToken>,
+    entity: Entity,
+    trimmed: List<UDToken>,
     nounHead: UDToken,
-    udDoc:    UDDocument,
+    udDoc: UDDocument,
 ): List<Entity>? {
 
     val trimmedIds = trimmed.map { it.id }.toSet()
@@ -298,7 +310,9 @@ private fun trySplitRoleAndName(
                 && t.upos == UPOS.PROPN
                 && t.deprel.lowercase() in nameDeprels
                 && t.head in clusterIds
-            ) { clusterIds += t.id; changed = true }
+            ) {
+                clusterIds += t.id; changed = true
+            }
         }
     }
 
@@ -324,25 +338,25 @@ private fun trySplitRoleAndName(
 
     // ── Étape 4 : construire les deux Entity ─────────────────────────────────
     val roleStart = roleTokens.first().start
-    val roleEnd   = roleTokens.last().end
+    val roleEnd = roleTokens.last().end
     if (roleEnd > udDoc.text.length || roleStart < 0) return null
 
     val nameStart = nameTokens.first().start
-    val nameEnd   = nameTokens.last().end
+    val nameEnd = nameTokens.last().end
     if (nameEnd > udDoc.text.length || nameStart < 0) return null
 
     val roleUdSpan = reconstructSpan(trimmed, nounHead.id)
-    val nameHead   = nameTokens.firstOrNull { it.upos == UPOS.PROPN } ?: nameTokens.first()
+    val nameHead = nameTokens.firstOrNull { it.upos == UPOS.PROPN } ?: nameTokens.first()
     val nameUdSpan = reconstructSpan(trimmed, nameHead.id)
 
     val roleEntity = entity.copy(
-        text     = udDoc.text.substring(roleStart, roleEnd),
-        span     = Span(roleStart, roleEnd, roleTokens),
+        text = udDoc.text.substring(roleStart, roleEnd),
+        span = Span(roleStart, roleEnd, roleTokens),
         metadata = buildEntityMeta(entity, nounHead, udDoc, roleUdSpan)
     )
     val nameEntity = entity.copy(
-        text     = udDoc.text.substring(nameStart, nameEnd),
-        span     = Span(nameStart, nameEnd, nameTokens),
+        text = udDoc.text.substring(nameStart, nameEnd),
+        span = Span(nameStart, nameEnd, nameTokens),
         metadata = buildEntityMeta(entity, nameHead, udDoc, nameUdSpan)
     )
 
@@ -356,8 +370,8 @@ private fun trySplitRoleAndName(
 /** Construit la map de metadata enrichie pour une entité et sa tête UD. */
 private fun buildEntityMeta(
     entity: Entity,
-    head:   UDToken,
-    udDoc:  UDDocument,
+    head: UDToken,
+    udDoc: UDDocument,
     udSpan: Span,
 ): Map<String, Any> {
     val udSpanText = if (udSpan.start >= 0 && udSpan.end > udSpan.start)
@@ -370,20 +384,19 @@ private fun buildEntityMeta(
     return buildMap<String, Any?> {
         putAll(entity.metadata)
         put("nerRawText", entity.text)
-        put("head",       head.text)
-        put("headLemma",  head.lemma ?: head.text)
-        put("headUpos",   head.upos?.name)
+        put("head", head.text)
+        put("headLemma", head.lemma ?: head.text)
+        put("headUpos", head.upos?.name)
         put("headDeprel", head.deprel)
         put("udSpanText", udSpanText)
-        put("gender",     head.feats?.gender?.name)
-        put("number",     head.feats?.number?.name)
-        put("headId",     head.id)
+        put("gender", head.feats?.gender?.name)
+        put("number", head.feats?.number?.name)
+        put("headId", head.id)
     }.filterValues { it != null }.mapValues { it.value as Any }
 }
 
 private fun reconstructSpanV2(tokens: List<UDToken>, headId: Int): Span {
-    val head = tokens.firstOrNull { it.id == headId }
-        ?: return Span(0, 0, emptyList())
+    val head = tokens.firstOrNull { it.id == headId } ?: return Span(0, 0, emptyList())
 
     val keep = linkedMapOf<Int, UDToken>()
     keep[head.id] = head
@@ -394,34 +407,47 @@ private fun reconstructSpanV2(tokens: List<UDToken>, headId: Int): Span {
         for (child in tokens.filter { it.head == node.id }) {
             val rel = base(child.deprel)
 
-            // cas utiles d’un syntagme nominal enrichi
             val include = when {
                 rel in setOf("amod", "compound", "flat", "name", "nummod") -> true
                 rel == "appos" && child.upos == UPOS.PROPN -> true
                 rel == "nmod" && isNominalChainCandidate(child, tokens) -> true
                 else -> false
             }
-
             if (!include) continue
-            if (child.id !in keep) {
-                keep[child.id] = child
+
+            if (keep.putIfAbsent(child.id, child) == null) {
                 visit(child)
 
-                // si child a un ADP case ("de", "du", "d'")
-                tokens.filter { it.head == child.id && base(it.deprel) == "case" }
-                    .forEach { caseTok ->
-                        keep[caseTok.id] = caseTok
-                    }
+                // Garde case/det pour l'info, mais offsets parfois (0,0)
+                tokens.filter { it.head == child.id && base(it.deprel) in setOf("case", "det") }
+                    .forEach { keep[it.id] = it }
             }
         }
     }
 
     visit(head)
 
-    val sorted = keep.values.sortedBy { it.start }
-    if (sorted.isEmpty()) return Span(0, 0, emptyList())
-    return Span(sorted.first().start, sorted.last().end, sorted)
+    val kept = keep.values.toList()
+    if (kept.isEmpty()) return Span(0, 0, emptyList())
+
+    // 👇 Le seul critère fiable : end > start
+    val anchored = kept.filter { it.end > it.start }
+
+    val (start, end) = if (anchored.isNotEmpty()) {
+        anchored.minOf { it.start } to anchored.maxOf { it.end }
+    } else {
+        head.start to head.end
+    }
+
+    // Tri “propre” (les (0,0) à la fin)
+    val sortedForSpan = kept.sortedWith(
+        compareBy<UDToken> { if (it.end > it.start) 0 else 1 }
+            .thenBy { if (it.end > it.start) it.start else it.id }
+    )
+
+    return Span(start, end, sortedForSpan)
 }
+
 
 private fun isNominalChainCandidate(child: UDToken, tokens: List<UDToken>): Boolean {
     val children = tokens.filter { it.head == child.id }
@@ -457,6 +483,70 @@ private fun dedupeEntities(entities: List<Entity>): List<Entity> {
     return out.sortedWith(compareBy({ it.span?.start ?: Int.MAX_VALUE }, { it.span?.end ?: Int.MAX_VALUE }))
 }
 
+fun List<Entity>.pruneOverlapsByConfidence(
+    delta: Float = 0.02f
+): List<Entity> {
+
+    fun conf(e: Entity) = (e.metadata["confidence"] as? Number)?.toFloat() ?: 0f
+    fun len(e: Entity) = (e.span?.end ?: 0) - (e.span?.start ?: 0)
+
+    fun overlap(a: Entity, b: Entity): Boolean {
+        val as_ = a.span?.start ?: return false
+        val ae = a.span?.end ?: return false
+        val bs = b.span?.start ?: return false
+        val be = b.span?.end ?: return false
+        return as_ < be && ae > bs
+    }
+
+    fun better(a: Entity, b: Entity): Entity {
+        // retourne le "meilleur" entre a et b (même type et overlap)
+        val ca = conf(a)
+        val cb = conf(b)
+
+        return when {
+            ca > cb + delta -> a
+            cb > ca + delta -> b
+            else -> {
+                // confiance trop proche => tie-breakers
+                val la = len(a)
+                val lb = len(b)
+
+                when {
+                    la != lb -> if (la > lb) a else b   // plus long gagne
+                    else -> if (ca >= cb) a else b       // sinon conf
+                }
+            }
+        }
+    }
+
+    // Tri utile : start asc, end desc (longs d’abord quand même start)
+    val sorted = this.sortedWith(
+        compareBy<Entity> { it.span?.start ?: Int.MAX_VALUE }
+            .thenByDescending { it.span?.end ?: Int.MIN_VALUE }
+    )
+
+    val out = mutableListOf<Entity>()
+
+    for (e in sorted) {
+        val s = e.span?.start ?: continue
+        val en = e.span?.end ?: continue
+
+        // cherche le dernier candidat dans out qui overlap + même type
+        val idx = out.indexOfLast { o ->
+            o.type == e.type && overlap(o, e)
+        }
+
+        if (idx >= 0) {
+            val chosen = better(e, out[idx])
+            out[idx] = chosen
+        } else {
+            out += e
+        }
+    }
+    return out
+}
+
+
 private fun expandTimePhrase(tokens: List<UDToken>, baseTokens: List<UDToken>): Span? {
     if (baseTokens.isEmpty()) return null
 
@@ -487,6 +577,60 @@ private fun expandTimePhrase(tokens: List<UDToken>, baseTokens: List<UDToken>): 
     if (sorted.size <= baseTokens.size) return null
     return Span(sorted.first().start, sorted.last().end, sorted)
 }
+
+private fun expandTimePhraseUdAware(
+    tokens: List<UDToken>,
+    baseTokens: List<UDToken>,
+    allowLeftExpansion: Boolean = false, // false = on respecte le start du coarse
+): Span? {
+    if (baseTokens.isEmpty()) return null
+
+    fun baseRel(dep: String): String = dep.lowercase().substringBefore(":")
+
+    val baseStart = baseTokens.minOf { it.start }
+    val baseEnd   = baseTokens.maxOf { it.end }
+
+    val keep = linkedMapOf<Int, UDToken>()
+    baseTokens.forEach { keep[it.id] = it }
+
+    // Relations "internes" raisonnables pour une expression de temps
+    val allowed = setOf("case", "amod", "compound", "nummod", "flat", "name", "appos", "nmod")
+
+    var changed = true
+    while (changed) {
+        changed = false
+        val keepIds = keep.keys.toSet()
+
+        for (t in tokens) {
+            if (t.id in keepIds) continue
+            if (t.head !in keepIds) continue
+            if (baseRel(t.deprel) !in allowed) continue
+
+            // ✅ Clamp : ne pas étendre à gauche si le coarse a déjà des frontières fiables
+            if (!allowLeftExpansion && t.start < baseStart) continue
+
+            keep[t.id] = t
+            changed = true
+        }
+    }
+
+    // ⚠️ Re-filtrer au cas où un token "case/det" se serait glissé avant baseStart
+    val filtered = keep.values
+        .filter { allowLeftExpansion || it.start >= baseStart }
+        .sortedBy { it.start }
+
+    // Si l'expansion n'apporte rien (ou ne fait que tenter d'étendre à gauche), on renvoie null
+    if (filtered.isEmpty()) return null
+
+    val newStart = filtered.first().start
+    val newEnd   = filtered.last().end
+
+    // Pas d'extension ou extension nulle => null
+    if (newStart == baseStart && newEnd == baseEnd) return null
+
+    return Span(newStart, newEnd, filtered)
+}
+
 
 private fun expandNounWithProperName(tokens: List<UDToken>, headId: Int): Span? {
     val head = tokens.firstOrNull { it.id == headId } ?: return null
@@ -537,7 +681,7 @@ private fun generateTimeExpansions(
     val out = mutableListOf<Entity>()
     val allTokens = sentence.tokens
 
-    val expanded = expandTimePhrase(allTokens, trimmed)
+    val expanded = expandTimePhraseUdAware(allTokens, trimmed)
     if (expanded != null) {
         out += entity.copy(
             text = udDoc.text.substring(expanded.start, expanded.end),
@@ -550,32 +694,114 @@ private fun generateTimeExpansions(
     return out
 }
 
+private fun splitCoordinatedPropns(
+    entity: Entity,
+    sentence: UDSentence,
+    span: Span,
+    udDoc: UDDocument,
+    includeGroup: Boolean = true
+): List<Entity> {
+    fun baseRel(dep: String): String = dep.lowercase().substringBefore(":")
+
+    val toks = sentence.tokens
+    val spanIds = span.tokens.map { it.id }.toSet()
+
+    val head = span.tokens.firstOrNull { it.upos == UPOS.PROPN } ?: return emptyList()
+
+    val conjs = toks.filter {
+        it.id in spanIds &&
+                it.upos == UPOS.PROPN &&
+                baseRel(it.deprel) == "conj" &&
+                it.head == head.id
+    }
+    if (conjs.isEmpty()) return emptyList()
+
+    // atomiques
+    val atomicHeads = listOf(head) + conjs
+    val atomics = atomicHeads.map { h ->
+        val cl = propnCoreCluster(toks, h.id)
+        Span(cl.first().start, cl.last().end, cl)
+    }
+
+    fun entityFromSpan(s: Span, headTok: UDToken, source: String) =
+        entity.copy(
+            text = udDoc.text.substring(s.start, s.end),
+            span = s,
+            metadata = buildEntityMeta(entity, headTok, udDoc, s) + mapOf("candidateSource" to source)
+        )
+
+    val atomicEntities = atomicHeads.zip(atomics).map { (h, s) ->
+        entityFromSpan(s, h, "coord_atomic")
+    }
+
+    if (!includeGroup) return atomicEntities
+
+    // group = union atomiques + cc/punct attachés à head/conj
+    val keepIds = linkedSetOf<Int>()
+    atomics.flatMap { it.tokens }.forEach { keepIds += it.id }
+
+    toks.filter { it.id in spanIds && baseRel(it.deprel) in setOf("cc", "punct") }
+        .filter { t -> t.head == head.id || conjs.any { c -> t.head == c.id } }
+        .forEach { keepIds += it.id }
+
+    val groupTokens = toks.filter { it.id in keepIds }.sortedBy { it.start }
+    val groupSpan = Span(groupTokens.first().start, groupTokens.last().end, groupTokens)
+
+    val groupEntity = entityFromSpan(groupSpan, head, "coord_group")
+    return atomicEntities + groupEntity
+}
+
+private fun propnCoreCluster(tokens: List<UDToken>, headId: Int): List<UDToken> {
+    fun baseRel(dep: String): String = dep.lowercase().substringBefore(":")
+
+    val keep = linkedSetOf<Int>()
+    fun includeChild(ch: UDToken): Boolean {
+        val rel = baseRel(ch.deprel)
+        return when (rel) {
+            "flat", "name", "compound" -> true
+            "amod" -> ch.upos == UPOS.ADJ
+            "det"  -> ch.upos == UPOS.DET
+            else -> false
+        }
+    }
+
+    fun dfs(id: Int) {
+        if (!keep.add(id)) return
+        tokens.filter { it.head == id }.forEach { ch ->
+            if (includeChild(ch)) dfs(ch.id)
+        }
+    }
+
+    dfs(headId)
+    return tokens.filter { it.id in keep }.sortedBy { it.start }
+}
+
 private fun expandNounWithDeChain(tokens: List<UDToken>, headId: Int): Span? {
     val head = tokens.firstOrNull { it.id == headId } ?: return null
     val keep = linkedMapOf<Int, UDToken>()
     keep[head.id] = head
 
     fun base(d: String): String = d.lowercase().substringBefore(":")
+    fun anchored(t: UDToken): Boolean = t.end > t.start  // <-- CRUCIAL (0..2 est valide, 0..0 non)
 
     val nmods = tokens.filter { t ->
-        t.head == head.id &&
-                base(t.deprel) == "nmod"
+        t.head == head.id && base(t.deprel) == "nmod"
     }
-
     if (nmods.isEmpty()) return null
 
     var found = false
     for (nmod in nmods) {
-        val caseTokens = tokens.filter {
-            it.head == nmod.id && base(it.deprel) == "case"
+        // case (de/d') + det(le) possible dans ton UD (du => de + le)
+        val caseOrDet = tokens.filter {
+            it.head == nmod.id && base(it.deprel) in setOf("case", "det")
         }
 
-        if (caseTokens.isNotEmpty()) {
+        if (caseOrDet.isNotEmpty()) {
             found = true
             keep[nmod.id] = nmod
-            caseTokens.forEach { keep[it.id] = it }
+            caseOrDet.forEach { keep[it.id] = it }
 
-            // expansion transitive utile : "Trente Ans"
+            // expansion transitive : "Trente Ans", etc.
             tokens.filter { t ->
                 t.head == nmod.id &&
                         base(t.deprel) in setOf("flat", "name", "compound", "amod", "nummod", "appos")
@@ -585,8 +811,24 @@ private fun expandNounWithDeChain(tokens: List<UDToken>, headId: Int): Span? {
 
     if (!found) return null
 
-    val sorted = keep.values.sortedBy { it.start }
-    return Span(sorted.first().start, sorted.last().end, sorted)
+    val kept = keep.values.toList()
+    val anchoredTokens = kept.filter(::anchored)
+
+    // Bornes UNIQUEMENT sur tokens ancrés
+    val (start, end) = if (anchoredTokens.isNotEmpty()) {
+        anchoredTokens.minOf { it.start } to anchoredTokens.maxOf { it.end }
+    } else {
+        // fallback : au moins le head
+        head.start to head.end
+    }
+
+    // Tri stable : ancrés d'abord, puis non-ancrés (0,0) à la fin
+    val sorted = kept.sortedWith(
+        compareBy<UDToken> { if (anchored(it)) 0 else 1 }
+            .thenBy { if (anchored(it)) it.start else it.id }
+    )
+
+    return Span(start, end, sorted)
 }
 
 
