@@ -8,16 +8,15 @@ services:
     envVars:
       - key: JAVA_TOOL_OPTIONS
         value: -Xms512m -Xmx2g
+      # REQUIRED: URL publique du fichier ONNX (ex. HuggingFace / S3 / Drive)
       - key: MODEL_URL
         sync: false
+      # OPTIONAL: SHA-256 du modèle pour vérification d'intégrité
       - key: MODEL_SHA256
-        sync: false
-      - key: TOKENIZER_URL
-        sync: false
-      - key: TOKENIZER_SHA256
-        sync: false
+        value: ""
+      # OPTIONAL: si le modèle est déjà présent dans un volume/path connu
       - key: NER_MODEL_PATH
-        sync: false
-      - key: NER_TOKENIZER_PATH
-        sync: false
+        value: ""
+      # NER_TOKENIZER_PATH, TOKENIZER_URL, TOKENIZER_SHA256 ne sont pas nécessaires :
+      # le tokenizer est embarqué dans l'image Docker (training/multi-head/tokenizer_export_clean)
 
