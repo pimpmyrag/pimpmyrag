@@ -89,6 +89,9 @@ nohup.out
 docker-resources/fine-tunner/
 docker-resources/minilm-coref-runpod/
 
+# ── Cache local de provisioning Render ───────────────────────────────────────
+.render-assets/
+
 # ── Secrets & config locale ───────────────────────────────────────────────────
 *.env
 .env.*

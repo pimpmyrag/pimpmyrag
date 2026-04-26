@@ -62,14 +62,27 @@ Checks recommandés:
 Configuration repo:
 
 - spec Render: `render.yaml`
+- script bootstrap: `scripts/render/start-ner-demo-render.sh`
 - port Spring: `server.port=${PORT:8090}`
 - chemins modele/tokenizer via env vars: `NER_MODEL_PATH`, `NER_TOKENIZER_PATH`
 
 Pipeline minimal:
 
 1. Build Render: `./gradlew :ner-demo:bootJar -x test`
-2. Start Render: `java -jar ner-demo/build/libs/<boot-jar>.jar`
+2. Start Render: `bash scripts/render/start-ner-demo-render.sh`
 3. Push Git sur la branche suivie par Render pour declencher un deploy automatique
+
+Pipeline automatise recommande:
+
+1. `publish-ner-assets.yml` (manuel) pour publier ONNX/tokenizer en release GitHub
+2. MAJ des variables Render (`MODEL_URL`, `MODEL_SHA256`, `TOKENIZER_URL`, `TOKENIZER_SHA256`)
+3. Push sur `main` -> workflow `CI` -> workflow `deploy-render-ner-demo.yml` (hook Render)
+
+Precondition artefacts:
+
+- Le fichier ONNX et le dossier tokenizer ne sont pas stockes dans Git dans l'etat actuel.
+- Provisionner via `MODEL_URL`/`TOKENIZER_URL` (+ checksums SHA-256) ou fournir `NER_MODEL_PATH`/`NER_TOKENIZER_PATH` precharges.
+- Le service est configure pour fail-fast au boot si le chemin modele/tokenizer est invalide.
 
 ## 5) Runbook incident
 

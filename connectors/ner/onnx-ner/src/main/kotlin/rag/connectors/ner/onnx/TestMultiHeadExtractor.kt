@@ -9,9 +9,25 @@ package rag.connectors.ner.onnx
  * Ou directement depuis IntelliJ (Run gutter sur `fun main`).
  */
 
-private const val MODEL_DIR = "/Users/simon_longuet/IdeaProjects/pimpmyrag/models/deberta/fine-tunning-21042026"
-private const val MODEL_ONNX = "$MODEL_DIR/best_model_multitask.onnx"
-private const val TOKENIZER_DIR = "/Users/simon_longuet/IdeaProjects/pimpmyrag/deberta/tokenizer_export"
+// Chemins relatifs à la racine du repo — override via propriétés système si besoin :
+//   -Dner.model.dir=...  -Dner.tokenizer.dir=...
+private val REPO_ROOT: String = System.getProperty("user.dir").let { cwd ->
+    // Remonte jusqu'à la racine du repo (contient gradlew)
+    java.io.File(cwd).let { f ->
+        generateSequence(f) { it.parentFile }
+            .firstOrNull { it.resolve("gradlew").exists() }?.absolutePath ?: cwd
+    }
+}
+private val MODEL_DIR = System.getProperty("ner.model.dir", "$REPO_ROOT/models/deberta/fine-tunning-23042026")
+private val MODEL_ONNX = "$MODEL_DIR/best_model_multitask_full.onnx"
+private val TOKENIZER_DIR = System.getProperty("ner.tokenizer.dir", "$REPO_ROOT/training/multi-head/tokenizer_export_clean")
+
+// Sources JSONL pour le bench 1000 phrases (même corpus que bench Python)
+private val BENCH_SOURCES = listOf(
+    "$REPO_ROOT/training/multi-head/data/abstract_sentences.jsonl",
+    "$REPO_ROOT/training/multi-head/data/abstract_sentences_extra.jsonl",
+    "$REPO_ROOT/training/multi-head/data/converted_no_coarse_1000.jsonl",
+)
 
 private val TEST_TEXTS = listOf(
     // ── Phrases originales ───────────────────────────────────────────────────
@@ -90,61 +106,193 @@ private val TEST_TEXTS = listOf(
     "C'est à l'université de Bordeaux que le Prix Nobel de chimie a été annoncé.",
 )
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Utilitaires benchmark
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Charge les phrases depuis les fichiers JSONL + le fichier txt de test. */
+private fun loadBenchPhrases(n: Int = 1000, seed: Long = 42): List<String> {
+    val sentences = mutableListOf<String>()
+
+    // Fichier txt de test manuel
+    val richFile = java.io.File("$REPO_ROOT/training/multi-head/test_phrases_rich.txt")
+    if (richFile.exists()) sentences += richFile.readLines().filter { it.isNotBlank() }
+
+    // Fichiers JSONL — extraction du champ "text" par regex (pas de dépendance JSON)
+    val textRegex = Regex(""""text"\s*:\s*"((?:[^"\\]|\\.)*)"""")
+    for (path in BENCH_SOURCES) {
+        val f = java.io.File(path)
+        if (!f.exists()) continue
+        f.forEachLine { line ->
+            val match = textRegex.find(line) ?: return@forEachLine
+            val text = match.groupValues[1]
+                .replace("\\n", " ").replace("\\\"", "\"").replace("\\\\", "\\").trim()
+            if (text.length > 20) sentences += text
+        }
+    }
+
+    // Déduplique
+    val unique = sentences.distinct()
+    println("📂 ${unique.size} phrases sources chargées")
+
+    // Sample avec remplacement si besoin
+    val rng = java.util.Random(seed)
+    return if (unique.size >= n) {
+        unique.shuffled(rng).take(n)
+    } else {
+        val result = unique.toMutableList()
+        while (result.size < n) result += unique[rng.nextInt(unique.size)]
+        result.take(n)
+    }
+}
+
+/** Affiche un triplet SVO joliment. */
+private fun formatTriplet(t: SvoTriplet): String {
+    val s = t.subject?.let { "\"${it.text}\"[${it.gender ?: "?"}/${it.number ?: "?"}]" } ?: "∅"
+    val v = "\"${t.verb.text}\"[${t.verb.voice}]"
+    val o = t.obj?.let { "\"${it.text}\"" } ?: "∅"
+    return "$s →$v→ $o"
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main
+// ─────────────────────────────────────────────────────────────────────────────
+
 fun main() {
     println("═══════════════════════════════════════════════════════════")
-    println("  Test OnnxMultiHeadEntityExtractor")
+    println("  Test OnnxMultiHeadEntityExtractor — 8 têtes NER+SVO")
     println("  Modèle   : $MODEL_ONNX")
     println("  Tokenizer: $TOKENIZER_DIR")
     println("═══════════════════════════════════════════════════════════\n")
 
-    // Seuils de production — élimine la majorité des faux positifs (verbes, adjectifs)
     val extractor = OnnxMultiHeadEntityExtractor(
-        modelPath    = MODEL_ONNX,
-        tokenizerDir = TOKENIZER_DIR,
-        maxSeqLen    = 128,
-        maxSpanLen   = 8,
-        tauBoundary  = 0.40f,
-        tauNone      = 0.99f,
-        tauCoarse    = 0.20f,
-        minScore     = 0.35f,
+        modelPath       = MODEL_ONNX,
+        tokenizerDir    = TOKENIZER_DIR,
+        maxSeqLen       = 128,
+        maxSpanLen      = 8,
+        tauBoundary     = 0.40f,
+        tauNone         = 0.99f,
+        tauCoarse       = 0.20f,
+        minScore        = 0.35f,
+        tauSvoBoundary  = 0.50f,
     )
 
     extractor.use { ext ->
-        // ── Test unitaire ────────────────────────────────────────────
-        TEST_TEXTS.forEachIndexed { i, text ->
-            val t0 = System.nanoTime()
-            val entities = ext.extractFromText(text)
-            val ms = (System.nanoTime() - t0) / 1_000_000L
 
-            println("[$i] \"$text\"")
-            println("    → ${entities.size} entité(s) en ${ms}ms")
-            entities.forEach { e ->
-                val coarse = e.metadata["coarse"]
-                val kind   = e.metadata["kind"]
-                val score  = (e.metadata["score"] as? Float)?.let { "%.3f".format(it) } ?: "?"
-                println("      • [${e.span?.start}-${e.span?.end}] \"${e.text}\"  type=${e.type}  kind=$kind  coarse=$coarse  score=$score")
+        // ════════════════════════════════════════════════════════
+        // 1. TEST UNITAIRE — phrases manuelles avec NER + SVO
+        // ════════════════════════════════════════════════════════
+        println("━━━ 1. TEST UNITAIRE (${TEST_TEXTS.size} phrases) ━━━━━━━━━━━━━━━━━━")
+        TEST_TEXTS.forEachIndexed { i, text ->
+            val t0  = System.nanoTime()
+            val res = ext.extractWithSvo(text)
+            val ms  = (System.nanoTime() - t0) / 1_000_000L
+
+            println("\n[$i] \"$text\"")
+            println("    ⏱  ${ms}ms  |  NER: ${res.entities.size}  SVO: ${res.svoSpans.size}")
+
+            // NER
+            res.entities.take(5).forEach { e ->
+                val score = (e.metadata["score"] as? Float)?.let { "%.3f".format(it) } ?: "?"
+                println("    🏷  [${e.span?.start}-${e.span?.end}] \"${e.text}\"  ${e.type}  ${e.metadata["coarse"]}  score=$score")
             }
-            println()
+            if (res.entities.size > 5) println("    🏷  … +${res.entities.size - 5} autres")
+
+            // Triplets SVO
+            val triplets = res.svoTriplets()
+            if (triplets.isNotEmpty()) {
+                triplets.take(2).forEach { println("    🔺  ${formatTriplet(it)}") }
+            }
         }
 
-        // ── Test batch ───────────────────────────────────────────────
-        println("─── Batch (${TEST_TEXTS.size} textes) ───────────────────────────")
-        val t0 = System.nanoTime()
-        val batchResults = ext.extractFromTexts(TEST_TEXTS)
-        val ms = (System.nanoTime() - t0) / 1_000_000L
-        val total = batchResults.sumOf { it.size }
-        println("Batch terminé en ${ms}ms — $total entités extraites au total")
-        println("Moyenne: ${"%.1f".format(ms.toDouble() / TEST_TEXTS.size)} ms/texte\n")
+        // ════════════════════════════════════════════════════════
+        // 2. BATCH des phrases de test — batch_size interne = tout
+        // ════════════════════════════════════════════════════════
+        println("\n━━━ 2. BATCH ${TEST_TEXTS.size} phrases (un seul appel) ━━━━━━━━━━━━")
+        val t0Batch = System.nanoTime()
+        val batchRes = ext.extractWithSvoFromTexts(TEST_TEXTS)
+        val msBatch  = (System.nanoTime() - t0Batch) / 1_000_000L
+        val nerTotal = batchRes.sumOf { it.entities.size }
+        val svoTotal = batchRes.sumOf { it.svoSpans.size }
+        println("Terminé en ${msBatch}ms — NER: $nerTotal  SVO: $svoTotal")
+        println("Moyenne: ${"%.1f".format(msBatch.toDouble() / TEST_TEXTS.size)} ms/texte")
 
-        // ── Récapitulatif par type ───────────────────────────────────
-        println("─── Récapitulatif par type fine ─────────────────────────")
-        batchResults.flatten()
+        println("\n  Distribution NER (fine) :")
+        batchRes.flatMap { it.entities }
             .groupBy { it.type }
-            .entries
-            .sortedByDescending { it.value.size }
-            .forEach { (type, list) ->
-                println("  %-30s : %d".format(type, list.size))
+            .entries.sortedByDescending { it.value.size }.take(12)
+            .forEach { (type, list) -> println("    %-30s : %d".format(type, list.size)) }
+
+        println("\n  Distribution SVO (rôles) :")
+        batchRes.flatMap { it.svoSpans }
+            .groupBy { it.role }
+            .entries.sortedByDescending { it.value.size }
+            .forEach { (role, list) -> println("    %-16s : %d".format(role, list.size)) }
+
+        // ════════════════════════════════════════════════════════
+        // 3. BENCHMARK 1000 PHRASES — warmup + mesures
+        // ════════════════════════════════════════════════════════
+        println("\n━━━ 3. BENCHMARK 1000 PHRASES ━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        val phrases = loadBenchPhrases(n = 1000)
+        println("🎲 ${phrases.size} phrases sélectionnées\n")
+
+        val batchSize  = 32
+        val nBatches   = (phrases.size + batchSize - 1) / batchSize
+        val warmupBatches = 2
+
+        // Warmup
+        print("🔥 Warmup ($warmupBatches batches)… ")
+        repeat(warmupBatches) { b ->
+            val start = b * batchSize
+            ext.extractWithSvoFromTexts(phrases.subList(start, minOf(start + batchSize, phrases.size)))
+        }
+        println("✅")
+
+        // Mesure
+        val batchTimes = mutableListOf<Long>()
+        var totalNer = 0; var totalSvo = 0
+
+        println("🚀 Inférence : ${phrases.size} phrases, batch_size=$batchSize → $nBatches batches")
+        val tTotal = System.nanoTime()
+
+        for (bIdx in 0 until nBatches) {
+            val start = bIdx * batchSize
+            val batch = phrases.subList(start, minOf(start + batchSize, phrases.size))
+            val t0    = System.nanoTime()
+            val res   = ext.extractWithSvoFromTexts(batch)
+            val elapsed = (System.nanoTime() - t0) / 1_000_000L
+            batchTimes += elapsed
+            totalNer += res.sumOf { it.entities.size }
+            totalSvo += res.sumOf { it.svoSpans.size }
+
+            val step = maxOf(1, nBatches / 10)
+            if ((bIdx + 1) % step == 0 || bIdx + 1 == nBatches) {
+                val done = start + batch.size
+                println("  batch %3d/%d  (%4d/%d phrases)  %dms  (%.1fms/phrase)".format(
+                    bIdx + 1, nBatches, done, phrases.size, elapsed, elapsed.toDouble() / batch.size))
             }
+        }
+
+        val totalMs = (System.nanoTime() - tTotal) / 1_000_000L
+        val sortedTimes = batchTimes.sorted()
+        val p50 = sortedTimes[sortedTimes.size / 2]
+        val p95 = sortedTimes[(sortedTimes.size * 0.95).toInt()]
+
+        val sep = "═".repeat(65)
+        println("\n$sep")
+        println("  RÉSULTATS BENCHMARK — ${phrases.size} phrases / batch_size=$batchSize")
+        println(sep)
+        println("  Temps total            : ${totalMs}ms")
+        println("  Latence moyenne/phrase : ${"%.2f".format(totalMs.toDouble() / phrases.size)}ms")
+        println("  Throughput             : ${"%.1f".format(phrases.size * 1000.0 / totalMs)} phrases/s")
+        println("  Temps/batch moyen      : ${"%.1f".format(batchTimes.average())}ms")
+        println("  Temps/batch min        : ${batchTimes.min()}ms")
+        println("  Temps/batch max        : ${batchTimes.max()}ms")
+        println("  P50 batch              : ${p50}ms")
+        println("  P95 batch              : ${p95}ms")
+        println("  NER spans total        : $totalNer  (moy ${"%.1f".format(totalNer.toDouble() / phrases.size)}/phrase)")
+        println("  SVO spans total        : $totalSvo  (moy ${"%.1f".format(totalSvo.toDouble() / phrases.size)}/phrase)")
+        println(sep)
     }
 
     println("\n✅ Test terminé.")

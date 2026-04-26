@@ -1,0 +1,83 @@
+name: Publish ner-demo assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (ex: ner-demo-assets-v2026.04.26)"
+        required: true
+      model_url:
+        description: "Direct URL to ONNX model"
+        required: true
+      tokenizer_url:
+        description: "Direct URL to tokenizer archive (.zip/.tar.gz/.tgz)"
+        required: true
+      release_name:
+        description: "Optional release name"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download assets and compute checksums
+        env:
+          MODEL_URL: ${{ inputs.model_url }}
+          TOKENIZER_URL: ${{ inputs.tokenizer_url }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          MODEL_FILE="dist/best_model_multitask_full.onnx"
+          TOKENIZER_FILE="dist/$(basename "$TOKENIZER_URL")"
+
+          curl -fL --retry 5 --retry-delay 2 -o "$MODEL_FILE" "$MODEL_URL"
+          curl -fL --retry 5 --retry-delay 2 -o "$TOKENIZER_FILE" "$TOKENIZER_URL"
+
+          sha256sum "$MODEL_FILE" > dist/SHA256SUMS.txt
+          sha256sum "$TOKENIZER_FILE" >> dist/SHA256SUMS.txt
+
+          echo "MODEL_FILE=$MODEL_FILE" >> "$GITHUB_ENV"
+          echo "TOKENIZER_FILE=$TOKENIZER_FILE" >> "$GITHUB_ENV"
+
+      - name: Create or update release
+        env:
+          TAG: ${{ inputs.tag }}
+          RELEASE_NAME: ${{ inputs.release_name }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TITLE="$TAG"
+          if [ -n "${RELEASE_NAME:-}" ]; then
+            TITLE="$RELEASE_NAME"
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists"
+          else
+            gh release create "$TAG" --title "$TITLE" --notes "NER demo runtime assets"
+          fi
+
+          gh release upload "$TAG" "$MODEL_FILE" "$TOKENIZER_FILE" dist/SHA256SUMS.txt --clobber
+
+      - name: Print Render env values
+        run: |
+          set -euo pipefail
+          MODEL_SHA="$(awk 'NR==1 {print $1}' dist/SHA256SUMS.txt)"
+          TOKENIZER_SHA="$(awk 'NR==2 {print $1}' dist/SHA256SUMS.txt)"
+          MODEL_NAME="$(basename "$MODEL_FILE")"
+          TOKENIZER_NAME="$(basename "$TOKENIZER_FILE")"
+          TAG="${{ inputs.tag }}"
+
+          echo "Use these values in Render:"
+          echo "MODEL_URL=https://github.com/${{ github.repository }}/releases/download/$TAG/$MODEL_NAME"
+          echo "MODEL_SHA256=$MODEL_SHA"
+          echo "TOKENIZER_URL=https://github.com/${{ github.repository }}/releases/download/$TAG/$TOKENIZER_NAME"
+          echo "TOKENIZER_SHA256=$TOKENIZER_SHA"
+

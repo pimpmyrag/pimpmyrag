@@ -6,7 +6,7 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/pimpmyrag/pimpmyrag/pulls)
 [![GitHub Stars](https://img.shields.io/github/stars/pimpmyrag/pimpmyrag?style=social)](https://github.com/pimpmyrag/pimpmyrag/stargazers)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.x-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
-[![JVM](https://img.shields.io/badge/JVM-21%2B-ED8B00?logo=openjdk&logoColor=white)](https://adoptium.net)
+[![JVM](https://img.shields.io/badge/JVM-17%2B-ED8B00?logo=openjdk&logoColor=white)](https://adoptium.net)
 
 Framework RAG modulaire sur JVM, orienté extraction d'entites/evenements deterministe, avec une stack NER multitete (NER + SVO + voix + morpho) utilisable en Python (training/eval) et en Kotlin ONNX Runtime (inference).
 
@@ -101,20 +101,87 @@ Le repo inclut `render.yaml` pour deployer automatiquement la demo sur Render.
 Build/start sur Render:
 
 - build: `./gradlew :ner-demo:bootJar -x test`
-- start: `java -jar <jar boot de ner-demo>`
+- start: `bash scripts/render/start-ner-demo-render.sh`
 
 Variables d'environnement a definir dans Render:
 
-- `NER_MODEL_PATH` : chemin Linux vers le modele ONNX (ex: `/opt/render/project/src/models/.../best_model_multitask_full.onnx`)
-- `NER_TOKENIZER_PATH` : chemin Linux vers le dossier tokenizer (ex: `/opt/render/project/src/training/multi-head/tokenizer_export_clean`)
+- `MODEL_URL` : URL du modele ONNX (ex: asset GitHub Release, S3, R2)
+- `MODEL_SHA256` : checksum SHA-256 du modele
+- `TOKENIZER_URL` : URL d'une archive tokenizer (`.zip` ou `.tar.gz`)
+- `TOKENIZER_SHA256` : checksum SHA-256 de l'archive tokenizer
+- `PORT` : injecte automatiquement par Render (mappe sur `server.port`)
+
+Variables optionnelles (si artefacts deja presents localement):
+
+- `NER_MODEL_PATH` : chemin local vers le modele ONNX (bypass download)
+- `NER_TOKENIZER_PATH` : chemin local vers le dossier tokenizer (bypass download)
+
+Important:
+
+- Le modele ONNX et le tokenizer ne sont pas versionnes dans Git/LFS dans ce repo.
+- Ils sont provisionnes au demarrage via `scripts/render/start-ner-demo-render.sh` (download + checksum + extraction tokenizer).
+- Au boot, `ner-demo` echoue volontairement si `NER_MODEL_PATH` ou `NER_TOKENIZER_PATH` pointe vers une ressource absente.
+
 Flux recommande avant merge sur `main`:
 
+1. Verifier que `ner-demo` build localement.
+2. Committer `render.yaml` + la config Spring (`application.properties`).
+3. Push sur la branche reliee a Render (ou `main` selon votre setup) pour declencher le deploiement.
+
+### CI/CD automatise (GitHub Actions -> Render)
+
+Le repo contient deux workflows:
+
+- `.github/workflows/publish-ner-assets.yml` : publie ONNX + tokenizer + `SHA256SUMS.txt` dans une GitHub Release (declenchement manuel)
+- `.github/workflows/deploy-render-ner-demo.yml` : declenche le deploy Render automatiquement apres succes de `CI` sur `main`
+
+Secrets/variables GitHub a configurer:
+
+- `RENDER_DEPLOY_HOOK_URL` (secret) : deploy hook Render du service `ner-demo`
+- `RENDER_NER_DEMO_URL` (variable, optionnelle) : URL publique pour smoke-check post-deploy
+
+Variables Render a configurer une fois les assets publies:
+
+- `MODEL_URL`
+- `MODEL_SHA256`
+- `TOKENIZER_URL`
+- `TOKENIZER_SHA256`
+
+Resultat: chaque push sur `main` declenche `CI`, puis un deploy Render automatique si `CI` est vert.
+
+## Training multitete (NER + SVO + voice + morpho)
+
+Tout le pipeline est dans `training/multi-head`.
+
+### 1) Installer les deps Python
+
+```zsh
 cd training/multi-head
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### 2) Construire les datasets multitask
+
+```zsh
+python build_multitask_dataset.py \
+  --input data/train.jsonl \
+  --output data/train_multitask.jsonl \
+  --model-name microsoft/deberta-v3-base
+
+python build_multitask_dataset.py \
+  --input data/val.jsonl \
+  --output data/val_multitask.jsonl \
+  --model-name microsoft/deberta-v3-base
+
+python build_multitask_dataset.py \
+  --input data/test.jsonl \
+  --output data/test_multitask.jsonl \
+  --model-name microsoft/deberta-v3-base
+```
+
+### 3) Entrainer le modele multitete
 
 ```zsh
 python train_multi_task.py \

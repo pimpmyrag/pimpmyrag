@@ -68,8 +68,10 @@ python export_onnx_multitask.py --checkpoint checkpoint_best_multitask.pt --mode
 
 - Spec Render: `render.yaml`
 - Build: `./gradlew :ner-demo:bootJar -x test`
-- Variables Render a renseigner: `NER_MODEL_PATH`, `NER_TOKENIZER_PATH`
+- Start: `bash scripts/render/start-ner-demo-render.sh`
+- Variables Render recommandees: `MODEL_URL`, `MODEL_SHA256`, `TOKENIZER_URL`, `TOKENIZER_SHA256`
 - Le deploiement se declenche apres push Git sur la branche suivie par Render
+- Attention: le modele ONNX et le tokenizer ne sont pas versionnes dans Git; ils doivent etre provisionnes avant le boot.
 
 ---
 
@@ -141,6 +143,8 @@ python export_onnx_multitask.py --checkpoint checkpoint_best_multitask.pt --mode
 
 - Render spec: `render.yaml`
 - Build: `./gradlew :ner-demo:bootJar -x test`
-- Required Render env vars: `NER_MODEL_PATH`, `NER_TOKENIZER_PATH`
+- Start: `bash scripts/render/start-ner-demo-render.sh`
+- Recommended Render env vars: `MODEL_URL`, `MODEL_SHA256`, `TOKENIZER_URL`, `TOKENIZER_SHA256`
 - Deployment is triggered by a Git push on the branch tracked by Render
+- Note: ONNX model and tokenizer artifacts are not tracked in Git and must be provisioned before startup.
 
