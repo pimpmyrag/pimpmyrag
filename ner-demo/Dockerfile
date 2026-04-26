@@ -25,7 +25,9 @@ COPY . .
 # Le plugin Vaadin (com.vaadin 24.7.2) est incompatible avec Gradle 9 car il utilise
 # ResolvedConfiguration.getFiles() supprimé. On switche temporairement vers Gradle 8.13
 # dans ce stage Docker uniquement (sans toucher gradle-wrapper.properties versionné).
-RUN sed -i 's|gradle-9.0.0-bin.zip|gradle-8.13-bin.zip|g' gradle/wrapper/gradle-wrapper.properties
+# Le plugin est injecté via sed dans build.gradle.kts (absent du repo pour ne pas casser les builds locaux Gradle 9).
+RUN sed -i 's|id("io.spring.dependency-management")|id("io.spring.dependency-management")\n    id("com.vaadin") version "24.7.2"|' ner-demo/build.gradle.kts && \
+    sed -i 's|gradle-9.0.0-bin.zip|gradle-8.13-bin.zip|g' gradle/wrapper/gradle-wrapper.properties
 
 # Build du bundle Vaadin en mode production, puis du JAR Spring Boot
 RUN ./gradlew :ner-demo:vaadinBuildFrontend :ner-demo:bootJar \
