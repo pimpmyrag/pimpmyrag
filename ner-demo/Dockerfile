@@ -42,6 +42,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl unzip && \
 
 WORKDIR /app
 
+# ── Modèle ONNX (708 MB) téléchargé au BUILD, pas au démarrage ─────
+# Mettre cette couche AVANT le JAR pour bénéficier du cache Docker :
+# si le code change mais pas l'URL du modèle, cette couche est réutilisée.
+ARG MODEL_URL=https://github.com/pimpmyrag/pimpmyrag/releases/download/v1.0.0-ner-model/best_model_multitask_full.onnx
+RUN mkdir -p model && \
+    echo "[docker] downloading model from $MODEL_URL" && \
+    curl -fL --retry 3 "$MODEL_URL" -o model/best_model_multitask_full.onnx && \
+    echo "[docker] model size: $(du -sh model/best_model_multitask_full.onnx)"
+ENV NER_MODEL_PATH=/app/model/best_model_multitask_full.onnx
+
 # JAR avec bundle Vaadin pré-compilé
 COPY --from=builder /build/ner-demo/build/libs/ ner-demo/build/libs/
 
