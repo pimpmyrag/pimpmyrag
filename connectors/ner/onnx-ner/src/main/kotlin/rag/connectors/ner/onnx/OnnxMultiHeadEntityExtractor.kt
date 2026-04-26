@@ -9,10 +9,10 @@ import rag.engine.NerExtractor
 import rag.model.Entity
 import rag.model.RagDocument
 import rag.model.Span
+import java.nio.FloatBuffer
 import java.nio.LongBuffer
 import java.nio.file.Paths
 import kotlin.math.exp
-import kotlin.math.ln
 import kotlin.math.min
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -35,6 +35,17 @@ private val FINE_LABELS = listOf(
 )
 
 private val COARSE_NONE_IDX = COARSE_LABELS.indexOf("NONE")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Labels SVO / Voice / Morpho — ordre identique à labels.py
+// ─────────────────────────────────────────────────────────────────────────────
+
+private val SVO_LABELS = listOf(
+    "svo_verb", "svo_subject", "svo_object", "svo_iobj", "pron_subj", "pron_obj"
+)
+private val VOICE_LABELS = listOf("ACTIVE", "PASSIVE")
+private val GENDER_LABELS = listOf("Masc", "Fem", "NONE")
+private val NUMBER_LABELS = listOf("Sing", "Plur", "NONE")
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Taxonomie sémantique des labels fine
@@ -109,6 +120,18 @@ private val COARSE_FINE_MASK: Array<BooleanArray> = run {
     Array(COARSE_LABELS.size) { c -> BooleanArray(FINE_LABELS.size) { f -> mapping[c]?.contains(f) == true } }
 }
 
+/** Indices coarse valides (pas NONE, et avec au moins un label fine autorisé) — pré-calculé. */
+private val VALID_COARSE_INDICES: IntArray = COARSE_LABELS.indices
+    .filter { c -> c != COARSE_NONE_IDX && COARSE_FINE_MASK[c].any { it } }
+    .toIntArray()
+
+/**
+ * Buckets de longueur de séquence utilisés pour le dynamic padding.
+ * Chaque groupe de textes dont seqLen ≤ bucket est traité avec maxLen = bucket,
+ * évitant de pader 100 phrases courtes à 128 tokens à cause d'un seul outlier.
+ */
+private val LENGTH_BUCKETS = intArrayOf(24, 32, 48, 64, 80, 96, 112, 128, 192, 256, 384, 512)
+
 /** Seuil boundary minimum pour retenir un span comme entité candidate. */
 private const val DEFAULT_TAU_BOUNDARY = 0.70f
 /** Max prob NONE au-dessus duquel on abandonne ce span. */
@@ -164,6 +187,77 @@ private const val DEFAULT_FINE_THRESHOLD = 0.80f
 // Data classes internes
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Un span syntaxique SVO brut après scoring. */
+private data class RawSvoResult(
+    val candidate: SpanCandidate,
+    val svoBoundaryProb: Float,
+    val role: String,
+    val roleProb: Float,
+    val voice: String,
+    val voiceProb: Float,
+    val gender: String?,
+    val number: String?,
+)
+
+/**
+ * Span syntaxique SVO (verbe, sujet, objet, oblique ou pronom) détecté par le modèle.
+ *
+ * [role] : svo_verb | svo_subject | svo_object | svo_iobj | pron_subj | pron_obj
+ * [voice] : ACTIVE | PASSIVE (surtout pertinent pour svo_verb)
+ * [gender] / [number] : Masc/Fem/NONE et Sing/Plur/NONE (morphologie coréf)
+ */
+data class SvoSpan(
+    val text: String,
+    val charStart: Int,
+    val charEnd: Int,
+    val role: String,
+    val roleProb: Float,
+    val svoBoundaryProb: Float,
+    val voice: String,
+    val voiceProb: Float,
+    val gender: String?,
+    val number: String?,
+)
+
+/**
+ * Résultat complet pour un texte : entités NER + spans SVO.
+ */
+data class ExtractionResult(
+    val entities: List<Entity>,
+    val svoSpans: List<SvoSpan>,
+) {
+    /** Reconstruit les triplets (sujet, verbe, objet) de façon greedy. */
+    fun svoTriplets(): List<SvoTriplet> {
+        val verbs    = svoSpans.filter { it.role == "svo_verb" }
+        val subjects = svoSpans.filter { it.role in listOf("svo_subject", "pron_subj") }
+        val objects  = svoSpans.filter { it.role in listOf("svo_object", "svo_iobj", "pron_obj") }
+        return verbs.map { v ->
+            val subj = subjects.filter { it.charEnd  <= v.charStart }.maxByOrNull { it.charStart }
+            val obj  = objects .filter { it.charStart >= v.charEnd   }.minByOrNull { it.charStart }
+            SvoTriplet(subject = subj, verb = v, obj = obj)
+        }
+    }
+}
+
+data class SvoTriplet(
+    val subject: SvoSpan?,
+    val verb: SvoSpan,
+    val obj: SvoSpan?,
+)
+
+/**
+ * Seuils d'inférence passables en override pour un appel spécifique.
+ * Toute valeur null → repli sur la valeur de construction de l'extracteur.
+ */
+data class ExtractionThresholds(
+    val tauBoundary: Float? = null,
+    val tauNone: Float? = null,
+    val tauCoarse: Float? = null,
+    val tauSvoBoundary: Float? = null,
+    /** Score minimum (pBnd × pCoarse × pFine) par label coarse. Si absent → minScore global. */
+    val scoreByCoarse: Map<String, Float> = emptyMap(),
+)
+
 /** Un span candidat extrait depuis la tokenisation. */
 private data class SpanCandidate(
     val exampleIdx: Int,
@@ -208,29 +302,125 @@ class OnnxMultiHeadEntityExtractor(
     private val tauNone: Float = DEFAULT_TAU_NONE,
     private val tauCoarse: Float = DEFAULT_TAU_COARSE,
     private val minScore: Float = DEFAULT_MIN_SCORE,
+    private val tauSvoBoundary: Float = 0.50f,
     private val useCoreMl: Boolean = false,
+    /**
+     * Nombre de threads intra-op (parallélisme au sein d'un seul opérateur).
+     * Sur Apple Silicon il n'y a pas d'hyperthreading : availableProcessors == cœurs physiques.
+     * Sur x86/HT, availableProcessors == cœurs logiques ; utiliser /2 si nécessaire.
+     * Défaut : tous les cœurs disponibles (identique au comportement Python ORT).
+     */
     private val intraOpThreads: Int = Runtime.getRuntime().availableProcessors(),
+    /**
+     * Nombre de threads inter-op (parallélisme entre opérateurs indépendants du graph).
+     * 1 est optimal pour des inférences séquentielles ; augmenter seulement si très gros modèle
+     * avec branches parallèles et machine multi-socket.
+     */
+    private val interOpThreads: Int = 1,
 ) : AutoCloseable, NerExtractor {
 
     private val log = LoggerFactory.getLogger(OnnxMultiHeadEntityExtractor::class.java)
 
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
     private val session: OrtSession = env.createSession(modelPath, OrtSession.SessionOptions().apply {
+        // ── Graph-level optimizations ──────────────────────────────────────
+        // ALL_OPT = Basic + Extended + Layout optimisations + fused kernels
+        //  → fusionne LayerNorm, GELU, Attention, MatMul+Add, etc.
+        //  → peut donner 30-60% de gain sur DeBERTa par rapport au défaut (BASIC_OPT)
+        setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+
+        // ── Thread configuration ───────────────────────────────────────────
         setIntraOpNumThreads(intraOpThreads)
+        setInterOpNumThreads(interOpThreads)
+
+        // SEQUENTIAL : optimal pour batch séquentiels + intra-op threading
+        setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
+
+        // ── Memory optimizations ───────────────────────────────────────────
+        // Memory arena CPU : pool d'allocations, évite malloc/free à chaque run
+        setCPUArenaAllocator(true)
+        // Memory pattern : mémorise le plan d'allocation du graph (un seul malloc groupé)
+        setMemoryPatternOptimization(true)
+
         if (useCoreMl) tryAddCoreML()
     })
     private val tokenizer: HuggingFaceTokenizer = HuggingFaceTokenizer.newInstance(Paths.get(tokenizerDir))
+
+    /** Informations sur le runtime ONNX et la configuration matérielle. */
+    fun runtimeInfo(): Map<String, Any> = mapOf(
+        "provider"       to if (useCoreMl) "CoreML (Apple Neural Engine + GPU)" else "CPU (ONNX Runtime)",
+        "intraOpThreads" to intraOpThreads,
+        "interOpThreads" to interOpThreads,
+        "optimization"   to "ALL_OPT (fused LayerNorm/GELU/Attention/MatMul)",
+        "maxSeqLen"      to maxSeqLen,
+        "maxSpanLen"     to maxSpanLen,
+        "availableProcessors" to Runtime.getRuntime().availableProcessors(),
+    )
+
+    // ── Buffers thread-local : zéro allocation dans les hot paths ────────────
+    private val tlBufCoarse   = ThreadLocal.withInitial { FloatArray(COARSE_LABELS.size) }
+    private val tlBufFine     = ThreadLocal.withInitial { FloatArray(FINE_LABELS.size)  }
+    private val tlBufFineMask = ThreadLocal.withInitial { FloatArray(FINE_LABELS.size)  }
+    /** Buffer dédié au chargement de la ligne fine depuis le FloatBuffer flat.
+     *  Distinct de tlBufFine/tlBufFineMask pour éviter l'aliasing dans bestCoarseFine. */
+    private val tlBufFineRow  = ThreadLocal.withInitial { FloatArray(FINE_LABELS.size)  }
+    private val tlBufSvo      = ThreadLocal.withInitial { FloatArray(SVO_LABELS.size)   }
+    private val tlBufVoice    = ThreadLocal.withInitial { FloatArray(VOICE_LABELS.size) }
+    private val tlBufGender   = ThreadLocal.withInitial { FloatArray(GENDER_LABELS.size)}
+    private val tlBufNumber   = ThreadLocal.withInitial { FloatArray(NUMBER_LABELS.size)}
+
+    init {
+        // ── Warmup JIT + compilation CoreML ─────────────────────────────────
+        // La première passe ONNX + JVM JIT est 3-5× plus lente.
+        // Sur macOS avec CoreML, la première passe compile le modèle Core ML
+        // (peut prendre 10-60s selon la taille du modèle) — mis en cache ensuite.
+        try {
+            log.info("[MH] warmup (coreML={}, threads={} intra / {} inter)…",
+                useCoreMl, intraOpThreads, interOpThreads)
+            val t0 = System.nanoTime()
+            extractAllFromTexts(listOf("Le président de la République est à Paris ."))
+            log.info("[MH] warmup done in {}ms", (System.nanoTime() - t0) / 1_000_000L)
+        } catch (e: Exception) {
+            log.warn("[MH] warmup failed (non-bloquant) : {}", e.message)
+        }
+    }
+
 
     override fun extractNer(documents: List<RagDocument>): List<List<Entity>> =
         extractFromTexts(documents.map { it.text })
 
     fun extractFromText(text: String): List<Entity> = extractFromTexts(listOf(text)).first()
 
-    fun extractFromTexts(texts: List<String>): List<List<Entity>> {
+    fun extractFromTexts(texts: List<String>): List<List<Entity>> =
+        extractAllFromTexts(texts).map { it.entities }
+
+    /** Extraction NER + SVO pour un seul texte. */
+    fun extractWithSvo(text: String): ExtractionResult =
+        extractWithSvoFromTexts(listOf(text)).first()
+
+    /** Extraction NER + SVO pour un batch de textes. */
+    fun extractWithSvoFromTexts(texts: List<String>): List<ExtractionResult> =
+        extractAllFromTexts(texts)
+
+    /** Extraction NER + SVO pour un batch avec seuils overridés à la volée. */
+    fun extractWithSvoFromTexts(texts: List<String>, overrides: ExtractionThresholds): List<ExtractionResult> =
+        extractAllFromTexts(texts, overrides)
+
+    // ─── implémentation commune ───────────────────────────────────────────────
+
+    private fun extractAllFromTexts(
+        texts: List<String>,
+        overrides: ExtractionThresholds? = null,
+    ): List<ExtractionResult> {
+        val effTauBoundary    = overrides?.tauBoundary    ?: tauBoundary
+        val effTauNone        = overrides?.tauNone        ?: tauNone
+        val effTauCoarse      = overrides?.tauCoarse      ?: tauCoarse
+        val effTauSvoBoundary = overrides?.tauSvoBoundary ?: tauSvoBoundary
+        val effScoreByCoarse  = overrides?.scoreByCoarse  ?: emptyMap()
         if (texts.isEmpty()) return emptyList()
         val t0 = System.nanoTime()
 
-        // ── 1. Tokenisation + spans candidats ──────────────────────────────
+        // ── 1. Tokenisation unique pour tous les textes ─────────────────────
         val tTok = System.nanoTime()
         data class EncodedText(
             val text: String,
@@ -254,131 +444,236 @@ class OnnxMultiHeadEntityExtractor(
         }
         log.debug("[MH] tokenisation batchSize={} ms={}", texts.size, ms(tTok))
 
-        // ── 2. Candidats spans (plats, tous exemples) ──────────────────────
-        val tSpan = System.nanoTime()
-        val candidates: List<SpanCandidate> = buildCandidates(encodings.mapIndexed { i, enc ->
-            EncodedExample(i, enc.text, enc.wordRanges, enc.charOffsets, enc.wordIds, enc.tokens, enc.seqLen)
-        })
-        if (candidates.isEmpty()) return texts.map { emptyList() }
-        log.debug("[MH] candidats N={} ms={}", candidates.size, ms(tSpan))
+        // ── 2. Grouper par bucket de longueur pour minimiser le padding ─────
+        // Les textes courts ne sont plus padés à 128 à cause d'un seul outlier long :
+        //   ex. 80 phrases de 40 tokens + 20 de 128 → 2 appels ONNX [80,48] + [20,128]
+        //   au lieu de 1 appel [100,128] → ~3-5× moins de calcul d'attention.
+        val bucketGroups: Map<Int, List<Int>> = texts.indices
+            .groupBy { i -> LENGTH_BUCKETS.firstOrNull { it >= encodings[i].seqLen } ?: encodings[i].seqLen }
+            .toSortedMap()
 
-        // ── 3. Construction des tenseurs ────────────────────────────────────
-        val tTensor = System.nanoTime()
-        val batchSize = texts.size
-        val maxLen    = encodings.maxOf { it.seqLen }
-        val N         = candidates.size
-
-        val inputIds   = LongArray(batchSize * maxLen)
-        val attMask    = LongArray(batchSize * maxLen)
-        val spanStarts = LongArray(N)
-        val spanEnds   = LongArray(N)
-        val spanBatch  = LongArray(N)
-
-        encodings.forEachIndexed { i, enc ->
-            for (j in 0 until enc.seqLen) {
-                inputIds[i * maxLen + j] = enc.ids[j]
-                attMask [i * maxLen + j] = 1L
-            }
+        if (log.isDebugEnabled) {
+            val summary = bucketGroups.entries.joinToString(", ") { (k, v) -> "$k→${v.size}" }
+            log.debug("[MH] buckets: {}", summary)
         }
-        candidates.forEachIndexed { k, c ->
-            spanStarts[k] = c.tokStart.toLong()
-            spanEnds  [k] = c.tokEnd.toLong()
-            spanBatch [k] = c.exampleIdx.toLong()
-        }
-        log.debug("[MH] tenseurs maxLen={} N={} ms={}", maxLen, N, ms(tTensor))
 
-        // ── 4. Inférence ONNX ───────────────────────────────────────────────
-        val tInfer = System.nanoTime()
-        val shape2D   = longArrayOf(batchSize.toLong(), maxLen.toLong())
-        val shape1D   = longArrayOf(N.toLong())
+        // Structure de sortie : FloatBuffer flat au lieu de Array<FloatArray>
+        // → 1 objet Java par sortie (vs N floatArrays), moins de JNI overhead
+        data class OnnxOutputsFlat(
+            val boundaryFlat: FloatBuffer,  // [N * 2]
+            val coarseFlat:   FloatBuffer,  // [N * nCoarse]
+            val fineFlat:     FloatBuffer,  // [N * nFine]
+            val svoBndFlat:   FloatBuffer?, // [N * 2]
+            val svoFlat:      FloatBuffer?, // [N * nSvo]
+            val voiceFlat:    FloatBuffer?, // [N * nVoice]
+            val genderFlat:   FloatBuffer?, // [N * nGender]
+            val numberFlat:   FloatBuffer?, // [N * nNumber]
+        )
 
-        val tInputIds  = OnnxTensor.createTensor(env, LongBuffer.wrap(inputIds), shape2D)
-        val tAttMask   = OnnxTensor.createTensor(env, LongBuffer.wrap(attMask),  shape2D)
-        val tStarts    = OnnxTensor.createTensor(env, LongBuffer.wrap(spanStarts), shape1D)
-        val tEnds      = OnnxTensor.createTensor(env, LongBuffer.wrap(spanEnds),   shape1D)
-        val tBatchIds  = OnnxTensor.createTensor(env, LongBuffer.wrap(spanBatch),  shape1D)
+        val resultsByIdx = arrayOfNulls<ExtractionResult>(texts.size)
 
-        val (boundaryLogits, coarseLogits, fineLogits) = session.run(
-            mapOf(
-                "input_ids"      to tInputIds,
-                "attention_mask" to tAttMask,
-                "span_starts"    to tStarts,
-                "span_ends"      to tEnds,
-                "span_batch_ids" to tBatchIds,
+        // ── 3. Traiter chaque bucket indépendamment ─────────────────────────
+        for ((bucketMaxLen, origIndices) in bucketGroups) {
+            val tBucket = System.nanoTime()
+            val subEncodings = origIndices.map { encodings[it] }
+            val batchSize    = origIndices.size
+
+            // ── 3a. Candidats spans (indexés localement 0..batchSize-1) ─────
+            val tCand = System.nanoTime()
+            val candidates: List<SpanCandidate> = buildCandidates(
+                subEncodings.mapIndexed { localIdx, enc ->
+                    EncodedExample(localIdx, enc.text, enc.wordRanges, enc.charOffsets, enc.wordIds, enc.tokens, enc.seqLen)
+                }
             )
-        ).use { result ->
-            val b = result["boundary_logits"].get().value as Array<FloatArray>  // [N, 2]
-            val c = result["coarse_logits"].get().value   as Array<FloatArray>  // [N, 9]
-            val f = result["fine_logits"].get().value     as Array<FloatArray>  // [N, 32]
-            Triple(b, c, f)
-        }
-
-        listOf(tInputIds, tAttMask, tStarts, tEnds, tBatchIds).forEach { it.close() }
-        log.debug("[MH] inférence ONNX ms={}", ms(tInfer))
-
-        // ── 5. Décodage par span ────────────────────────────────────────────
-        val tDec = System.nanoTime()
-        val rawByExample: Array<MutableList<SpanResult>> = Array(texts.size) { mutableListOf() }
-
-//        // DEBUG
-//        System.err.println("[DBG] N candidates = ${candidates.size}")
-//        candidates.take(5).forEachIndexed { k, c ->
-//            System.err.println("[DBG]   cand[$k] ex=${c.exampleIdx} tok(${c.tokStart},${c.tokEnd}) char(${c.charStart},${c.charEnd}) '${c.spanText}'")
-//        }
-
-        candidates.forEachIndexed { k, cand ->
-            val bLogits = boundaryLogits[k]  // FloatArray(2)
-            val cLogits = coarseLogits[k]    // FloatArray(9)
-            val fLogits = fineLogits[k]      // FloatArray(32)
-
-            val pBoundary = softmaxProb(bLogits, 1)   // prob classe 1 = "entité"
-            // DEBUG: log top boundary scores
-//            if (k < 20 || pBoundary > 0.1f) {
-//                System.err.println("[DBG] span(${cand.tokStart},${cand.tokEnd}) '${cand.spanText}' pBnd=${"%.4f".format(pBoundary)}")
-//            }
-            if (pBoundary < tauBoundary) return@forEachIndexed
-
-            val cProbs = softmax(cLogits)
-            val pNone  = cProbs[COARSE_NONE_IDX]
-            if (pNone >= tauNone) return@forEachIndexed
-
-            // Chercher le meilleur coarse non-NONE
-            val result = bestCoarseFine(cProbs, fLogits, pBoundary) ?: return@forEachIndexed
-
-            val tokLen = cand.tokEnd - cand.tokStart + 1
-            val maxTok = MAX_TOK_LEN[result.fine]
-            if (maxTok != null && tokLen > maxTok) return@forEachIndexed
-
-            val fineThresh = FINE_THRESHOLDS.getOrDefault(result.fine, DEFAULT_FINE_THRESHOLD)
-            if (result.pFine < fineThresh) return@forEachIndexed
-
-            val score = pBoundary * result.pCoarse * result.pFine
-            if (score < minScore) return@forEachIndexed
-
-            rawByExample[cand.exampleIdx] += SpanResult(
-                candidate  = cand,
-                pBoundary  = pBoundary,
-                coarse     = result.coarse,
-                pCoarse    = result.pCoarse,
-                fine       = result.fine,
-                pFine      = result.pFine,
-                score      = score,
-            )
-        }
-
-        val results = rawByExample.map { spans ->
-            // Tri par score × √longueur pour favoriser les spans plus complets à score proche.
-            // Ex : "tremblement de terre" (0.911 × √20 = 4.07) > "tremblement" (0.915 × √11 = 3.03)
-            val sorted = spans.sortedByDescending { sr ->
-                sr.score * Math.sqrt((sr.candidate.charEnd - sr.candidate.charStart).toDouble())
+            val msCand = ms(tCand)
+            if (candidates.isEmpty()) {
+                origIndices.forEach { resultsByIdx[it] = ExtractionResult(emptyList(), emptyList()) }
+                continue
             }
-            val filtered = nmsSpans(sorted)
-            // Ré-trier par score pour l'affichage
-            filtered.sortedByDescending { it.score }.map { toEntity(it) }
+
+            // ── 3b. Construction des tenseurs ────────────────────────────────
+            val tTensors = System.nanoTime()
+            val N          = candidates.size
+            val inputIds   = LongArray(batchSize * bucketMaxLen)
+            val attMask    = LongArray(batchSize * bucketMaxLen)
+            val spanStarts = LongArray(N)
+            val spanEnds   = LongArray(N)
+            val spanBatch  = LongArray(N)
+
+            subEncodings.forEachIndexed { li, enc ->
+                for (j in 0 until enc.seqLen) {
+                    inputIds[li * bucketMaxLen + j] = enc.ids[j]
+                    attMask [li * bucketMaxLen + j] = 1L
+                }
+            }
+            candidates.forEachIndexed { k, c ->
+                spanStarts[k] = c.tokStart.toLong()
+                spanEnds  [k] = c.tokEnd.toLong()
+                spanBatch [k] = c.exampleIdx.toLong()
+            }
+            val msTensors = ms(tTensors)
+
+            // ── 3c. Inférence ONNX ───────────────────────────────────────────
+            val shape2D  = longArrayOf(batchSize.toLong(), bucketMaxLen.toLong())
+            val shape1D  = longArrayOf(N.toLong())
+
+            val tInputIds = OnnxTensor.createTensor(env, LongBuffer.wrap(inputIds), shape2D)
+            val tAttMask  = OnnxTensor.createTensor(env, LongBuffer.wrap(attMask),  shape2D)
+            val tStarts   = OnnxTensor.createTensor(env, LongBuffer.wrap(spanStarts), shape1D)
+            val tEnds     = OnnxTensor.createTensor(env, LongBuffer.wrap(spanEnds),   shape1D)
+            val tBatchIds = OnnxTensor.createTensor(env, LongBuffer.wrap(spanBatch),  shape1D)
+
+            val tOnnxRun = System.nanoTime()
+            val onnxOut = session.run(
+                mapOf(
+                    "input_ids"      to tInputIds,
+                    "attention_mask" to tAttMask,
+                    "span_starts"    to tStarts,
+                    "span_ends"      to tEnds,
+                    "span_batch_ids" to tBatchIds,
+                )
+            ).use { result ->
+                // Utiliser FloatBuffer (flat, potentiellement natif) au lieu de Array<FloatArray>
+                // → 1 objet Java au lieu de N, moins de JNI overhead
+                @Suppress("UNCHECKED_CAST")
+                fun flatBuf(key: String): FloatBuffer? =
+                    (result[key].orElse(null) as? OnnxTensor)?.floatBuffer
+
+                OnnxOutputsFlat(
+                    boundaryFlat = (result["boundary_logits"].get() as OnnxTensor).floatBuffer,
+                    coarseFlat   = (result["coarse_logits"]  .get() as OnnxTensor).floatBuffer,
+                    fineFlat     = (result["fine_logits"]    .get() as OnnxTensor).floatBuffer,
+                    svoBndFlat   = flatBuf("svo_boundary_logits"),
+                    svoFlat      = flatBuf("svo_logits"),
+                    voiceFlat    = flatBuf("voice_logits"),
+                    genderFlat   = flatBuf("gender_logits"),
+                    numberFlat   = flatBuf("number_logits"),
+                )
+            }
+            val msOnnx = ms(tOnnxRun)
+            listOf(tInputIds, tAttMask, tStarts, tEnds, tBatchIds).forEach { it.close() }
+
+            // ── 3d. Décodage par span ───────────────────────────────────────
+            val tDecode = System.nanoTime()
+            val rawByLocal: Array<MutableList<SpanResult>>    = Array(batchSize) { mutableListOf() }
+            val svoByLocal: Array<MutableList<RawSvoResult>>  = Array(batchSize) { mutableListOf() }
+
+            val nCoarse = COARSE_LABELS.size
+            val nFine   = FINE_LABELS.size
+            val nSvo    = SVO_LABELS.size
+            val nVoice  = VOICE_LABELS.size
+            val nGender = GENDER_LABELS.size
+            val nNumber = NUMBER_LABELS.size
+
+            candidates.forEachIndexed { k, cand ->
+                // ── NER ──────────────────────────────────────────────────────
+                // softmaxProbFlat sur les 2 boundary logits — zéro allocation
+                val pBoundary = softmaxProbFlat(onnxOut.boundaryFlat, k * 2, 2, 1)
+                if (pBoundary >= effTauBoundary) {
+                    // Charger la ligne coarse dans le buffer TL puis softmax in-place
+                    val cProbs = tlBufCoarse.get()
+                    loadRow(onnxOut.coarseFlat, k * nCoarse, cProbs)
+                    softmaxInto(cProbs, cProbs)
+                    val pNone = cProbs[COARSE_NONE_IDX]
+                    if (pNone < effTauNone) {
+                        // Charger la ligne fine dans un buffer dédié (≠ tlBufFine/tlBufFineMask)
+                        val fLogits = tlBufFineRow.get()
+                        loadRow(onnxOut.fineFlat, k * nFine, fLogits)
+                        val topResults = bestCoarseFine(cProbs, fLogits, effTauCoarse)
+                        for (result in topResults) {
+                            val tokLen     = cand.tokEnd - cand.tokStart + 1
+                            val maxTok     = MAX_TOK_LEN[result.fine]
+                            val fineThresh = FINE_THRESHOLDS.getOrDefault(result.fine, DEFAULT_FINE_THRESHOLD)
+                            val score      = pBoundary * result.pCoarse * result.pFine
+                            val minScoreEff = effScoreByCoarse[result.coarse] ?: minScore
+                            if ((maxTok == null || tokLen <= maxTok) && result.pFine >= fineThresh && score >= minScoreEff) {
+                                rawByLocal[cand.exampleIdx] += SpanResult(
+                                    candidate = cand,
+                                    pBoundary = pBoundary,
+                                    coarse    = result.coarse,
+                                    pCoarse   = result.pCoarse,
+                                    fine      = result.fine,
+                                    pFine     = result.pFine,
+                                    score     = score,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // ── SVO (si têtes disponibles dans ce modèle ONNX) ───────────
+                val svoBndFlat = onnxOut.svoBndFlat
+                if (svoBndFlat != null) {
+                    val pSvoB = softmaxProbFlat(svoBndFlat, k * 2, 2, 1)
+                    if (pSvoB >= effTauSvoBoundary) {
+                        val roleName: String
+                        val roleProb: Float
+                        if (onnxOut.svoFlat != null) {
+                            val p = tlBufSvo.get()
+                            loadRow(onnxOut.svoFlat, k * nSvo, p); softmaxInto(p, p)
+                            var ri = 0; for (j in 1 until nSvo) if (p[j] > p[ri]) ri = j
+                            roleName = SVO_LABELS.getOrElse(ri) { "svo_verb" }; roleProb = p[ri]
+                        } else { roleName = "svo_verb"; roleProb = 0f }
+
+                        val voiceName: String
+                        val voiceProb: Float
+                        if (onnxOut.voiceFlat != null) {
+                            val p = tlBufVoice.get()
+                            loadRow(onnxOut.voiceFlat, k * nVoice, p); softmaxInto(p, p)
+                            var vi = 0; for (j in 1 until nVoice) if (p[j] > p[vi]) vi = j
+                            voiceName = VOICE_LABELS.getOrElse(vi) { "ACTIVE" }; voiceProb = p[vi]
+                        } else { voiceName = "ACTIVE"; voiceProb = 0f }
+
+                        val gender: String? = onnxOut.genderFlat?.let {
+                            val p = tlBufGender.get()
+                            loadRow(it, k * nGender, p); softmaxInto(p, p)
+                            var gi = 0; for (j in 1 until nGender) if (p[j] > p[gi]) gi = j
+                            GENDER_LABELS.getOrElse(gi) { "NONE" }.takeUnless { s -> s == "NONE" }
+                        }
+                        val number: String? = onnxOut.numberFlat?.let {
+                            val p = tlBufNumber.get()
+                            loadRow(it, k * nNumber, p); softmaxInto(p, p)
+                            var ni = 0; for (j in 1 until nNumber) if (p[j] > p[ni]) ni = j
+                            NUMBER_LABELS.getOrElse(ni) { "NONE" }.takeUnless { s -> s == "NONE" }
+                        }
+
+                        svoByLocal[cand.exampleIdx] += RawSvoResult(
+                            candidate       = cand,
+                            svoBoundaryProb = pSvoB,
+                            role            = roleName,
+                            roleProb        = roleProb,
+                            voice           = voiceName,
+                            voiceProb       = voiceProb,
+                            gender          = gender,
+                            number          = number,
+                        )
+                    }
+                }
+            }
+            val msDecode = ms(tDecode)
+
+            // ── 3e. NMS compound + conversion + stockage ────────────────────
+            val bucketResults = rawByLocal.zip(svoByLocal).map { (nerSpans, svoSpans) ->
+                // nmsSpansCompound trie par longueur en interne → pas besoin de pré-trier
+                val nerEntities = nmsSpansCompound(nerSpans)
+                    // Ordre de sortie : position puis parent avant enfant
+                    .sortedWith(compareBy<NmsResult> { it.span.candidate.charStart }
+                        .thenByDescending { it.span.candidate.charEnd - it.span.candidate.charStart })
+                    .map { toEntity(it) }
+                val svoFiltered = nmsRawSvo(svoSpans.sortedByDescending { it.svoBoundaryProb })
+                    .sortedBy { it.candidate.charStart }
+                    .map { toSvoSpan(it) }
+                ExtractionResult(entities = nerEntities, svoSpans = svoFiltered)
+            }
+
+            origIndices.forEachIndexed { bi, origIdx -> resultsByIdx[origIdx] = bucketResults[bi] }
+            // ⚠️ Timing INFO pour diagnostiquer les goulots d'étranglement
+            log.info("[MH-PERF] bucket maxLen={} n={} N={}  cand={}ms  tensors={}ms  onnx={}ms  decode={}ms  total={}ms",
+                bucketMaxLen, batchSize, N, msCand, msTensors, msOnnx, msDecode, ms(tBucket))
         }
-        log.debug("[MH] décodage ms={}", ms(tDec))
-        log.debug("[MH] total batchSize={} maxLen={} N={} ms={}", batchSize, maxLen, N, ms(t0))
-        return results
+
+        log.info("[MH-PERF] TOTAL batchSize={} ms={}", texts.size, ms(t0))
+        return resultsByIdx.map { it!! }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -508,45 +803,133 @@ class OnnxMultiHeadEntityExtractor(
     private fun bestCoarseFine(
         cProbs: FloatArray,
         fLogits: FloatArray,
-        pBoundary: Float,
-    ): CoarseFineScore? {
-        var best: CoarseFineScore? = null
-        var bestScore = -1f
+        tauCoarseEff: Float = tauCoarse,
+        topK: Int = 2,
+    ): List<CoarseFineScore> {
+        // ── Étape 1 : sélection des top-K coarse parmi ceux qui passent tauCoarseEff ──
+        //
+        // On collecte tous les labels coarse dont la probabilité dépasse tauCoarseEff,
+        // triés par probabilité décroissante, et on en prend au plus topK.
+        // On ne fait PAS concourir plusieurs familles via le score composite,
+        // car les pFine re-softmaxés ne sont pas comparables entre familles ayant
+        // un nombre différent de labels autorisés :
+        //   - ORG (1 label autorisé)  → pFine ≈ 1.0 par construction
+        //   - PER (4 labels autorisés) → pFine ≤ 0.90 (masse distribuée)
+        // Pour chaque candidat coarse retenu, on calcule le meilleur fine dans sa famille.
+        val coarseCandidates = mutableListOf<Pair<Int, Float>>() // (coarseIdx, pCoarse)
+        for (c in VALID_COARSE_INDICES) {
+            val pC = cProbs[c]
+            if (pC < tauCoarseEff) continue
+            coarseCandidates += c to pC
+        }
+        if (coarseCandidates.isEmpty()) return emptyList()
+        coarseCandidates.sortByDescending { it.second }
 
-        for (c in COARSE_LABELS.indices) {
-            if (c == COARSE_NONE_IDX) continue
-            val pCoarse = cProbs[c]
-            if (pCoarse < tauCoarse) continue
-            val mask = COARSE_FINE_MASK[c]
-            if (mask.none { it }) continue
+        // ── Étape 2 : pour chaque coarse retenu, meilleur fine dans sa famille ─
+        // Les buffers thread-local sont réutilisés séquentiellement (valeurs scalaires extraites
+        // dans CoarseFineScore avant la prochaine itération → pas d'aliasing).
+        val masked = tlBufFineMask.get()
+        val fProbs = tlBufFine.get()
+        return coarseCandidates.take(topK).map { (bestCoarseIdx, bestPCoarse) ->
+            val mask = COARSE_FINE_MASK[bestCoarseIdx]
+            for (i in fLogits.indices) masked[i] = if (mask[i]) fLogits[i] else -1e9f
+            softmaxInto(masked, fProbs)
+            var fIdx = 0
+            var fMax = fProbs[0]
+            for (i in 1 until fProbs.size) if (fProbs[i] > fMax) { fMax = fProbs[i]; fIdx = i }
+            CoarseFineScore(COARSE_LABELS[bestCoarseIdx], bestPCoarse, FINE_LABELS[fIdx], fMax)
+        }
+    }
 
-            val maskedLogits = FloatArray(fLogits.size) { i -> if (mask[i]) fLogits[i] else -1e9f }
-            val fProbs = softmax(maskedLogits)
-            val fIdx   = fProbs.indices.maxByOrNull { fProbs[it] } ?: continue
-            val pFine  = fProbs[fIdx]
+    // ─────────────────────────────────────────────────────────────────────────
+    // NMS : suppression des overlaps + d��tection des spans imbriqués (compound)
+    // ─────────────────────────────────────────────────────────────────────────
 
-            val score = pBoundary * pCoarse * pFine
-            if (score > bestScore) {
-                bestScore = score
-                best = CoarseFineScore(COARSE_LABELS[c], pCoarse, FINE_LABELS[fIdx], pFine)
+    /**
+     * Résultat NMS enrichi : chaque span est soit un parent top-level, soit un span
+     * imbriqué (fully contained) dans un parent — conservé comme compound sub-span.
+     * Les overlaps partiels sont toujours supprimés.
+     */
+    private data class NmsResult(
+        val span: SpanResult,
+        /** Parent si ce span est entièrement inclus dans un autre span conservé. */
+        val parent: SpanResult?,
+    ) {
+        val isNested: Boolean get() = parent != null
+    }
+
+    /**
+     * NMS avec remontée des spans imbriqués.
+     *
+     * Algorithme :
+     *  1. Trier par longueur décroissante → les spans les plus longs deviennent parents
+     *  2. Pour chaque span s :
+     *     - S'il est entièrement contenu dans un span déjà gardé → compound (nested), conservé
+     *     - Sinon, s'il n'a pas de chevauchement partiel significatif → nouveau parent
+     *     - Sinon → supprimé (overlap partiel, même comportement qu'avant)
+     *
+     *  Le tri par longueur garantit que "Nations Unies" (court, ORG) devient un enfant de
+     *  "secrétaire général des Nations Unies" (long, PER_ROLE) → les deux sont renvoyés.
+     */
+    private fun nmsSpansCompound(
+        spans: List<SpanResult>,
+        iouThreshold: Float = 0.5f,
+    ): List<NmsResult> {
+        // Priorité aux spans les plus longs pour être parents ; à score égal, confiance d'abord
+        val byLength = spans.sortedWith(
+            compareByDescending<SpanResult> { it.candidate.charEnd - it.candidate.charStart }
+                .thenByDescending { it.score }
+        )
+        val kept    = mutableListOf<SpanResult>()
+        val results = mutableListOf<NmsResult>()
+
+        for (s in byLength) {
+            val sStart = s.candidate.charStart
+            val sEnd   = s.candidate.charEnd
+
+            // Fully contained dans un span parent déjà conservé ?
+            val parent = kept.firstOrNull { k ->
+                k.candidate.charStart <= sStart && k.candidate.charEnd >= sEnd
             }
+            if (parent != null) {
+                // Ne garder comme compound que si le type fin est DIFFÉRENT du parent.
+                // Même fine = doublon (ex. deux EVENT_NAMED imbriqués) → on discarde simplement.
+                if (s.fine != parent.fine) {
+                    results += NmsResult(s, parent)
+                }
+                continue
+            }
+
+            // Overlap partiel avec un span déjà conservé → supprimé (NMS classique)
+            if (kept.any { k -> iouPartialOnly(s, k) >= iouThreshold }) continue
+
+            // Nouveau span top-level
+            kept    += s
+            results += NmsResult(s, null)
         }
-        return best
+        return results
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // NMS : suppression des overlaps (par IoU)
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private fun nmsSpans(spans: List<SpanResult>, iouThreshold: Float = 0.5f): List<SpanResult> {
-        val kept = mutableListOf<SpanResult>()
-        for (s in spans) {
-            if (kept.none { k -> iouOrContainment(s, k) >= iouThreshold }) kept += s
-        }
-        return kept
+    /**
+     * IoU "overlap partiel" uniquement — NE tient PAS compte du containment complet.
+     * Un span A entièrement inclus dans B donne ici IoU < threshold afin d'être traité
+     * comme compound plutôt que supprimé.
+     */
+    private fun iouPartialOnly(a: SpanResult, b: SpanResult): Float {
+        val aStart = a.candidate.charStart; val aEnd = a.candidate.charEnd
+        val bStart = b.candidate.charStart; val bEnd = b.candidate.charEnd
+        val inter  = maxOf(0, minOf(aEnd, bEnd) - maxOf(aStart, bStart))
+        if (inter == 0) return 0f
+        val lenA = aEnd - aStart
+        val lenB = bEnd - bStart
+        // Containment total → retourner 0 pour NE PAS déclencher la suppression NMS
+        if (aStart >= bStart && aEnd <= bEnd) return 0f  // a dans b
+        if (bStart >= aStart && bEnd <= aEnd) return 0f  // b dans a
+        // Overlap partiel standard
+        return inter.toFloat() / (lenA + lenB - inter)
     }
 
-    /** IoU standard OU ratio de containment (le plus grand des deux). */
+    /** IoU standard OU ratio de containment — conservé pour la compatibilité SVO. */
     private fun iouOrContainment(a: SpanResult, b: SpanResult): Float {
         val inter = maxOf(0, minOf(a.candidate.charEnd, b.candidate.charEnd) -
                 maxOf(a.candidate.charStart, b.candidate.charStart))
@@ -554,53 +937,148 @@ class OnnxMultiHeadEntityExtractor(
         val lenA  = a.candidate.charEnd - a.candidate.charStart
         val lenB  = b.candidate.charEnd - b.candidate.charStart
         val iou   = inter.toFloat() / (lenA + lenB - inter)
-        // containment : quel pourcentage du plus petit span est couvert ?
         val containment = inter.toFloat() / minOf(lenA, lenB)
         return maxOf(iou, containment)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Conversion vers Entity
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────��───────────
 
-    private fun toEntity(r: SpanResult): Entity = Entity(
-        text  = r.candidate.spanText,
-        type  = r.fine,
-        span  = Span(r.candidate.charStart, r.candidate.charEnd, emptyList()),
-        metadata = mapOf(
-            "coarse"       to r.coarse,
-            "kind"         to (LABEL_KIND[r.fine] ?: LabelKind.TRIGGER_ARG),
-            "pBoundary"    to r.pBoundary,
-            "pCoarse"      to r.pCoarse,
-            "pFine"        to r.pFine,
-            "score"        to r.score,
-        )
+    private fun toEntity(r: NmsResult): Entity = Entity(
+        text  = r.span.candidate.spanText,
+        type  = r.span.fine,
+        span  = Span(r.span.candidate.charStart, r.span.candidate.charEnd, emptyList()),
+        metadata = buildMap {
+            put("coarse",    r.span.coarse)
+            put("kind",      LABEL_KIND[r.span.fine] ?: LabelKind.TRIGGER_ARG)
+            put("pBoundary", r.span.pBoundary)
+            put("pCoarse",   r.span.pCoarse)
+            put("pFine",     r.span.pFine)
+            put("score",     r.span.score)
+            if (r.isNested) {
+                put("nested",       true)
+                put("parentText",   r.parent!!.candidate.spanText)
+                put("parentStart",  r.parent.candidate.charStart)
+                put("parentEnd",    r.parent.candidate.charEnd)
+                put("parentFine",   r.parent.fine)
+                put("parentCoarse", r.parent.coarse)
+            }
+        }
     )
 
     // ─────────────────────────────────────────────────────────────────────────
     // Math utils
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun softmax(logits: FloatArray): FloatArray {
-        val max  = logits.max()
-        val exps = FloatArray(logits.size) { exp((logits[it] - max).toDouble()).toFloat() }
-        val sum  = exps.sum()
-        return FloatArray(exps.size) { exps[it] / sum }
+    /**
+     * Softmax in-place dans [dst] (même taille que [src]).
+     * Zéro allocation — utiliser avec les buffers thread-local.
+     */
+    private fun softmaxInto(src: FloatArray, dst: FloatArray): FloatArray {
+        var maxV = src[0]
+        for (v in src) if (v > maxV) maxV = v
+        var sum = 0.0
+        for (i in src.indices) {
+            val e = exp((src[i] - maxV).toDouble()).toFloat()
+            dst[i] = e
+            sum   += e
+        }
+        val invSum = (1.0 / sum).toFloat()
+        for (i in dst.indices) dst[i] *= invSum
+        return dst
     }
 
-    private fun softmaxProb(logits: FloatArray, classIdx: Int): Float =
-        softmax(logits)[classIdx]
+    /**
+     * Prob softmax pour un seul classIdx, sans aucune allocation.
+     * Conservée pour usage éventuel hors hot-path.
+     */
+    @Suppress("unused")
+    private fun softmaxProb(logits: FloatArray, classIdx: Int): Float {
+        var maxV = logits[0]
+        for (v in logits) if (v > maxV) maxV = v
+        val target = exp((logits[classIdx] - maxV).toDouble()).toFloat()
+        var sum = 0f
+        for (v in logits) sum += exp((v - maxV).toDouble()).toFloat()
+        return target / sum
+    }
+
+    /**
+     * Prob softmax sur une ligne d'un FloatBuffer flat (offset, size), zéro allocation.
+     * Utilisé pour boundary (taille 2) et svo_boundary directement sur le buffer ONNX.
+     */
+    private fun softmaxProbFlat(buf: FloatBuffer, offset: Int, size: Int, classIdx: Int): Float {
+        var maxV = buf.get(offset)
+        for (i in 1 until size) { val v = buf.get(offset + i); if (v > maxV) maxV = v }
+        val target = exp((buf.get(offset + classIdx) - maxV).toDouble()).toFloat()
+        var sum = 0f
+        for (i in 0 until size) sum += exp((buf.get(offset + i) - maxV).toDouble()).toFloat()
+        return target / sum
+    }
+
+    /** Copie une ligne [srcOffset .. srcOffset+dst.size) du FloatBuffer flat dans dst. */
+    private fun loadRow(src: FloatBuffer, srcOffset: Int, dst: FloatArray) {
+        for (i in dst.indices) dst[i] = src.get(srcOffset + i)
+    }
+
+    /** softmax allouant — conservé uniquement pour usages non-critiques éventuels en dehors du hot path. */
+    @Suppress("unused")
+    private fun softmax(logits: FloatArray): FloatArray =
+        softmaxInto(logits, FloatArray(logits.size))
 
     private fun ms(nanoStart: Long) = (System.nanoTime() - nanoStart) / 1_000_000L
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Helpers : SVO NMS + conversion
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Suppression naïve des spans SVO qui se chevauchent strictement : garde le plus probable. */
+    private fun nmsRawSvo(sorted: List<RawSvoResult>): List<RawSvoResult> {
+        val kept = mutableListOf<RawSvoResult>()
+        for (s in sorted) {
+            val overlap = kept.any { k ->
+                val inter = maxOf(0, minOf(s.candidate.charEnd, k.candidate.charEnd) -
+                        maxOf(s.candidate.charStart, k.candidate.charStart))
+                // Ne supprimer que si même rôle ET overlap > 50% du plus court span
+                if (s.role != k.role) false
+                else {
+                    val minLen = minOf(
+                        s.candidate.charEnd - s.candidate.charStart,
+                        k.candidate.charEnd - k.candidate.charStart,
+                    ).coerceAtLeast(1)
+                    inter.toFloat() / minLen > 0.5f
+                }
+            }
+            if (!overlap) kept += s
+        }
+        return kept
+    }
+
+    private fun toSvoSpan(r: RawSvoResult) = SvoSpan(
+        text            = r.candidate.spanText,
+        charStart       = r.candidate.charStart,
+        charEnd         = r.candidate.charEnd,
+        role            = r.role,
+        roleProb        = r.roleProb,
+        svoBoundaryProb = r.svoBoundaryProb,
+        voice           = r.voice,
+        voiceProb       = r.voiceProb,
+        gender          = r.gender,
+        number          = r.number,
+    )
 
     // ─────────────────────────────────────────────────────────────────────────
     // CoreML & lifecycle
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun OrtSession.SessionOptions.tryAddCoreML() {
+        // Sur Apple Silicon, CoreML route le modèle sur le Neural Engine / GPU Metal
+        // → typiquement 5-15× plus rapide que CPU pur pour les transformers.
+        // La PREMIÈRE inférence compile le modèle Core ML → peut prendre 10-60 secondes,
+        // mais le résultat est mis en cache pour les démarrages suivants.
         try {
             addCoreML()
-            log.info("[MH] CoreML EP activé")
+            log.info("[MH] CoreML EP activé — première inférence peut être lente (compilation Core ML → cache)")
         } catch (e: Exception) {
             log.warn("[MH] CoreML non disponible : {} → fallback CPU", e.message)
         }

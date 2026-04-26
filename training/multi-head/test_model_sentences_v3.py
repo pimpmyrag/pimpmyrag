@@ -21,7 +21,13 @@ import torch
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 from multitask_model import SpanMultiTaskModel
-from labels import COARSE_LABELS, FINE_LABELS, COARSE2ID, SVO_LABELS, NUM_SVO, NUM_VOICE
+from labels import (
+    COARSE_LABELS, FINE_LABELS, COARSE2ID,
+    SVO_LABELS, NUM_SVO,
+    VOICE_LABELS as _VOICE_LABELS_FROM_LABELS, NUM_VOICE,
+    GENDER_LABELS, NUM_GENDER,
+    NUMBER_LABELS, NUM_NUMBER,
+)
 
 
 # ──────────────────────────────────────────────────────────
@@ -103,7 +109,7 @@ SVO_EMOJI = {
     "pron_obj":    "🔴",
 }
 
-VOICE_LABELS = ["ACTIVE", "PASSIVE"]
+VOICE_LABELS = _VOICE_LABELS_FROM_LABELS
 
 
 # ──────────────────────────────────────────────────────────
@@ -363,9 +369,11 @@ def _decode_spans(outputs, meta_flat, model, device,
     b_probs  = softmax_probs(outputs["boundary_logits"])
     c_probs  = softmax_probs(outputs["coarse_logits"])
     f_logits = outputs["fine_logits"]
-    svob_probs = softmax_probs(outputs["svo_boundary_logits"])
-    svo_probs  = softmax_probs(outputs["svo_logits"])
-    voice_probs = softmax_probs(outputs["voice_logits"])
+    svob_probs   = softmax_probs(outputs["svo_boundary_logits"])
+    svo_probs    = softmax_probs(outputs["svo_logits"])
+    voice_probs  = softmax_probs(outputs["voice_logits"])
+    gender_probs = softmax_probs(outputs["gender_logits"])
+    number_probs = softmax_probs(outputs["number_logits"])
 
     coarse_fine_mask = model.coarse_fine_mask.to(device)
     none_idx = COARSE2ID["NONE"]
@@ -425,12 +433,25 @@ def _decode_spans(outputs, meta_flat, model, device,
             voice_label = VOICE_LABELS[voice_idx] if voice_idx < NUM_VOICE else "?"
             voice_prob = float(voice_probs[i, voice_idx].item())
 
+            # morpho : gender + number (pertinents pour svo_subject / svo_object / iobj / prons)
+            gender_idx = int(torch.argmax(gender_probs[i]).item())
+            gender_label = GENDER_LABELS[gender_idx] if gender_idx < NUM_GENDER else "NONE"
+            gender_prob = float(gender_probs[i, gender_idx].item())
+
+            number_idx = int(torch.argmax(number_probs[i]).item())
+            number_label = NUMBER_LABELS[number_idx] if number_idx < NUM_NUMBER else "NONE"
+            number_prob = float(number_probs[i, number_idx].item())
+
             per_example_svo[ex_idx].append({
                 "text": m["text"], "char_start": m["char_start"], "char_end": m["char_end"],
                 "tok_start": m["tok_start"], "tok_end": m["tok_end"],
                 "svo_boundary_prob": round(p_svob, 4),
                 "svo_role": svo_label, "svo_prob": round(svo_prob, 4),
                 "voice": voice_label, "voice_prob": round(voice_prob, 4),
+                "gender": gender_label if gender_label != "NONE" else None,
+                "gender_prob": round(gender_prob, 4),
+                "number": number_label if number_label != "NONE" else None,
+                "number_prob": round(number_prob, 4),
                 "example_idx": ex_idx,
             })
 
@@ -557,10 +578,16 @@ def print_svo(svo_spans: List[Dict]):
         voice_info = ""
         if role == "svo_verb":
             voice_info = f" | voice={s['voice']} ({s['voice_prob']:.3f})"
+        morpho_parts = []
+        if s.get("gender"):
+            morpho_parts.append(f"G={s['gender']}({s['gender_prob']:.2f})")
+        if s.get("number"):
+            morpho_parts.append(f"N={s['number']}({s['number_prob']:.2f})")
+        morpho_info = ("  [" + " ".join(morpho_parts) + "]") if morpho_parts else ""
         print(
             f"  {emoji} [{s['char_start']:>4}:{s['char_end']:<4}] "
             f"{s['text']!r:<30} | role={role:<12} ({s['svo_prob']:.3f})"
-            f" | p_svob={s['svo_boundary_prob']:.3f}{voice_info}"
+            f" | p_svob={s['svo_boundary_prob']:.3f}{voice_info}{morpho_info}"
             f" | tok=[{s.get('tok_start')},{s.get('tok_end')}]"
         )
 
@@ -574,9 +601,20 @@ def print_triplets(triplets: List[Dict]):
         s = t["subject"]
         o = t["object"]
         voice = t.get("voice", "?")
-        s_text = f'"{s["text"]}"' if s else "∅"
-        o_text = f'"{o["text"]}"' if o else "∅"
-        print(f"  {s_text:>30}  →[{voice}]→  \"{v['text']}\"  →  {o_text}")
+
+        def _morpho(span):
+            if not span:
+                return ""
+            parts = []
+            if span.get("gender"):
+                parts.append(span["gender"])
+            if span.get("number"):
+                parts.append(span["number"])
+            return (" [" + "/".join(parts) + "]") if parts else ""
+
+        s_text = f'"{s["text"]}"' + _morpho(s) if s else "∅"
+        o_text = f'"{o["text"]}"' + _morpho(o) if o else "∅"
+        print(f"  {s_text:>36}  →[{voice}]→  \"{v['text']}\"  →  {o_text}")
 
 
 # ──────────────────────────────────────────────────────────

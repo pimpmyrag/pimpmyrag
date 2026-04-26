@@ -170,12 +170,12 @@ class NerService(
                 val coarse = e.metadata["coarse"] as? String ?: return@filter false
                 (e.metadata["score"] as? Float ?: 0f) >= cfg.minNerScoreReconcile &&
                 coarse in allowed &&
-                minOf(svo.charEnd, e.span!!.end) - maxOf(svo.charStart, e.span.start) > 0 &&
+                minOf(svo.charEnd, e.span.end) - maxOf(svo.charStart, e.span.start) > 0 &&
                 (e.span.end - e.span.start) >= (svo.charEnd - svo.charStart)
             }
             .maxByOrNull { e -> e.metadata["score"] as? Float ?: 0f }
 
-        if (best != null && best.span!!.start <= svo.charStart && best.span.end >= svo.charEnd) {
+        if (best != null && best.span.start <= svo.charStart && best.span.end >= svo.charEnd) {
             val coarse = best.metadata["coarse"] as? String ?: ""
             EnrichedSvoSpan(
                 base = SvoSpan(
@@ -202,15 +202,15 @@ class NerService(
                 .filter { e ->
                     val coarse = e.metadata["coarse"] as? String ?: return@filter false
                     coarse in subjCoarse &&
-                    e.span!!.end <= v.charStart &&
+                    e.span.end <= v.charStart &&
                     v.charStart - e.span.end <= cfg.maxGapChars &&
                     (e.metadata["score"] as? Float ?: 0f) >= cfg.minNerScoreFill
                 }
-                .maxByOrNull { it.span!!.end }
+                .maxByOrNull { it.span.end }
             best?.let { e ->
                 EnrichedSvoSpan(
                     base = SvoSpan(
-                        text = e.text, charStart = e.span!!.start, charEnd = e.span.end,
+                        text = e.text, charStart = e.span.start, charEnd = e.span.end,
                         role = "svo_subject", roleProb = 0f, svoBoundaryProb = 0f,
                         voice = v.voice, voiceProb = 0f, gender = null, number = null,
                     ),

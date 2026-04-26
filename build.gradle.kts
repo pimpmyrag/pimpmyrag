@@ -4,6 +4,7 @@ plugins {
     id("com.google.protobuf") version "0.9.4" apply false
     id("org.springframework.boot") version "3.3.5" apply false
     id("io.spring.dependency-management") version "1.1.6" apply false
+    id("com.vaadin") version "24.7.2" apply false
 }
 
 //configurations.all {

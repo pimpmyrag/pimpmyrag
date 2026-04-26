@@ -85,17 +85,23 @@ class OnnxSpanWrapperFull(nn.Module):
         start_vecs = hidden[span_batch_ids, span_starts]   # [N, H]
         end_vecs   = hidden[span_batch_ids, span_ends]     # [N, H]
 
-        # ── Vecteur moyen (masque tensoriel) ────────────────────────
-        L = hidden.size(1)
-        positions = torch.arange(L, device=hidden.device)              # [L]
-        mask = (
-            (positions.unsqueeze(0) >= span_starts.unsqueeze(1)) &
-            (positions.unsqueeze(0) <= span_ends.unsqueeze(1))
-        ).float()                                                        # [N, L]
-
-        span_hidden = hidden[span_batch_ids]                             # [N, L, H]
+        # ── Vecteur moyen via prefix sum ─────────────────────────────
+        # IMPORTANT : évite le tenseur intermédiaire [N, L, H] qui explose
+        # la mémoire (ex. N=5000, L=24, H=768 → 350 MB de données temporaires).
+        #
+        # Idée : prefix[b, i] = sum(hidden[b, 0 .. i-1])
+        #   mean(hidden[b, s:e+1]) = (prefix[b, e+1] - prefix[b, s]) / (e-s+1)
+        #
+        # Complexité mémoire : O(B·L·H) au lieu de O(N·L·H)  ← critique pour N >> B
         lengths = (span_ends - span_starts + 1).float().clamp(min=1).unsqueeze(1)  # [N, 1]
-        mean_vecs = (span_hidden * mask.unsqueeze(-1)).sum(dim=1) / lengths         # [N, H]
+        zeros  = torch.zeros(hidden.size(0), 1, hidden.size(2),
+                             device=hidden.device, dtype=hidden.dtype)              # [B, 1, H]
+        prefix = torch.cumsum(hidden, dim=1)                                        # [B, L, H]
+        prefix = torch.cat([zeros, prefix], dim=1)                                  # [B, L+1, H]
+        mean_vecs = (
+            prefix[span_batch_ids, span_ends + 1] -   # [N, H]  cumulée jusqu'à end incl.
+            prefix[span_batch_ids, span_starts]        # [N, H]  cumulée avant start
+        ) / lengths                                    # [N, H]
 
         # ── Width embedding ──────────────────────────────────────────
         widths = (span_ends - span_starts + 1).clamp(min=1, max=self.max_width_bucket - 1)

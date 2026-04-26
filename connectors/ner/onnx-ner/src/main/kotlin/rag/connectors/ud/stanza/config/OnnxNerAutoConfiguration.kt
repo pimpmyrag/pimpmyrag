@@ -2,6 +2,7 @@ package rag.connectors.ud.stanza.config
 
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import rag.connectors.ud.stanza.OnnxSpanNerExtractor
@@ -13,6 +14,7 @@ class OnnxNerAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "onnx.ner.ud", name = ["enabled"], havingValue = "true")
     fun onnxNerUd(config: OnnxNerConfig): NerExtractorFromUD {
         return OnnxSpanNerExtractor(
             modelPath      = config.modelPath,

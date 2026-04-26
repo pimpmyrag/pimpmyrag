@@ -94,6 +94,14 @@ resolve_tokenizer() {
     return
   fi
 
+  # Fallback : tokenizer versionné dans le dépôt (training/multi-head/tokenizer_export_clean)
+  local repo_tokenizer="$ROOT_DIR/training/multi-head/tokenizer_export_clean"
+  if [[ -d "$repo_tokenizer" && -f "$repo_tokenizer/tokenizer.json" ]]; then
+    echo "[render] tokenizer trouvé dans le repo : $repo_tokenizer"
+    echo "$repo_tokenizer"
+    return
+  fi
+
   [[ -n "${TOKENIZER_URL:-}" ]] || { echo "[render] TOKENIZER_URL is required when NER_TOKENIZER_PATH is not set" >&2; exit 1; }
 
   local archive_name

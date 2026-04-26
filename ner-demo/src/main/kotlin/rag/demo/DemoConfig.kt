@@ -15,7 +15,8 @@ data class DemoConfig(
     // ── Batch + modèle ──────────────────────────────────────────────────────
     val batchSize: Int = 8,
 
-    // ── Affichage ────────────────────────────────────────────────────────────
+    // ── Affichage ────────────────────────────────────────────────────────────────
+    val showNer:       Boolean = true,
     val showSvo:       Boolean = true,
     val showArcs:      Boolean = true,
     val autoSplit:     Boolean = true,
@@ -27,5 +28,9 @@ data class DemoConfig(
     val minNerScoreReconcile:   Float   = 0.50f,
     val minNerScoreFill:        Float   = 0.60f,
     val maxGapChars:            Int     = 120,
+
+    // ── Seuils de score minimum par label coarse ─────────────────────────────
+    /** Score minimum (pBnd×pCoarse×pFine) par label coarse. Vide = seuil global par défaut. */
+    val scoreByCoarse: Map<String, Float> = emptyMap(),
 )
 

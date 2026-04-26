@@ -36,7 +36,10 @@ def quantize(input_path: str, output_path: str, per_channel: bool = False) -> No
         weight_type=QuantType.QInt8,
         per_channel=per_channel,
         reduce_range=False,   # True uniquement pour Intel VNNI ; sur ARM = inutile
-        optimize_model=True,  # lance une passe d'optimisation ORT avant quant.
+        # Quantifier UNIQUEMENT les couches linéaires (MatMul/Gemm) :
+        # LayerNorm, Softmax, GELU, Gather… restent en float32.
+        # Sans ça, l'attention DeBERTa dégrade fortement et les scores s'effondrent.
+        op_types_to_quantize=["MatMul", "Gemm"],
     )
 
     size_in  = os.path.getsize(input_path)  / 1e6

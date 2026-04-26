@@ -22,3 +22,12 @@ dependencies {
 tasks.test {
     useJUnitPlatform()
 }
+
+// Tâche utilitaire : ./gradlew :connectors:ner:onnx-ner:run -PmainClass=rag.connectors.ner.onnx.XxxKt
+tasks.register<JavaExec>("run") {
+    dependsOn(tasks.named("compileKotlin"))
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set(project.findProperty("mainClass") as String? ?: "rag.connectors.ner.onnx.TestMultiHeadExtractorKt")
+    jvmArgs("-Xmx4g")
+}
+

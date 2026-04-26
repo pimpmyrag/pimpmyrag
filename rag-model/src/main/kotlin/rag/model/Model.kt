@@ -103,7 +103,7 @@ enum class PronTypeValue { PRS, REL, DEM, INT, INDF, TOT, NEG, RECIP }
 data class Entity(
     val text: String,
     val type: String,
-    val span: Span? = null,
+    val span: Span = Span(),
     val metadata: Map<String, Any?> = emptyMap())
 
 data class Span(

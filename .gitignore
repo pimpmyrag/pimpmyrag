@@ -92,6 +92,16 @@ docker-resources/minilm-coref-runpod/
 # ── Cache local de provisioning Render ───────────────────────────────────────
 .render-assets/
 
+# ── Copie locale du tokenizer à la racine (le canonical est training/multi-head/tokenizer_export_clean/) ──
+/tokenizer_export_clean/
+
+# ── Frontend Vaadin auto-généré (produit par le build Gradle) ─────────────────
+ner-demo/src/main/frontend/generated/
+ner-demo/src/main/frontend/index.html
+
+# ── Répertoires cibles Maven résiduels ───────────────────────────────────────
+**/target/
+
 # ── Secrets & config locale ───────────────────────────────────────────────────
 *.env
 .env.*
