@@ -115,13 +115,14 @@ class NerDemoView(
     private var rightColDiv: Div? = null
 
     // ── i18n (langue détectée depuis le navigateur) ───────────────────────────
-    private val i18n: I18n = I18n.forLanguage(UI.getCurrent().locale.language)
+    private val detectedLang: String = UI.getCurrent().locale.language
+    private val i18n: I18n = I18n.forLanguage(detectedLang)
 
     // ── LLM Judge panel (embarqué, visible/caché via Alt+J) ──────────────────
     private val judgePanel = LlmJudgePanel(llmJudgeService, i18n, { lastResults }) { toggleJudge() }
         .also { it.isVisible = true }
     private val btnJudge = Button("✕ Judge") { toggleJudge() }
-        .also { it.style["font-size"] = "0.82em" }
+        .also { it.style["font-size"] = "0.82em"; it.setId("ner-btn-judge") }
 
     private fun toggleJudge() {
         val open = !judgePanel.isVisible
@@ -137,6 +138,7 @@ class NerDemoView(
         style["font-size"] = "0.86em"
         style["font-family"] = "Inter, system-ui, sans-serif"
         style["resize"] = "none"
+        setId("ner-input")
     }
 
     // ── Param widgets ─────────────────────────────────────────────────────────
@@ -171,7 +173,7 @@ class NerDemoView(
     }
 
     // ── Results ───────────────────────────────────────────────────────────────
-    private val textFlow    = Div()
+    private val textFlow    = Div().also { it.setId("ner-textflow") }
     private val progressBar = ProgressBar().apply { isIndeterminate = true; isVisible = false }
     private val detailPanel = buildDetailPanel()
 
@@ -387,6 +389,7 @@ class NerDemoView(
 
         val actions = HorizontalLayout(
             hBtn("☰") { sidebarDiv?.element?.executeJs("this.classList.toggle('ner-open')") },
+            hBtn(i18n.btnTour) { launchTour() },
             hBtn(i18n.btnImportConfig) { showImportConfigDialog() },
             hBtn(i18n.btnExportConfig) { exportConfig() },
             hBtn("🌙") { toggleDark() },
@@ -421,6 +424,7 @@ class NerDemoView(
         }.also {
             it.addThemeVariants(ButtonVariant.LUMO_PRIMARY)
             it.style["font-size"] = "0.82em"
+            it.setId("ner-btn-analyse")
         }
 
         val btnClear = Button(i18n.btnClear) {
@@ -589,6 +593,7 @@ class NerDemoView(
     // ── Detail panel ──────────────────────────────────────────────────────────
     private fun buildDetailPanel(): Div {
         val div = Div()
+        div.setId("ner-detail")
         div.style["width"] = "270px"
         div.style["min-width"] = "270px"
         div.style["height"] = "100%"
@@ -673,6 +678,7 @@ class NerDemoView(
     private fun buildParamsAccordion(): Accordion {
         val accordion = Accordion()
         accordion.setWidthFull()
+        accordion.setId("ner-params")
 
         // ── Onglet Affichage ──────────────────────────────────────────────────
         val annotRow = Div().apply {
@@ -737,6 +743,7 @@ class NerDemoView(
     // ── Legend ────────────────────────────────────────────────────────────────
     private fun buildLegend(): Div {
         val div = Div()
+        div.setId("ner-legend")
         div.style["display"] = "flex"
         div.style["flex-wrap"] = "wrap"
         div.style["gap"] = "5px"
@@ -1171,6 +1178,75 @@ class NerDemoView(
         svo.gender?.let { addRow(detailPanel, i18n.rowGender, it) }
         svo.number?.let { addRow(detailPanel, i18n.rowNumber, it) }
         if (svo.fromNer) addRow(detailPanel, i18n.rowSource, i18n.syntheticNer)
+    }
+
+    // ── Tour guidé (intro.js lazy-loaded) ────────────────────────────────────
+
+    private val TOUR_DEMO_TEXT = when (detectedLang) {
+        "fr" -> "Emmanuel Macron a rencontré la chancelière Angela Merkel à Berlin le 12 mars 2024 pour discuter du budget de l'Union européenne. Apple a annoncé l'acquisition de la startup française Mistral AI pour 500 millions d'euros lors du salon VivaTech à Paris."
+        "de" -> "Bundeskanzler Olaf Scholz hat sich am 15. März 2024 in Berlin mit dem französischen Präsidenten Emmanuel Macron getroffen, um über den EU-Haushalt zu beraten. Apple hat die französische KI-Startup Mistral AI für 500 Millionen Euro übernommen."
+        "es" -> "El presidente Emmanuel Macron se reunió con la canciller Angela Merkel en Berlín el 12 de marzo de 2024 para debatir sobre el presupuesto de la Unión Europea. Apple anunció la adquisición de la startup francesa Mistral AI por 500 millones de euros."
+        "it" -> "Il presidente Emmanuel Macron ha incontrato la cancelliera Angela Merkel a Berlino il 12 marzo 2024 per discutere del bilancio dell'Unione europea. Apple ha annunciato l'acquisizione della startup francese Mistral AI per 500 milioni di euro."
+        else -> "Emmanuel Macron met German Chancellor Angela Merkel in Berlin on March 12, 2024, to discuss the European Union budget. Apple announced the acquisition of French AI startup Mistral AI for €500 million at the VivaTech conference in Paris."
+    }
+
+    private fun launchTour() {
+        // 1. Pré-remplir le texte de démo et lancer l'analyse
+        inputArea.value = TOUR_DEMO_TEXT
+        saveWidgetsToConfig()
+        launchStream(TOUR_DEMO_TEXT)
+
+        // 2. Démarrer intro.js après un court délai (pour que le streaming commence)
+        val stepsJs = buildTourStepsJs()
+        UI.getCurrent().page.executeJs("""
+            (function() {
+                function start() {
+                    introJs().setOptions({
+                        steps: $stepsJs,
+                        nextLabel: '→',
+                        prevLabel: '←',
+                        doneLabel: '✓',
+                        showProgress: true,
+                        showBullets: false,
+                        scrollToElement: true,
+                        overlayOpacity: 0.5,
+                        tooltipClass: 'ner-intro-tooltip',
+                    }).start();
+                }
+                if (typeof introJs === 'undefined') {
+                    var link = document.createElement('link');
+                    link.rel  = 'stylesheet';
+                    link.href = 'https://unpkg.com/intro.js@7/minified/introjs.min.css';
+                    document.head.appendChild(link);
+                    var s = document.createElement('script');
+                    s.src    = 'https://unpkg.com/intro.js@7/minified/intro.min.js';
+                    s.onload = function() { setTimeout(start, 300); };
+                    document.head.appendChild(s);
+                } else {
+                    setTimeout(start, 300);
+                }
+            })();
+        """.trimIndent())
+    }
+
+    private fun buildTourStepsJs(): String {
+        fun esc(s: String) = s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ")
+        fun step(elementId: String?, title: String, body: String): String {
+            val el = if (elementId != null) "document.getElementById('$elementId')" else "null"
+            return """{ element: $el, title: "${esc(title)}", intro: "${esc(body)}" }"""
+        }
+        val steps = listOf(
+            step(null,              i18n.tourWelcomeTitle,  i18n.tourWelcomeBody),
+            step("ner-input",       i18n.tourInputTitle,    i18n.tourInputBody),
+            step("ner-btn-analyse", i18n.tourAnalyseTitle,  i18n.tourAnalyseBody),
+            step("ner-legend",      i18n.tourLegendTitle,   i18n.tourLegendBody),
+            step("ner-textflow",    i18n.tourResultsTitle,  i18n.tourResultsBody),
+            step("ner-params",      i18n.tourParamsTitle,   i18n.tourParamsBody),
+            step("ner-detail",      i18n.tourDetailTitle,   i18n.tourDetailBody),
+            step("ner-btn-judge",   i18n.tourJudgeTitle,    i18n.tourJudgeBody),
+            step(null,              i18n.tourMcpTitle,      i18n.tourMcpBody),
+        )
+        return "[${steps.joinToString(",")}]"
     }
 
     // ── Export / Import ───────────────────────────────────────────────────────
