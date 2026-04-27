@@ -6,7 +6,11 @@ package rag.demo
  */
 data class I18n(
     // ── Header ──────────────────────────────────────────────────────────────
+    val headerTitle: String,
     val headerSub: String,
+    val headerBadgeNer: String,
+    val headerBadgeSvo: String,
+    val headerBadgeLlm: String,
     // ── Sidebar ─────────────────────────────────────────────────────────────
     val inputLabel: String,
     val placeholder: String,
@@ -75,7 +79,11 @@ data class I18n(
         }
 
         val FR = I18n(
-            headerSub       = "DeBERTa multitête — cliquez sur un span pour ses détails",
+            headerTitle     = "Analyse d'entités & de relations",
+            headerSub       = "DeBERTa multitête · NER 32 labels · Syntaxe SVO · Évaluation LLM",
+            headerBadgeNer  = "NER",
+            headerBadgeSvo  = "SVO",
+            headerBadgeLlm  = "LLM Judge",
             inputLabel      = "TEXTE À ANALYSER",
             placeholder     = "Collez votre texte ici… (article, dépêche, plusieurs phrases)",
             btnAnalyse      = "🔍  Analyser",
@@ -130,7 +138,11 @@ data class I18n(
         )
 
         val EN = I18n(
-            headerSub       = "DeBERTa multi-head — click on a span for details",
+            headerTitle     = "Entity & Relation Analysis",
+            headerSub       = "DeBERTa multi-head · NER 32 labels · SVO syntax · LLM evaluation",
+            headerBadgeNer  = "NER",
+            headerBadgeSvo  = "SVO",
+            headerBadgeLlm  = "LLM Judge",
             inputLabel      = "TEXT TO ANALYZE",
             placeholder     = "Paste your text here… (article, news wire, multiple sentences)",
             btnAnalyse      = "🔍  Analyze",
@@ -185,7 +197,11 @@ data class I18n(
         )
 
         val DE = I18n(
-            headerSub       = "DeBERTa Multi-Head — Span anklicken für Details",
+            headerTitle     = "Entitäts- & Relationsanalyse",
+            headerSub       = "DeBERTa Multi-Head · NER 32 Labels · SVO-Syntax · LLM-Bewertung",
+            headerBadgeNer  = "NER",
+            headerBadgeSvo  = "SVO",
+            headerBadgeLlm  = "LLM-Richter",
             inputLabel      = "TEXT ANALYSIEREN",
             placeholder     = "Text hier einfügen… (Artikel, Meldung, mehrere Sätze)",
             btnAnalyse      = "🔍  Analysieren",
@@ -240,7 +256,11 @@ data class I18n(
         )
 
         val ES = I18n(
-            headerSub       = "DeBERTa multi-cabeza — haga clic en un span para detalles",
+            headerTitle     = "Análisis de Entidades & Relaciones",
+            headerSub       = "DeBERTa multi-cabeza · NER 32 etiquetas · Sintaxis SVO · Evaluación LLM",
+            headerBadgeNer  = "NER",
+            headerBadgeSvo  = "SVO",
+            headerBadgeLlm  = "Juez LLM",
             inputLabel      = "TEXTO A ANALIZAR",
             placeholder     = "Pegue su texto aquí… (artículo, noticia, varias frases)",
             btnAnalyse      = "🔍  Analizar",
@@ -295,7 +315,11 @@ data class I18n(
         )
 
         val IT = I18n(
-            headerSub       = "DeBERTa multi-testa — clicca su uno span per i dettagli",
+            headerTitle     = "Analisi di Entità & Relazioni",
+            headerSub       = "DeBERTa multi-testa · NER 32 etichette · Sintassi SVO · Valutazione LLM",
+            headerBadgeNer  = "NER",
+            headerBadgeSvo  = "SVO",
+            headerBadgeLlm  = "Giudice LLM",
             inputLabel      = "TESTO DA ANALIZZARE",
             placeholder     = "Incolla il testo qui… (articolo, notizia, più frasi)",
             btnAnalyse      = "🔍  Analizza",

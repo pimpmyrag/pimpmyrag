@@ -95,6 +95,12 @@ class NerDemoView(
             "svo_verb" to "🔵", "svo_subject" to "🟢", "svo_object" to "🔴",
             "svo_iobj" to "🟠", "pron_subj" to "🟢", "pron_obj" to "🔴",
         )
+        /** Couleurs des rôles syntaxiques UD (cohérentes avec SVO_COLORS). */
+        val SYNTACTIC_ROLE_COLORS = mapOf(
+            "nsubj" to ("#dcfce7" to "#15803d"),
+            "obj"   to ("#fce7f3" to "#9d174d"),
+            "iobj"  to ("#fff7ed" to "#c2410c"),
+        )
         private val executor = Executors.newCachedThreadPool { r ->
             Thread(r, "ner-stream").also { it.isDaemon = true }
         }
@@ -103,6 +109,10 @@ class NerDemoView(
     // ── State ─────────────────────────────────────────────────────────────────
     private var lastResults: List<AnnotatedSentence> = emptyList()
     private val sentenceSlots = mutableListOf<Span>()
+
+    // ── Panneaux collapsibles ─────────────────────────────────────────────────
+    private var sidebarDiv: Div? = null
+    private var rightColDiv: Div? = null
 
     // ── i18n (langue détectée depuis le navigateur) ───────────────────────────
     private val i18n: I18n = I18n.forLanguage(UI.getCurrent().locale.language)
@@ -136,18 +146,28 @@ class NerDemoView(
     private val cbAutoSplit     = Checkbox(i18n.cbSplitAuto, true)
     private val cbReconcile     = Checkbox(i18n.cbReconcileLabel, true)
     private val cbFineForCoarse = ALL_COARSE.associateWith { Checkbox(it, true) }
-    private val nfTauBoundary = nf("τ bound",  0.20, 0.95, 0.70)
-    private val nfTauNone     = nf("τ none",   0.50, 1.00, 0.99)
-    private val nfTauCoarse   = nf("τ coarse", 0.00, 0.90, 0.45)
-    private val nfTauSvo      = nf("τ svo",    0.20, 0.95, 0.50)
-    private val nfBatchSize   = nf("batch",    1.0,  32.0, 8.0,  step = 1.0)
-    private val nfMinNerRec   = nf("min rec",  0.10, 0.95, 0.50)
-    private val nfMinNerFill  = nf("min fill", 0.10, 0.95, 0.60)
-    private val nfMaxGap      = nf("max gap",  20.0, 400.0, 120.0, step = 10.0)
+    private val nfTauBoundary   = nf("Sensibilité entités",  0.20, 0.95, 0.70,
+        helper = "Seuil de détection d'une entité. Baisser = plus d'entités, monter = plus précis.")
+    private val nfTauNone       = nf("Rejet non-entité",     0.50, 1.00, 0.99,
+        helper = "Score minimum pour qu'un token soit ignoré (non-entité). Proche de 1 = strict.")
+    private val nfTauCoarse     = nf("Confiance catégorie",  0.00, 0.90, 0.45,
+        helper = "Confiance minimum pour assigner une catégorie générale (PER, LOC, ORG…).")
+    private val nfTauSvo        = nf("Sensibilité SVO",      0.20, 0.95, 0.50,
+        helper = "Seuil de détection des rôles syntaxiques (sujet, verbe, objet).")
+    private val nfTauSvoAnchored= nf("SVO ancré sur entité", 0.10, 0.70, 0.40,
+        helper = "Seuil SVO appliqué quand le span coïncide avec une entité NER connue.")
+    private val nfBatchSize     = nf("Taille du lot",        1.0,  32.0, 8.0,  step = 1.0,
+        helper = "Nombre de phrases envoyées simultanément au modèle. Plus élevé = plus rapide.")
+    private val nfMinNerRec   = nf("Score min réconciliation", 0.10, 0.95, 0.50,
+        helper = "Score NER minimum pour qu'une entité participe à la réconciliation NER↔SVO.")
+    private val nfMinNerFill  = nf("Score min remplissage",    0.10, 0.95, 0.60,
+        helper = "Score NER minimum pour compléter un span SVO par une entité adjacente.")
+    private val nfMaxGap      = nf("Écart max entre spans",    20.0, 400.0, 120.0, step = 10.0,
+        helper = "Distance maximale en caractères entre deux spans pour les fusionner.")
 
     /** Seuil de score minimum par label coarse (null = seuil global). */
     private val nfScoreByCoarse: Map<String, NumberField> = ALL_COARSE.associateWith { coarse ->
-        nf(coarse, 0.00, 1.00, 0.00).also { it.style["width"] = "96px" }
+        nf(coarse, 0.00, 1.00, 0.00, helper = "0 = utiliser le seuil global").also { it.style["width"] = "96px" }
     }
 
     // ── Results ───────────────────────────────────────────────────────────────
@@ -157,7 +177,7 @@ class NerDemoView(
 
     // ── Layout ────────────────────────────────────────────────────────────────
     init {
-        inputArea.placeholder = i18n.placeholder  // ici 'i18n' est sans ambiguïté (this = NerDemoView)
+        inputArea.placeholder = i18n.placeholder
         setSizeFull()
         isPadding = false
         isSpacing = false
@@ -165,6 +185,70 @@ class NerDemoView(
         style["font-family"] = "Inter, system-ui, sans-serif"
 
         loadConfigToWidgets(nerService.config)
+
+        // ── CSS responsive + resize handles injecté dynamiquement ───────────
+        UI.getCurrent().page.executeJs("""
+            (function(){
+              var s = document.createElement('style');
+              s.textContent = [
+                '@media (max-width: 900px) {',
+                '  .ner-sidebar { display: none !important; }',
+                '  .ner-sidebar.ner-open { display: flex !important; position: fixed; left: 0; top: 0; bottom: 0; z-index: 200; box-shadow: 4px 0 16px rgba(0,0,0,.18); }',
+                '  .ner-rightcol { display: none !important; }',
+                '}',
+                '@media (max-width: 1200px) and (min-width: 901px) {',
+                '  .ner-rightcol { width: 220px !important; min-width: 220px !important; }',
+                '}',
+                '.ner-resize-x { position: absolute; right: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 100; background: transparent; }',
+                '.ner-resize-x:hover, .ner-resize-x.dragging { background: rgba(99,102,241,.35); border-radius: 4px; }',
+                '.ner-resize-y { position: absolute; top: -4px; left: 0; right: 0; height: 8px; cursor: row-resize; z-index: 100; background: transparent; }',
+                '.ner-resize-y:hover, .ner-resize-y.dragging { background: rgba(99,102,241,.35); border-radius: 4px; }',
+              ].join('');
+              document.head.appendChild(s);
+
+              // ── Generic drag-resize helper ───────────────────────────────────
+              window._nerMakeResizableX = function(handle, target, minW, maxW) {
+                handle.addEventListener('mousedown', function(e) {
+                  e.preventDefault();
+                  handle.classList.add('dragging');
+                  var startX = e.clientX;
+                  var startW = target.getBoundingClientRect().width;
+                  function onMove(ev) {
+                    var w = Math.min(maxW, Math.max(minW, startW + ev.clientX - startX));
+                    target.style.width = w + 'px';
+                    target.style.minWidth = w + 'px';
+                  }
+                  function onUp() {
+                    handle.classList.remove('dragging');
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                  }
+                  document.addEventListener('mousemove', onMove);
+                  document.addEventListener('mouseup', onUp);
+                });
+              };
+              window._nerMakeResizableY = function(handle, target, minH, maxH) {
+                handle.addEventListener('mousedown', function(e) {
+                  e.preventDefault();
+                  handle.classList.add('dragging');
+                  var startY = e.clientY;
+                  var startH = target.getBoundingClientRect().height;
+                  function onMove(ev) {
+                    var h = Math.min(maxH, Math.max(minH, startH - (ev.clientY - startY)));
+                    target.style.height = h + 'px';
+                    target.style.flex = 'none';
+                  }
+                  function onUp() {
+                    handle.classList.remove('dragging');
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                  }
+                  document.addEventListener('mousemove', onMove);
+                  document.addEventListener('mouseup', onUp);
+                });
+              };
+            })();
+        """.trimIndent())
 
         add(buildHeader())
 
@@ -186,24 +270,61 @@ class NerDemoView(
             style["height"]         = "100%"
             style["overflow"]       = "hidden"
             style["flex-shrink"]    = "0"
+            element.classList.add("ner-rightcol")
         }
+        rightColDiv = rightCol
         detailPanel.style["flex"]       = "1"
         detailPanel.style["height"]     = "auto"
         detailPanel.style["min-height"] = "0"
         rightCol.add(detailPanel)
 
-        body.add(buildSidebar(), resultsPane, rightCol)
+        val sidebar = buildSidebar()
+
+        // ── Colonne gauche unifiée : sidebar + Judge, avec UN seul handle ─────
+        val leftWrapper = Div().apply {
+            style["display"]        = "flex"
+            style["flex-direction"] = "column"
+            style["width"]          = "360px"
+            style["min-width"]      = "200px"
+            style["height"]         = "100%"
+            style["overflow"]       = "hidden"
+            style["flex-shrink"]    = "0"
+            style["position"]       = "relative"
+            element.classList.add("ner-sidebar")
+        }
+        // Retire la classe ner-sidebar du sidebar intérieur (évite double toggle mobile)
+        sidebar.element.classList.remove("ner-sidebar")
+        // Le sidebar intérieur prend tout l'espace vertical restant
+        sidebar.style["flex"]           = "1"
+        sidebar.style["width"]          = "100%"
+        sidebar.style["min-width"]      = "unset"
+        sidebar.style["height"]         = "auto"
+        sidebar.style["min-height"]     = "0"
+        sidebar.style["border-right"]   = "none"
+
+        leftWrapper.add(sidebar, judgePanel)
+        sidebarDiv = leftWrapper
+        val resizeHandleX = Div().apply {
+            element.classList.add("ner-resize-x")
+            element.setAttribute("title", "Redimensionner la colonne gauche")
+        }
+        leftWrapper.add(resizeHandleX)
+        UI.getCurrent().page.executeJs(
+            "window._nerMakeResizableX(\$0, \$1, 200, 750);",
+            resizeHandleX.element, leftWrapper.element
+        )
+        // Bordure droite sur le wrapper
+        leftWrapper.style["border-right"] = "1px solid #e2e8f0"
+
+        body.add(leftWrapper, resultsPane, rightCol)
         body.setFlexGrow(1.0, resultsPane)
         body.alignItems = FlexComponent.Alignment.STRETCH
 
         add(body)
         setFlexGrow(1.0, body)
 
-        // ── Panneau LLM Judge : bande du bas, pleine largeur, hauteur fixe ────
-        add(judgePanel)
-        // judgePanel prend toute la largeur, hauteur fixe définie dans LlmJudgePanel
 
-        // ── Alt+J : toggle LLM Judge panel (JS natif → click bouton) ─────────
+        // ── Alt+J : toggle LLM Judge panel ───────────────────────────────────
         UI.getCurrent().page.executeJs(
             "window.addEventListener('keydown', e => { if(e.altKey && e.key.toLowerCase()==='j') { e.preventDefault(); \$0.click(); } });",
             btnJudge.element
@@ -212,37 +333,65 @@ class NerDemoView(
 
     // ── Header ────────────────────────────────────────────────────────────────
     private fun buildHeader(): Div {
-        val title = Span("🔍 NER + SVO")
-        title.style["font-size"] = "1.05em"
-        title.style["font-weight"] = "700"
-        title.style["color"] = "white"
-        title.style["letter-spacing"] = "-0.01em"
+        // ── Titre principal ───────────────────────────────────────────────────
+        val title = Span(i18n.headerTitle)
+        title.style["font-size"]      = "1.0em"
+        title.style["font-weight"]    = "800"
+        title.style["color"]          = "white"
+        title.style["letter-spacing"] = "-0.02em"
 
+        // ── Badges tech ───────────────────────────────────────────────────────
+        fun techBadge(label: String, bg: String, fg: String = "white") = Span(label).also { b ->
+            b.style["background"]      = bg
+            b.style["color"]           = fg
+            b.style["font-size"]       = "0.60em"
+            b.style["font-weight"]     = "700"
+            b.style["letter-spacing"]  = "0.06em"
+            b.style["padding"]         = "2px 7px"
+            b.style["border-radius"]   = "4px"
+            b.style["vertical-align"]  = "middle"
+            b.style["white-space"]     = "nowrap"
+        }
+        val badgeNer = techBadge(i18n.headerBadgeNer, "rgba(99,102,241,.75)")
+        val badgeSvo = techBadge(i18n.headerBadgeSvo, "rgba(3,105,161,.75)")
+        val badgeLlm = techBadge(i18n.headerBadgeLlm, "rgba(124,58,237,.75)")
+
+        val titleRow = HorizontalLayout(title, badgeNer, badgeSvo, badgeLlm).also {
+            it.isPadding = false; it.isSpacing = false
+            it.alignItems = FlexComponent.Alignment.CENTER
+            it.style["gap"] = "7px"
+        }
+
+        // ── Sous-titre ────────────────────────────────────────────────────────
         val sub = Span(i18n.headerSub)
-        sub.style["color"] = "rgba(255,255,255,.60)"
-        sub.style["font-size"] = "0.78em"
-        sub.style["margin-left"] = "14px"
+        sub.style["color"]     = "rgba(255,255,255,.52)"
+        sub.style["font-size"] = "0.70em"
+        sub.style["display"]   = "block"
+        sub.style["margin-top"]= "1px"
 
+        val left = Div(titleRow, sub).also { d ->
+            d.style["display"] = "flex"; d.style["flex-direction"] = "column"
+        }
+
+        // ── Boutons header ────────────────────────────────────────────────────
         fun hBtn(label: String, action: () -> Unit) = Button(label) { action() }.also { b ->
-            b.style["background"] = "rgba(255,255,255,.12)"
-            b.style["border"] = "1px solid rgba(255,255,255,.22)"
-            b.style["color"] = "white"
+            b.style["background"]    = "rgba(255,255,255,.12)"
+            b.style["border"]        = "1px solid rgba(255,255,255,.22)"
+            b.style["color"]         = "white"
             b.style["border-radius"] = "6px"
-            b.style["font-size"] = "0.76em"
-            b.style["padding"] = "3px 9px"
-            b.style["cursor"] = "pointer"
-            b.style["height"] = "28px"
+            b.style["font-size"]     = "0.76em"
+            b.style["padding"]       = "3px 9px"
+            b.style["cursor"]        = "pointer"
+            b.style["height"]        = "28px"
         }
 
         val actions = HorizontalLayout(
+            hBtn("☰") { sidebarDiv?.element?.executeJs("this.classList.toggle('ner-open')") },
             hBtn(i18n.btnImportConfig) { showImportConfigDialog() },
             hBtn(i18n.btnExportConfig) { exportConfig() },
             hBtn("🌙") { toggleDark() },
         ).also { it.isPadding = false; it.isSpacing = true; it.alignItems = FlexComponent.Alignment.CENTER }
 
-        val left = HorizontalLayout(title, sub).also {
-            it.isPadding = false; it.isSpacing = false; it.alignItems = FlexComponent.Alignment.BASELINE
-        }
         val row = HorizontalLayout(left, actions).also {
             it.setWidthFull(); it.isPadding = false
             it.alignItems = FlexComponent.Alignment.CENTER
@@ -250,9 +399,9 @@ class NerDemoView(
         }
         return Div(row).also { d ->
             d.setWidthFull()
-            d.style["background"] = "linear-gradient(135deg,#1e3a5f,#1d4ed8 60%,#6366f1)"
-            d.style["padding"] = "10px 20px"
-            d.style["box-sizing"] = "border-box"
+            d.style["background"]  = "linear-gradient(135deg,#1e3a5f,#1d4ed8 60%,#6366f1)"
+            d.style["padding"]     = "10px 20px"
+            d.style["box-sizing"]  = "border-box"
             d.style["flex-shrink"] = "0"
         }
     }
@@ -294,11 +443,10 @@ class NerDemoView(
         progressBar.setWidthFull()
 
         val sidebar = Div()
-        sidebar.style["width"] = "320px"
-        sidebar.style["min-width"] = "320px"
-        sidebar.style["height"] = "100%"
+        sidebar.style["width"] = "100%"
+        sidebar.style["min-width"] = "unset"
+        sidebar.style["height"] = "auto"
         sidebar.style["overflow-y"] = "auto"
-        sidebar.style["border-right"] = "1px solid #e2e8f0"
         sidebar.style["background"] = "#ffffff"
         sidebar.style["padding"] = "16px"
         sidebar.style["box-sizing"] = "border-box"
@@ -306,8 +454,113 @@ class NerDemoView(
         sidebar.style["flex-direction"] = "column"
         sidebar.style["gap"] = "10px"
         sidebar.style["flex-shrink"] = "0"
-        sidebar.add(inputLabel, inputArea, btnRow, progressBar, buildParamsAccordion())
+        sidebar.style["position"] = "relative"
+
+        sidebar.add(buildOnboardingCard(), inputLabel, inputArea, btnRow, progressBar, buildParamsAccordion())
         return sidebar
+    }
+
+    // ── Onboarding card ───────────────────────────────────────────────────────
+    private fun buildOnboardingCard(): Div {
+        val examples = listOf(
+            "🏛 Politique" to "Emmanuel Macron a rencontré Angela Merkel à Berlin le 12 mars 2024 pour discuter du budget de l'Union européenne.",
+            "🏢 Économie"  to "Apple a annoncé l'acquisition de la startup française Mistral AI pour 500 millions d'euros lors du salon VivaTech à Paris.",
+            "⚽ Sport"     to "Le Paris Saint-Germain a battu l'Olympique de Marseille 3 à 1 lors du Classique disputé au Parc des Princes dimanche soir.",
+        )
+
+        val card = Div()
+        card.style["background"]     = "#eff6ff"
+        card.style["border"]         = "1px solid #bfdbfe"
+        card.style["border-radius"]  = "10px"
+        card.style["padding"]        = "14px"
+        card.style["font-size"]      = "0.83em"
+        card.style["color"]          = "#1e3a5f"
+        card.style["flex-shrink"]    = "0"
+
+        val titleRow = HorizontalLayout()
+        titleRow.isPadding = false; titleRow.isSpacing = false
+        titleRow.style["align-items"] = "center"
+        titleRow.setWidthFull()
+
+        val title = Span("💡 Comment utiliser cette démo")
+        title.style["font-weight"] = "700"
+        title.style["font-size"]   = "0.95em"
+
+        val btnDismiss = Button("✕") {
+            card.isVisible = false
+            UI.getCurrent().page.executeJs("localStorage.setItem('ner-onboarding-dismissed','1')")
+        }.also { b ->
+            b.style["background"]  = "none"
+            b.style["border"]      = "none"
+            b.style["color"]       = "#64748b"
+            b.style["cursor"]      = "pointer"
+            b.style["padding"]     = "0 4px"
+            b.style["min-width"]   = "unset"
+            b.style["font-size"]   = "0.85em"
+        }
+
+        titleRow.add(title)
+        titleRow.setFlexGrow(1.0, title)
+        titleRow.add(btnDismiss)
+
+        val desc = Div(Span("Choisissez un exemple ci-dessous ou collez votre texte, puis cliquez sur Analyser. " +
+            "Chaque mot coloré est une entité détectée — cliquez dessus pour voir ses détails dans le panneau de droite."))
+        desc.style["color"]         = "#475569"
+        desc.style["margin"]        = "8px 0 10px 0"
+        desc.style["line-height"]   = "1.5"
+        desc.style["font-size"]     = "0.90em"
+
+        val legendHelp = Div()
+        legendHelp.style["font-size"]  = "0.82em"
+        legendHelp.style["color"]      = "#475569"
+        legendHelp.style["margin-bottom"] = "10px"
+        legendHelp.style["line-height"] = "1.6"
+        legendHelp.add(Html("""<span>
+            <b>Fond coloré</b> = entité nommée (qui/quoi/où/quand…)<br/>
+            <b>Soulignement</b> = rôle syntaxique (<span style="color:#15803d">sujet</span>,
+            <span style="color:#0369a1">verbe</span>,
+            <span style="color:#9d174d">objet</span>)<br/>
+            Passez la souris ou cliquez pour les détails.
+        </span>"""))
+
+        val examplesDiv = Div()
+        examplesDiv.style["display"]        = "flex"
+        examplesDiv.style["flex-direction"] = "column"
+        examplesDiv.style["gap"]            = "5px"
+
+        for ((label, text) in examples) {
+            val btn = Div()
+            btn.style["background"]    = "white"
+            btn.style["border"]        = "1px solid #bfdbfe"
+            btn.style["border-radius"] = "7px"
+            btn.style["padding"]       = "8px 10px"
+            btn.style["cursor"]        = "pointer"
+            val lbl = Span(label)
+            lbl.style["font-weight"]  = "700"
+            lbl.style["margin-right"] = "6px"
+            lbl.style["font-size"]    = "0.88em"
+            val preview = Span(text.take(65) + "…")
+            preview.style["color"]     = "#475569"
+            preview.style["font-size"] = "0.84em"
+            btn.add(lbl, preview)
+            btn.addClickListener {
+                inputArea.value = text
+                saveWidgetsToConfig()
+                launchStream(text)
+                card.isVisible = false
+                UI.getCurrent().page.executeJs("localStorage.setItem('ner-onboarding-dismissed','1')")
+            }
+            examplesDiv.add(btn)
+        }
+
+        card.add(titleRow, desc, legendHelp, examplesDiv)
+
+        // Masquer si déjà ignoré
+        UI.getCurrent().page.executeJs(
+            "if(localStorage.getItem('ner-onboarding-dismissed')==='1') \$0.setAttribute('hidden','');",
+            card.element
+        )
+        return card
     }
 
     // ── Results pane ──────────────────────────────────────────────────────────
@@ -352,23 +605,106 @@ class NerDemoView(
     }
 
     // ── Params accordion ──────────────────────────────────────────────────────
+
+    /** Mini-titre de section dans l'accordéon. */
+    private fun tabSection(text: String) = Div(Span(text)).also { d ->
+        d.style["font-size"]      = "0.67em"
+        d.style["font-weight"]    = "700"
+        d.style["letter-spacing"] = "0.09em"
+        d.style["color"]          = "#94a3b8"
+        d.style["text-transform"] = "uppercase"
+        d.style["padding"]        = "10px 0 5px 0"
+    }
+
+    /**
+     * Bouton toggle générique : clique pour cocher/décocher le [cb] backing.
+     * [activeColor]/[activeBg] définissent la teinte quand actif.
+     */
+    private fun buildToggleBtn(
+        label: String, cb: Checkbox,
+        activeColor: String = "#1d4ed8", activeBg: String = "#eff6ff",
+    ): Div {
+        val chip = Div(Span(label))
+        fun sync(active: Boolean) {
+            chip.style["background"]  = if (active) activeBg else "#f8fafc"
+            chip.style["color"]       = if (active) activeColor else "#94a3b8"
+            chip.style["border"]      = "2px solid ${if (active) activeColor + "88" else "#e2e8f0"}"
+            chip.style["font-weight"] = if (active) "700" else "500"
+        }
+        chip.style["padding"]      = "5px 13px"
+        chip.style["border-radius"]= "8px"
+        chip.style["cursor"]       = "pointer"
+        chip.style["font-size"]    = "0.80em"
+        chip.style["transition"]   = "all .12s"
+        chip.style["user-select"]  = "none"
+        sync(cb.value)
+        cb.addValueChangeListener { sync(it.value) }
+        chip.addClickListener { cb.value = !cb.value }
+        return chip
+    }
+
+    /**
+     * Chip coloré pour une catégorie NER : clique = toggle du [cb] backing.
+     * Quand actif → fond coloré + label fin visible ; inactif → grisé.
+     */
+    private fun buildCoarseChip(coarse: String, cb: Checkbox): Div {
+        val (bg, fg) = COARSE_COLORS[coarse] ?: ("#f3f4f6" to "#6b7280")
+        val chip = Div(Span(coarse))
+        fun sync(active: Boolean) {
+            chip.style["background"] = if (active) bg  else "#f1f5f9"
+            chip.style["color"]      = if (active) fg  else "#c4c8d0"
+            chip.style["border"]     = if (active) "2px solid ${fg}55" else "2px solid #e2e8f0"
+        }
+        chip.style["padding"]       = "4px 11px"
+        chip.style["border-radius"] = "6px"
+        chip.style["cursor"]        = "pointer"
+        chip.style["font-size"]     = "0.72em"
+        chip.style["font-weight"]   = "800"
+        chip.style["letter-spacing"]= "0.06em"
+        chip.style["transition"]    = "all .12s"
+        chip.style["user-select"]   = "none"
+        chip.element.setAttribute("title", "Labels fins pour $coarse")
+        sync(cb.value)
+        cb.addValueChangeListener { sync(it.value) }
+        chip.addClickListener { cb.value = !cb.value }
+        return chip
+    }
+
     private fun buildParamsAccordion(): Accordion {
         val accordion = Accordion()
         accordion.setWidthFull()
 
-        val tabAff = VerticalLayout().apply { isPadding = false; isSpacing = false }
-        tabAff.add(HorizontalLayout(cbShowNer, cbShowSvo, cbShowArcs, cbAutoSplit, cbReconcile).also {
-            it.isSpacing = true; it.isPadding = false; it.style["flex-wrap"] = "wrap"
-        })
-        val fineLbl = Span(i18n.fineLabelFor)
-        fineLbl.style["font-size"] = "0.73em"; fineLbl.style["color"] = "#64748b"; fineLbl.style["font-weight"] = "700"
-        tabAff.add(fineLbl)
-        tabAff.add(HorizontalLayout(*cbFineForCoarse.values.toTypedArray()).also {
-            it.isSpacing = true; it.isPadding = false; it.style["flex-wrap"] = "wrap"
-        })
+        // ── Onglet Affichage ──────────────────────────────────────────────────
+        val annotRow = Div().apply {
+            style["display"] = "flex"; style["flex-wrap"] = "wrap"; style["gap"] = "6px"
+            add(buildToggleBtn("NER",        cbShowNer,  "#1d4ed8", "#eff6ff"))
+            add(buildToggleBtn("SVO",        cbShowSvo,  "#0369a1", "#e0f2fe"))
+            add(buildToggleBtn("Arcs UD",    cbShowArcs, "#6366f1", "#eef2ff"))
+        }
+        val procRow = Div().apply {
+            style["display"] = "flex"; style["flex-wrap"] = "wrap"; style["gap"] = "6px"
+            add(buildToggleBtn("✂ Split auto",     cbAutoSplit, "#059669", "#d1fae5"))
+            add(buildToggleBtn("⚡ Réconcilier NER↔SVO", cbReconcile, "#7c3aed", "#ede9fe"))
+        }
+        val catRow = Div().apply {
+            style["display"] = "flex"; style["flex-wrap"] = "wrap"; style["gap"] = "5px"
+            ALL_COARSE.forEach { coarse -> add(buildCoarseChip(coarse, cbFineForCoarse[coarse]!!)) }
+        }
+        val catHelp = Span("Activer = affiche le label fin (ex: \"pers\") plutôt que la catégorie (\"PER\")").also {
+            it.style["font-size"] = "0.70em"; it.style["color"] = "#94a3b8"; it.style["display"] = "block"
+            it.style["margin-bottom"] = "4px"
+        }
+
+        val tabAff = VerticalLayout().apply {
+            isPadding = false; isSpacing = false; setWidthFull()
+            style["padding"] = "0 0 8px 0"
+            add(tabSection("Annotations"), annotRow)
+            add(tabSection("Traitement automatique"), procRow)
+            add(tabSection("Labels fins par catégorie"), catHelp, catRow)
+        }
 
         val tabSeuils = VerticalLayout().apply { isPadding = false; isSpacing = false }
-        tabSeuils.add(HorizontalLayout(nfTauBoundary, nfTauNone, nfTauCoarse, nfTauSvo, nfBatchSize).also {
+        tabSeuils.add(HorizontalLayout(nfTauBoundary, nfTauNone, nfTauCoarse, nfTauSvo, nfTauSvoAnchored, nfBatchSize).also {
             it.isSpacing = true; it.isPadding = false; it.style["flex-wrap"] = "wrap"
         })
 
@@ -377,9 +713,9 @@ class NerDemoView(
             it.isSpacing = true; it.isPadding = false; it.style["flex-wrap"] = "wrap"
         })
 
-        // ── Onglet seuils par type coarse ──────────────────────────────────────
-        val lbl0 = Span("0 = seuil global")
-        lbl0.style["font-size"] = "0.72em"; lbl0.style["color"] = "#64748b"
+        val lbl0 = Span("Score minimum par catégorie (0 = utiliser le seuil global)")
+        lbl0.style["font-size"] = "0.75em"; lbl0.style["color"] = "#64748b"
+        lbl0.style["display"] = "block"; lbl0.style["margin-bottom"] = "8px"
         val tabType = VerticalLayout().apply { isPadding = false; isSpacing = false }
         tabType.add(lbl0)
         tabType.add(HorizontalLayout(*ALL_COARSE.map { nfScoreByCoarse[it]!! }.toTypedArray()).also {
@@ -387,13 +723,14 @@ class NerDemoView(
         })
 
         val ts = TabSheet(); ts.setWidthFull()
-        ts.add(Tab(i18n.tabDisplay),    tabAff)
-        ts.add(Tab(i18n.tabThresholds), tabSeuils)
-        ts.add(Tab(i18n.tabReconcile),  tabRec)
-        ts.add(Tab("Seuils/type"),      tabType)
+        ts.add(Tab(i18n.tabDisplay),          tabAff)
+        ts.add(Tab("Détection (seuils)"),     tabSeuils)
+        ts.add(Tab("Réconciliation NER↔SVO"), tabRec)
+        ts.add(Tab("Seuils par catégorie"),   tabType)
 
         accordion.add(i18n.paramsTitle, ts)
-        accordion.close()
+        // Ouvert par défaut pour que les réglages soient découvrables
+        accordion.open(0)
         return accordion
     }
 
@@ -510,13 +847,28 @@ class NerDemoView(
         val entity: Entity? = null, val svo: EnrichedSvoSpan? = null,
     )
 
-    /** Dans une couche, garde les spans les plus longs sans chevauchement (longest-first greedy). */
-    private fun keepLongest(spans: List<SpanInfo>): List<SpanInfo> {
+    /**
+     * Dans une couche, garde les spans les plus longs sans chevauchement PARTIEL.
+     *
+     * [allowCompound] = true (NER) : les spans entièrement contenus dans un parent
+     *   sont conservés comme entités imbriquées (compound). Permet d'afficher
+     *   "Organisation Mondiale de la Santé" (ORG) à l'intérieur de
+     *   "secrétaire général de l'OMS" (PER_ROLE).
+     *
+     * [allowCompound] = false (SVO) : NMS strict — tout span qui chevauche OU
+     *   est contenu dans un span déjà gardé est éliminé. Évite les doublons
+     *   "Le tunnel sous la manche" / "tunnel sous la manche" en nsubj.
+     */
+    private fun keepLongest(spans: List<SpanInfo>, allowCompound: Boolean = false): List<SpanInfo> {
         val sorted = spans.sortedByDescending { it.charEnd - it.charStart }
         val kept = mutableListOf<SpanInfo>()
         for (s in sorted) {
-            if (kept.none { it.charStart < s.charEnd && it.charEnd > s.charStart })
-                kept += s
+            val overlapping = kept.filter { it.charStart < s.charEnd && it.charEnd > s.charStart }
+            when {
+                overlapping.isEmpty() -> kept += s
+                allowCompound && overlapping.all { k -> k.charStart <= s.charStart && k.charEnd >= s.charEnd } -> kept += s
+                // chevauchement partiel ou mode strict → éliminé
+            }
         }
         return kept.sortedBy { it.charStart }
     }
@@ -535,7 +887,7 @@ class NerDemoView(
                 val (bg, fg) = COARSE_COLORS[coarse] ?: ("#f3f4f6" to "#6b7280")
                 val label = if (coarse in fineSet) COMPACT_LABEL[ent.type] ?: ent.type.removePrefix("hint_") else coarse
                 SpanInfo(cs, ce, ent.text, bg, fg, label, isNer = true, entity = ent)
-            }.let { keepLongest(it) }
+            }.let { keepLongest(it, allowCompound = true) }   // compound NER : nested OK
         } else emptyList()
 
         // ── Couche SVO ─────────────────────────────────────────────────────────
@@ -543,8 +895,11 @@ class NerDemoView(
             result.svoSpans.map { svo ->
                 val (bg, fg) = SVO_COLORS[svo.role] ?: ("#e5e7eb" to "#374151")
                 val lbl = svo.role.replace("svo_", "").replace("pron_", "pron:")
-                SpanInfo(svo.charStart, svo.charEnd, svo.text, bg, fg, lbl, isNer = false, svo = svo)
-            }.let { keepLongest(it) }
+                // entity = svo.entity : le span SVO porte déjà l'entité NER fusionnée
+                // par reconcile() → le panneau détail peut afficher NER + SVO d'un seul clic.
+                SpanInfo(svo.charStart, svo.charEnd, svo.text, bg, fg, lbl, isNer = false,
+                    entity = svo.entity, svo = svo)
+            }.let { keepLongest(it, allowCompound = false) }  // SVO strict : un seul span par position
         } else emptyList()
 
         // ── Décomposition aux frontières des deux couches ──────────────────────
@@ -559,9 +914,14 @@ class NerDemoView(
             val txt = sentText.substring(s, minOf(e, sentText.length))
             if (txt.isEmpty()) continue
 
-            // Span NER/SVO qui couvre ENTIÈREMENT cet intervalle (containment)
-            val ner = nerLayer.firstOrNull { it.charStart <= s && it.charEnd >= e }
-            val svo = svoLayer.firstOrNull { it.charStart <= s && it.charEnd >= e }
+            // Span NER/SVO le plus précis (innermost) qui couvre ENTIÈREMENT cet intervalle.
+            // Pour les entités imbriquées, l'entité la plus courte (la plus spécifique)
+            // qui couvre [s,e] est préférée, ce qui permet d'afficher l'ORG nested
+            // plutôt que le PER_ROLE parent sur la sous-zone de l'ORG.
+            val ner = nerLayer.filter { it.charStart <= s && it.charEnd >= e }
+                              .minByOrNull { it.charEnd - it.charStart }
+            val svo = svoLayer.filter { it.charStart <= s && it.charEnd >= e }
+                              .minByOrNull { it.charEnd - it.charStart }
 
             if (ner == null && svo == null) { slot.add(Span(txt)); continue }
 
@@ -570,8 +930,12 @@ class NerDemoView(
             val isSvoFirst = svo != null && s == svo.charStart
             val isSvoLast  = svo != null && e == svo.charEnd
 
+            // SpanInfo unifié pour le panneau détail :
+            // - Si NER est présent : on y attache le svo éventuel → showDetail voit les deux.
+            // - Si SVO seul         : le svo.entity (de reconcile) est déjà dans info.entity → idem.
+            val detailInfo = if (ner != null) ner.copy(svo = svo?.svo) else svo!!
             slot.add(buildSegment(txt, ner, svo, isNerFirst, isNerLast, isSvoFirst, isSvoLast) {
-                if (ner != null) showDetail(ner, result.entities) else if (svo != null) showDetail(svo)
+                showDetail(detailInfo, result.entities)
             })
         }
     }
@@ -616,7 +980,15 @@ class NerDemoView(
         seg.add(textNode)
 
         // Labels : affichés uniquement à la dernière fraction du span
-        if (isNerLast && ner != null) seg.add(buildLabelBadge(ner.label.uppercase(), ner.fg, filled = true))
+        if (isNerLast && ner != null) {
+            seg.add(buildLabelBadge(ner.label.uppercase(), ner.fg, filled = true))
+            // Badge rôle syntaxique (nsubj / obj / iobj) — si la tête SVO a reconcilié ce span
+            val syntRole = ner.entity?.metadata?.get("syntacticRole") as? String
+            if (syntRole != null) {
+                val (_, roleFg) = SYNTACTIC_ROLE_COLORS[syntRole] ?: ("#f3f4f6" to "#6b7280")
+                seg.add(buildSyntaxRoleBadge(syntRole, roleFg))
+            }
+        }
         if (isSvoLast && svo != null) seg.add(buildLabelBadge(svo.label.uppercase(), svo.fg, filled = false))
 
         seg.addClickListener { onClick() }
@@ -640,11 +1012,47 @@ class NerDemoView(
         return lbl
     }
 
+    /**
+     * Badge rôle syntaxique UD (nsubj / obj / iobj) affiché en superscript coloré
+     * après le label NER, quand la tête SVO a reconcilié ce span inline.
+     */
+    private fun buildSyntaxRoleBadge(role: String, fg: String): Span {
+        val (bg, _) = SYNTACTIC_ROLE_COLORS[role] ?: ("#f3f4f6" to "#6b7280")
+        return Span(role).also { lbl ->
+            lbl.style["font-size"]      = "0.60em"
+            lbl.style["font-weight"]    = "700"
+            lbl.style["margin-left"]    = "0.22em"
+            lbl.style["color"]          = fg
+            lbl.style["background"]     = bg
+            lbl.style["border"]         = "1px solid ${fg}66"
+            lbl.style["padding"]        = "0.05em 0.25em"
+            lbl.style["border-radius"]  = "0.3em"
+            lbl.style["vertical-align"] = "middle"
+            lbl.style["letter-spacing"] = "0.04em"
+            lbl.style["white-space"]    = "nowrap"
+        }
+    }
+
     // ── Detail panel content ──────────────────────────────────────────────────
+    /**
+     * Panneau de détail unifié.
+     *
+     * La logique d'affichage dépend du contenu de [info] :
+     *  - [info.entity] non-null  → section NER complète (que [info.isNer] soit true ou false)
+     *  - [info.svo] non-null     → section SVO annexée APRÈS la section NER
+     *                              (ou seule si entity == null : span pur SVO sans entité)
+     *
+     * Ce design couvre trois cas :
+     *  1. NER pur          : entity != null, svo == null
+     *  2. Merged NER + SVO : entity != null, svo != null  (même offset ou snap)
+     *  3. SVO pur          : entity == null, svo != null  (verbe, pronom, arg sans entité)
+     */
     private fun showDetail(info: SpanInfo, allEntities: List<rag.model.Entity> = emptyList()) {
         detailPanel.removeAll()
-        if (info.isNer && info.entity != null) {
-            val ent = info.entity
+        val ent = info.entity
+
+        if (ent != null) {
+            // ── Section NER ────────────────────────────────────────────────────
             val coarse = ent.metadata["coarse"] as? String ?: "?"
             val label  = COMPACT_LABEL[ent.type] ?: ent.type.removePrefix("hint_")
             detailPanel.add(sectionTitle("🏷 ${label.uppercase()}"), detailDivider())
@@ -657,8 +1065,15 @@ class NerDemoView(
             addRow(detailPanel, "p_coarse", fmt(ent.metadata["pCoarse"]))
             addRow(detailPanel, "p_fine",   fmt(ent.metadata["pFine"]))
             addRow(detailPanel, "score",    fmt(ent.metadata["score"]))
-
-            // ── Entité imbriquée → afficher le parent ──────────────────────────
+            if (ent.metadata["svoAnchored"] == true) {
+                val badge = Span("⚡ SVO-anchored — confiance NER réduite")
+                badge.style["font-size"]   = "0.72em"
+                badge.style["color"]       = "#c2410c"
+                badge.style["font-weight"] = "600"
+                badge.style["display"]     = "block"
+                badge.style["margin-top"]  = "4px"
+                detailPanel.add(badge)
+            }
             if (ent.metadata["nested"] == true) {
                 val parentText   = ent.metadata["parentText"]   as? String ?: "?"
                 val parentFine   = ent.metadata["parentFine"]   as? String ?: "?"
@@ -671,8 +1086,6 @@ class NerDemoView(
                 addRow(detailPanel, i18n.rowFine,   parentFine)
                 addRow(detailPanel, i18n.rowChars,  "[$parentStart:$parentEnd]")
             }
-
-            // ── Cherche les enfants imbriqués dans cette entité ────────────────
             val children = allEntities.filter { child ->
                 child.metadata["nested"] == true &&
                 child.metadata["parentStart"] == ent.span?.start &&
@@ -682,14 +1095,40 @@ class NerDemoView(
                 detailPanel.add(sectionHeader("🔽 IMBRIQUÉS (${children.size})"))
                 children.forEach { child ->
                     val childLabel = COMPACT_LABEL[child.type] ?: child.type.removePrefix("hint_")
-                    addRow(
-                        detailPanel,
-                        childLabel.uppercase(),
-                        "\"${child.text}\"  [${child.span?.start}:${child.span?.end}]  ${fmt(child.metadata["score"])}"
-                    )
+                    addRow(detailPanel, childLabel.uppercase(),
+                        "\"${child.text}\"  [${child.span?.start}:${child.span?.end}]  ${fmt(child.metadata["score"])}")
                 }
             }
-        } else if (!info.isNer && info.svo != null) {
+            // Rôle syntaxique depuis metadata (inline forward pass) — affiché si pas de SVO annexé
+            // (si svo != null il sera affiché plus bas avec les métriques complètes)
+            if (info.svo == null) {
+                val syntRole = ent.metadata["syntacticRole"] as? String
+                if (syntRole != null) {
+                    val (roleBg, roleFg) = SYNTACTIC_ROLE_COLORS[syntRole] ?: ("#f3f4f6" to "#6b7280")
+                    val roleTitle = Span("🔗 RÔLE SVO — $syntRole")
+                    roleTitle.style["font-size"] = "0.80em"; roleTitle.style["font-weight"] = "700"
+                    roleTitle.style["color"] = roleFg; roleTitle.style["background"] = roleBg
+                    roleTitle.style["padding"] = "2px 8px"; roleTitle.style["border-radius"] = "4px"
+                    roleTitle.style["display"] = "inline-block"; roleTitle.style["margin-top"] = "10px"
+                    detailPanel.add(roleTitle)
+                    addRow(detailPanel, "svo_role",  ent.metadata["svoRole"] as? String ?: "—")
+                    addRow(detailPanel, "p_role",    fmt(ent.metadata["svoRoleProb"]))
+                    addRow(detailPanel, "p_svo_bnd", fmt(ent.metadata["svoBoundaryScore"]))
+                }
+            }
+            val gender = ent.metadata["gender"] as? String
+            val number = ent.metadata["number"] as? String
+            if (gender != null || number != null) {
+                detailPanel.add(sectionHeader("🔤 MORPHOLOGIE"))
+                gender?.let { addRow(detailPanel, "genre",  it) }
+                number?.let { addRow(detailPanel, "nombre", it) }
+            }
+
+            // ── Section SVO annexée (cas merged NER+SVO) ───────────────────────
+            info.svo?.let { appendSvoSection(it) }
+
+        } else if (info.svo != null) {
+            // ── Section SVO pur (verbe, pronom, argument sans entité NER) ───────
             val svo = info.svo; val emoji = SVO_EMOJI[svo.role] ?: "⚪"
             detailPanel.add(sectionTitle("$emoji ${svo.role}"), detailDivider())
             addRow(detailPanel, i18n.rowText,   svo.text)
@@ -705,6 +1144,33 @@ class NerDemoView(
             svo.gender?.let { addRow(detailPanel, i18n.rowGender, it) }
             svo.number?.let { addRow(detailPanel, i18n.rowNumber, it) }
         }
+    }
+
+    /**
+     * Section SVO annexée en bas du panneau NER (cas merged).
+     * Affiche les métriques de la tête SVO : boundary, rôle, voice.
+     * Le rôle syntaxique est mis en avant visuellement (header coloré).
+     */
+    private fun appendSvoSection(svo: EnrichedSvoSpan) {
+        val emoji  = SVO_EMOJI[svo.role] ?: "⚪"
+        val (svoBg, svoFg) = SVO_COLORS[svo.role] ?: ("#e5e7eb" to "#374151")
+        val hdr = Span("$emoji SVO — ${svo.role}")
+        hdr.style["font-size"]     = "0.80em"
+        hdr.style["font-weight"]   = "700"
+        hdr.style["color"]         = svoFg
+        hdr.style["background"]    = svoBg
+        hdr.style["padding"]       = "2px 8px"
+        hdr.style["border-radius"] = "4px"
+        hdr.style["display"]       = "inline-block"
+        hdr.style["margin-top"]    = "10px"
+        detailPanel.add(hdr)
+        addRow(detailPanel, "p_svo_bnd", "%.3f".format(svo.svoBoundaryProb))
+        addRow(detailPanel, "p_role",    "%.3f".format(svo.roleProb))
+        addRow(detailPanel, "voice",     "${svo.voice} (${"%.2f".format(svo.voiceProb)})")
+        svo.nerOverride?.let { addRow(detailPanel, "🔗 override", "$it (${fmt(svo.nerOverrideScore)})") }
+        svo.gender?.let { addRow(detailPanel, i18n.rowGender, it) }
+        svo.number?.let { addRow(detailPanel, i18n.rowNumber, it) }
+        if (svo.fromNer) addRow(detailPanel, i18n.rowSource, i18n.syntheticNer)
     }
 
     // ── Export / Import ───────────────────────────────────────────────────────
@@ -750,6 +1216,11 @@ class NerDemoView(
                     "text" to e.text, "coarse" to e.metadata["coarse"],
                     "fine" to e.type, "char_start" to e.span?.start, "char_end" to e.span?.end,
                     "score" to e.metadata["score"],
+                    "syntactic_role" to e.metadata["syntacticRole"],
+                    "svo_role"       to e.metadata["svoRole"],
+                    "svo_role_prob"  to e.metadata["svoRoleProb"],
+                    "gender"         to e.metadata["gender"],
+                    "number"         to e.metadata["number"],
                 )},
                 "svo"  to r.svoSpans.map { s -> mapOf(
                     "text" to s.text, "role" to s.role,
@@ -767,11 +1238,12 @@ class NerDemoView(
     // ── Config sync ───────────────────────────────────────────────────────────
     private fun saveWidgetsToConfig() {
         nerService.updateConfig(DemoConfig(
-            tauBoundary          = nfTauBoundary.value?.toFloat()   ?: 0.70f,
-            tauNone              = nfTauNone.value?.toFloat()        ?: 0.99f,
-            tauCoarse            = nfTauCoarse.value?.toFloat()      ?: 0.45f,
-            tauSvoBoundary       = nfTauSvo.value?.toFloat()         ?: 0.50f,
-            batchSize            = nfBatchSize.value?.toInt()        ?: 8,
+            tauBoundary             = nfTauBoundary.value?.toFloat()    ?: 0.70f,
+            tauNone                 = nfTauNone.value?.toFloat()         ?: 0.99f,
+            tauCoarse               = nfTauCoarse.value?.toFloat()       ?: 0.45f,
+            tauSvoBoundary          = nfTauSvo.value?.toFloat()          ?: 0.50f,
+            tauSvoAnchoredBoundary  = nfTauSvoAnchored.value?.toFloat()  ?: 0.40f,
+            batchSize               = nfBatchSize.value?.toInt()         ?: 8,
             showNer              = cbShowNer.value,
             showSvo              = cbShowSvo.value,
             showArcs             = cbShowArcs.value,
@@ -788,11 +1260,12 @@ class NerDemoView(
     }
 
     private fun loadConfigToWidgets(cfg: DemoConfig) {
-        nfTauBoundary.value = cfg.tauBoundary.toDouble()
-        nfTauNone.value     = cfg.tauNone.toDouble()
-        nfTauCoarse.value   = cfg.tauCoarse.toDouble()
-        nfTauSvo.value      = cfg.tauSvoBoundary.toDouble()
-        nfBatchSize.value   = cfg.batchSize.toDouble()
+        nfTauBoundary.value  = cfg.tauBoundary.toDouble()
+        nfTauNone.value      = cfg.tauNone.toDouble()
+        nfTauCoarse.value    = cfg.tauCoarse.toDouble()
+        nfTauSvo.value       = cfg.tauSvoBoundary.toDouble()
+        nfTauSvoAnchored.value = cfg.tauSvoAnchoredBoundary.toDouble()
+        nfBatchSize.value    = cfg.batchSize.toDouble()
         cbShowNer.value     = cfg.showNer
         cbShowSvo.value     = cfg.showSvo
         cbShowArcs.value    = cfg.showArcs
@@ -850,11 +1323,14 @@ class NerDemoView(
         else      -> v.toString()
     }
 
-    private fun nf(label: String, min: Double, max: Double, default: Double, step: Double = 0.05) =
-        NumberField(label).also { f ->
-            f.min = min; f.max = max; f.value = default; f.step = step
-            f.style["width"] = "108px"
-        }
+    private fun nf(
+        label: String, min: Double, max: Double, default: Double,
+        step: Double = 0.05, helper: String? = null,
+    ) = NumberField(label).also { f ->
+        f.min = min; f.max = max; f.value = default; f.step = step
+        f.style["width"] = "108px"
+        if (helper != null) f.helperText = helper
+    }
 
     private fun toggleDark() {
         UI.getCurrent().page.executeJs("""
