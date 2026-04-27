@@ -220,6 +220,20 @@ data class SvoSpan(
 )
 
 /**
+ * Entité NER enrichie de son rôle syntaxique reconcilié depuis la tête SVO.
+ *
+ * [syntacticRole] : "nsubj" (sujet), "obj" (objet direct), "iobj" (objet indirect) ou null.
+ * [svoSpan]       : le SvoSpan source du role, pour accéder aux features morpho (gender, number, voice…).
+ * [overlapRatio]  : fraction de l'entité couverte par le SvoSpan (0..1).
+ */
+data class EntityWithRole(
+    val entity: Entity,
+    val syntacticRole: String?,
+    val svoSpan: SvoSpan?,
+    val overlapRatio: Float,
+)
+
+/**
  * Résultat complet pour un texte : entités NER + spans SVO.
  */
 data class ExtractionResult(
@@ -235,6 +249,60 @@ data class ExtractionResult(
             val subj = subjects.filter { it.charEnd  <= v.charStart }.maxByOrNull { it.charStart }
             val obj  = objects .filter { it.charStart >= v.charEnd   }.minByOrNull { it.charStart }
             SvoTriplet(subject = subj, verb = v, obj = obj)
+        }
+    }
+
+    /**
+     * Réconciliation nsubj / obj / iobj pour chaque entité NER.
+     *
+     * Pour chaque entité, cherche le SvoSpan argumental (svo_subject, svo_object,
+     * svo_iobj, pron_subj, pron_obj) qui maximise le taux de recouvrement avec l'entité.
+     * Le rôle SVO est normalisé en rôle syntaxique universel :
+     *   svo_subject / pron_subj → "nsubj"
+     *   svo_object  / pron_obj  → "obj"
+     *   svo_iobj                → "iobj"
+     *
+     * Ce croisement est complémentaire de l'enrichissement inline (métadonnée "svoRole"
+     * stockée dans l'entité quand la tête SVO a tiré sur le même candidat span) :
+     * il peut réconcilier des entités dont les bornes diffèrent légèrement du SvoSpan.
+     */
+    fun reconcileSvoRoles(): List<EntityWithRole> {
+        val argumentRoles = setOf("svo_subject", "svo_object", "svo_iobj", "pron_subj", "pron_obj")
+
+        fun toSyntactic(role: String): String? = when (role) {
+            "svo_subject", "pron_subj" -> "nsubj"
+            "svo_object",  "pron_obj"  -> "obj"
+            "svo_iobj"                 -> "iobj"
+            else                       -> null
+        }
+
+        return entities.map { entity ->
+            val eStart    = entity.span.start
+            val eEnd      = entity.span.end
+            if (eStart < 0 || eEnd <= eStart)
+                return@map EntityWithRole(entity, null, null, 0f)
+
+            val entityLen = (eEnd - eStart).coerceAtLeast(1)
+
+            // Score = roleProb × overlapRatio → favorise les spans précis ET confiants
+            val best = svoSpans
+                .filter { it.role in argumentRoles }
+                .mapNotNull { svo ->
+                    val overlap = minOf(svo.charEnd, eEnd) - maxOf(svo.charStart, eStart)
+                    if (overlap <= 0) null
+                    else {
+                        val ratio = overlap.toFloat() / entityLen
+                        Triple(svo, ratio, svo.roleProb * ratio)
+                    }
+                }
+                .maxByOrNull { it.third }
+
+            EntityWithRole(
+                entity        = entity,
+                syntacticRole = best?.let { toSyntactic(it.first.role) },
+                svoSpan       = best?.first,
+                overlapRatio  = best?.second ?: 0f,
+            )
         }
     }
 }
@@ -254,6 +322,13 @@ data class ExtractionThresholds(
     val tauNone: Float? = null,
     val tauCoarse: Float? = null,
     val tauSvoBoundary: Float? = null,
+    /**
+     * Seuil NER boundary abaissé appliqué uniquement aux spans que la tête SVO a identifiés
+     * comme arguments non-pronominaux (svo_subject, svo_object, svo_iobj).
+     * Permet de typer des entités borderline que NER n'aurait pas retenues seul.
+     * null → repli sur la valeur de construction de l'extracteur (défaut 0.40).
+     */
+    val tauSvoAnchoredBoundary: Float? = null,
     /** Score minimum (pBnd × pCoarse × pFine) par label coarse. Si absent → minScore global. */
     val scoreByCoarse: Map<String, Float> = emptyMap(),
 )
@@ -277,6 +352,26 @@ private data class SpanResult(
     val fine: String,
     val pFine: Float,
     val score: Float,
+    /**
+     * Rôle SVO détecté sur ce même span via la tête SVO (mêmes logits, même forward pass).
+     * svo_subject | svo_object | svo_iobj | pron_subj | pron_obj — jamais svo_verb.
+     * Null si la tête SVO ne détecte pas de boundary sur ce span.
+     */
+    val svoRole: String? = null,
+    val svoRoleProb: Float? = null,
+    val svoBoundaryScore: Float? = null,
+    /**
+     * Genre et nombre morphologiques lus depuis les têtes gender/number (mêmes logits).
+     * Disponibles indépendamment du SVO boundary — features morphologiques de l'entité.
+     */
+    val svoGender: String? = null,
+    val svoNumber: String? = null,
+    /**
+     * true si cette entité a été promue par la tête SVO (boundary NER sous le seuil normal
+     * mais au-dessus du seuil abaissé tauSvoAnchoredBoundary) sur un span argumental
+     * non-pronominal. Les entités svoAnchored sont moins certaines côté NER.
+     */
+    val svoAnchored: Boolean = false,
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -303,6 +398,12 @@ class OnnxMultiHeadEntityExtractor(
     private val tauCoarse: Float = DEFAULT_TAU_COARSE,
     private val minScore: Float = DEFAULT_MIN_SCORE,
     private val tauSvoBoundary: Float = 0.50f,
+    /**
+     * Seuil NER boundary abaissé réservé aux spans que la tête SVO a classés comme
+     * arguments non-pronominaux (svo_subject, svo_object, svo_iobj).
+     * Défaut 0.40 : en-dessous du seuil normal (0.70) mais au-dessus du bruit.
+     */
+    private val tauSvoAnchoredBoundary: Float = 0.40f,
     private val useCoreMl: Boolean = false,
     /**
      * Nombre de threads intra-op (parallélisme au sein d'un seul opérateur).
@@ -412,11 +513,12 @@ class OnnxMultiHeadEntityExtractor(
         texts: List<String>,
         overrides: ExtractionThresholds? = null,
     ): List<ExtractionResult> {
-        val effTauBoundary    = overrides?.tauBoundary    ?: tauBoundary
-        val effTauNone        = overrides?.tauNone        ?: tauNone
-        val effTauCoarse      = overrides?.tauCoarse      ?: tauCoarse
-        val effTauSvoBoundary = overrides?.tauSvoBoundary ?: tauSvoBoundary
-        val effScoreByCoarse  = overrides?.scoreByCoarse  ?: emptyMap()
+        val effTauBoundary         = overrides?.tauBoundary            ?: tauBoundary
+        val effTauNone             = overrides?.tauNone               ?: tauNone
+        val effTauCoarse           = overrides?.tauCoarse             ?: tauCoarse
+        val effTauSvoBoundary      = overrides?.tauSvoBoundary        ?: tauSvoBoundary
+        val effTauSvoAnchored      = overrides?.tauSvoAnchoredBoundary ?: tauSvoAnchoredBoundary
+        val effScoreByCoarse       = overrides?.scoreByCoarse         ?: emptyMap()
         if (texts.isEmpty()) return emptyList()
         val t0 = System.nanoTime()
 
@@ -580,6 +682,52 @@ class OnnxMultiHeadEntityExtractor(
                         val fLogits = tlBufFineRow.get()
                         loadRow(onnxOut.fineFlat, k * nFine, fLogits)
                         val topResults = bestCoarseFine(cProbs, fLogits, effTauCoarse)
+
+                        // ── SVO enrichment inline ──────────────────────────────────────────
+                        // Pour ce même candidat NER (même k, même forward pass), on lit les
+                        // logits SVO et on récupère le rôle argumental si la tête SVO tire.
+                        // On exclut svo_verb : une entité NER verb serait sémantiquement incohérent.
+                        // Genre et nombre sont lus indépendamment du boundary SVO :
+                        // ce sont des features morphologiques valables pour toute entité.
+                        var nerSvoRole:    String? = null
+                        var nerSvoRoleProb: Float? = null
+                        var nerSvoBndScore: Float? = null
+                        var nerGender:     String? = null
+                        var nerNumber:     String? = null
+                        if (topResults.isNotEmpty()) {
+                            // ── Genre (toujours lu si la tête est disponible) ──────────────
+                            nerGender = onnxOut.genderFlat?.let {
+                                val p = tlBufGender.get()
+                                loadRow(it, k * nGender, p); softmaxInto(p, p)
+                                var gi = 0; for (j in 1 until nGender) if (p[j] > p[gi]) gi = j
+                                GENDER_LABELS.getOrElse(gi) { "NONE" }.takeUnless { s -> s == "NONE" }
+                            }
+                            // ── Nombre (toujours lu si la tête est disponible) ─────────────
+                            nerNumber = onnxOut.numberFlat?.let {
+                                val p = tlBufNumber.get()
+                                loadRow(it, k * nNumber, p); softmaxInto(p, p)
+                                var ni = 0; for (j in 1 until nNumber) if (p[j] > p[ni]) ni = j
+                                NUMBER_LABELS.getOrElse(ni) { "NONE" }.takeUnless { s -> s == "NONE" }
+                            }
+                            // ── Rôle SVO (uniquement si boundary SVO suffisant) ─────────────
+                            val svoBndLocal = onnxOut.svoBndFlat
+                            if (svoBndLocal != null && onnxOut.svoFlat != null) {
+                                val pSvo = softmaxProbFlat(svoBndLocal, k * 2, 2, 1)
+                                if (pSvo >= effTauSvoBoundary) {
+                                    val p = tlBufSvo.get()
+                                    loadRow(onnxOut.svoFlat, k * nSvo, p); softmaxInto(p, p)
+                                    var ri = 0
+                                    for (j in 1 until nSvo) if (p[j] > p[ri]) ri = j
+                                    val name = SVO_LABELS.getOrElse(ri) { "svo_verb" }
+                                    if (name != "svo_verb") {
+                                        nerSvoRole     = name
+                                        nerSvoRoleProb = p[ri]
+                                        nerSvoBndScore = pSvo
+                                    }
+                                }
+                            }
+                        }
+
                         for (result in topResults) {
                             val tokLen     = cand.tokEnd - cand.tokStart + 1
                             val maxTok     = MAX_TOK_LEN[result.fine]
@@ -595,6 +743,11 @@ class OnnxMultiHeadEntityExtractor(
                                     fine      = result.fine,
                                     pFine     = result.pFine,
                                     score     = score,
+                                    svoRole          = nerSvoRole,
+                                    svoRoleProb      = nerSvoRoleProb,
+                                    svoBoundaryScore = nerSvoBndScore,
+                                    svoGender        = nerGender,
+                                    svoNumber        = nerNumber,
                                 )
                             }
                         }
@@ -647,6 +800,51 @@ class OnnxMultiHeadEntityExtractor(
                             gender          = gender,
                             number          = number,
                         )
+
+                        // ── SVO-anchored NER ──────────────────────────────────────────
+                        // Si le span est un argument non-pronominal (nsubj/obj/iobj) ET que
+                        // NER boundary n'a pas tiré au seuil normal mais dépasse le seuil
+                        // abaissé → on score quand même la tête NER pour obtenir un type.
+                        // Ces entités sont taguées svoAnchored=true (confiance NER réduite).
+                        val isNonPronounArg = roleName in setOf("svo_subject", "svo_object", "svo_iobj")
+                        if (isNonPronounArg
+                            && pBoundary >= effTauSvoAnchored
+                            && pBoundary < effTauBoundary
+                        ) {
+                            val cProbs = tlBufCoarse.get()
+                            loadRow(onnxOut.coarseFlat, k * nCoarse, cProbs)
+                            softmaxInto(cProbs, cProbs)
+                            if (cProbs[COARSE_NONE_IDX] < effTauNone) {
+                                val fLogits = tlBufFineRow.get()
+                                loadRow(onnxOut.fineFlat, k * nFine, fLogits)
+                                val topResults = bestCoarseFine(cProbs, fLogits, effTauCoarse)
+                                for (result in topResults) {
+                                    val tokLen      = cand.tokEnd - cand.tokStart + 1
+                                    val maxTok      = MAX_TOK_LEN[result.fine]
+                                    // Seuil fine légèrement assoupli (×0.85) en mode anchored
+                                    val fineThresh  = FINE_THRESHOLDS.getOrDefault(result.fine, DEFAULT_FINE_THRESHOLD) * 0.85f
+                                    val score       = pBoundary * result.pCoarse * result.pFine
+                                    val minScoreEff = (effScoreByCoarse[result.coarse] ?: minScore) * 0.60f
+                                    if ((maxTok == null || tokLen <= maxTok) && result.pFine >= fineThresh && score >= minScoreEff) {
+                                        rawByLocal[cand.exampleIdx] += SpanResult(
+                                            candidate        = cand,
+                                            pBoundary        = pBoundary,
+                                            coarse           = result.coarse,
+                                            pCoarse          = result.pCoarse,
+                                            fine             = result.fine,
+                                            pFine            = result.pFine,
+                                            score            = score,
+                                            svoRole          = roleName,
+                                            svoRoleProb      = roleProb,
+                                            svoBoundaryScore = pSvoB,
+                                            svoGender        = gender,
+                                            svoNumber        = number,
+                                            svoAnchored      = true,
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -956,6 +1154,26 @@ class OnnxMultiHeadEntityExtractor(
             put("pCoarse",   r.span.pCoarse)
             put("pFine",     r.span.pFine)
             put("score",     r.span.score)
+            // ── Rôle SVO inline (même candidat span, même forward pass) ──────────
+            // svoRole        : svo_subject | svo_object | svo_iobj | pron_subj | pron_obj
+            // syntacticRole  : "nsubj" | "obj" | "iobj" (normalisation UD)
+            if (r.span.svoRole != null) {
+                val syntactic = when (r.span.svoRole) {
+                    "svo_subject", "pron_subj" -> "nsubj"
+                    "svo_object",  "pron_obj"  -> "obj"
+                    "svo_iobj"                 -> "iobj"
+                    else                       -> null
+                }
+                put("svoRole",         r.span.svoRole)
+                put("svoRoleProb",     r.span.svoRoleProb)
+                put("svoBoundaryScore",r.span.svoBoundaryScore)
+                if (syntactic != null) put("syntacticRole", syntactic)
+            }
+            // ── Morphologie (genre / nombre) — lus indépendamment du rôle SVO ───
+            r.span.svoGender?.let { put("gender", it) }
+            r.span.svoNumber?.let { put("number", it) }
+            // ── Entité promue par SVO (boundary NER sous seuil normal) ────────────
+            if (r.span.svoAnchored) put("svoAnchored", true)
             if (r.isNested) {
                 put("nested",       true)
                 put("parentText",   r.parent!!.candidate.spanText)

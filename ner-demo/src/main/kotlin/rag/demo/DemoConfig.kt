@@ -7,10 +7,13 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 data class DemoConfig(
 
     // ── Seuils d'inférence NER ──────────────────────────────────────────────
-    val tauBoundary:    Float = 0.70f,
-    val tauNone:        Float = 0.99f,
-    val tauCoarse:      Float = 0.45f,
-    val tauSvoBoundary: Float = 0.50f,
+    val tauBoundary:           Float = 0.70f,
+    val tauNone:               Float = 0.99f,
+    val tauCoarse:             Float = 0.45f,
+    val tauSvoBoundary:        Float = 0.50f,
+    /** Seuil NER boundary abaissé pour les spans nsubj/obj/iobj non-pronominaux
+     *  détectés par la tête SVO mais sous le seuil NER normal. */
+    val tauSvoAnchoredBoundary: Float = 0.40f,
 
     // ── Batch + modèle ──────────────────────────────────────────────────────
     val batchSize: Int = 8,

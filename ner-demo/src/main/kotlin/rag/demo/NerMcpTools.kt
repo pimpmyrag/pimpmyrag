@@ -25,7 +25,7 @@ import kotlin.math.roundToInt
  *     • tête boundary  → "ce span est-il une entité ?" (prob pBoundary)
  *     • tête coarse    → "quelle grande famille ?" (prob pCoarse, 9 classes + NONE)
  *     • tête fine      → "quel label parmi 32 ?" (prob pFine)
- *     • têtes SVO      → rôle syntaxique / voix / genre / nombre (hors scope ici)
+ *     • têtes SVO      → rôle syntaxique / voix / genre / nombre  [feature preview — voir ci-dessous]
  *
  *   Il N'Y A PAS deux modèles distincts (pas de XLM-RoBERTa, pas de BILOU séparé).
  *   Les trois probabilités pBoundary / pCoarse / pFine sont produites en une seule
@@ -173,6 +173,47 @@ import kotlin.math.roundToInt
  *               contient "Nations Unies" (hint_org_name) → le sous-span est remontré.
  *   Les spans nested portent les champs additionnels :
  *     nested=true, parentText, parentFine, parentCoarse, parentStart, parentEnd
+ *
+ * ═══════════════════════════════════════════════════════════════════════
+ * FEATURE PREVIEW — TÊTES SVO (syntaxe + morphologie)
+ * ═══════════════════════════════════════════════════════════════════════
+ *
+ * Le modèle embarque trois têtes supplémentaires évaluées sur le MÊME forward pass NER,
+ * sans surcoût d'inférence. Elles sont ADDITIONNELLES et NON DESTRUCTIVES :
+ * elles n'affectent pas les entités NER, elles les enrichissent.
+ *
+ * TÊTE SVO — rôle syntaxique argumental :
+ *   Pour chaque span candidat, la tête SVO prédit:
+ *     • svo_boundary  → "ce span est-il un argument SVO?" (prob pSvoBoundary)
+ *     • svo_role      → svo_subject | svo_object | svo_iobj | svo_verb
+ *                       pron_subj | pron_obj  (pronoms)
+ *   Réconciliation NER↔SVO :
+ *     Phase 1 (inline) : si une entité NER passe aussi le seuil SVO sur le MÊME span k,
+ *       elle reçoit svoRole / syntacticRole en metadata (nsubj | obj | iobj).
+ *     Phase 2 (snap positionnel) : un span SVO brut sans entité NER est snapé sur
+ *       la meilleure entité voisine par recouvrement ≥ 60%.
+ *
+ * TÊTE SVO-ANCHORED (promotion d'entités borderline) :
+ *   Si la tête SVO détecte un argument non-pronominal (svo_subject/object/iobj)
+ *   avec pBoundary ∈ [tauSvoAnchoredBoundary, tauBoundary[, l'entité est promue
+ *   avec des seuils NER assouplis (×0.85 fine, ×0.60 score). Taguée svoAnchored=true.
+ *   → Utile pour récupérer des entités "borderline" que NER n'aurait pas gardées seul.
+ *
+ * TÊTES MORPHO — genre / nombre :
+ *   Lus sur TOUTES les entités NER (indépendamment du SVO boundary) :
+ *     gender : Masc | Fem  (absent si indéterminé)
+ *     number : Sing | Plur (absent si indéterminé)
+ *
+ * COMMENT ÉVALUER LES SVO EN PREVIEW :
+ *   1. analyzeText(texte) → observer le champ "svoSpans" :
+ *        - svoRole     : le rôle argumental de chaque span
+ *        - entityText  : l'entité NER fusionnée (si reconcile() a matchée)
+ *        - p_svo_bnd   : confiance de la tête SVO boundary
+ *        - p_role      : confiance du label de rôle
+ *   2. Les entités affichent maintenant syntacticRole (nsubj|obj|iobj), gender, number.
+ *   3. tauSvoBoundary (défaut 0.50) : lever pour réduire le bruit SVO.
+ *      tauSvoAnchoredBoundary (défaut 0.40) : lever pour moins de promotions borderline.
+ *   4. La calibration NER (tauBoundary, etc.) est INDÉPENDANTE des seuils SVO.
  */
 @Component
 class NerMcpTools(private val nerService: NerService) {
@@ -213,13 +254,14 @@ class NerMcpTools(private val nerService: NerService) {
     fun getConfig(): Map<String, Any> {
         val c = nerService.config
         return mapOf(
-            "tauBoundary"    to c.tauBoundary,
-            "tauNone"        to c.tauNone,
-            "tauCoarse"      to c.tauCoarse,
-            "tauSvoBoundary" to c.tauSvoBoundary,
-            "batchSize"      to c.batchSize,
-            "scoreByCoarse"  to c.scoreByCoarse.ifEmpty { "(none — global tauBoundary applies)" },
-            "runtime"        to nerService.runtimeInfo(),
+            "tauBoundary"            to c.tauBoundary,
+            "tauNone"                to c.tauNone,
+            "tauCoarse"              to c.tauCoarse,
+            "tauSvoBoundary"         to c.tauSvoBoundary,
+            "tauSvoAnchoredBoundary" to c.tauSvoAnchoredBoundary,
+            "batchSize"              to c.batchSize,
+            "scoreByCoarse"          to c.scoreByCoarse.ifEmpty { "(none — global tauBoundary applies)" },
+            "runtime"                to nerService.runtimeInfo(),
         )
     }
 
@@ -236,40 +278,44 @@ class NerMcpTools(private val nerService: NerService) {
           Recommended starting range: 0.40–0.65. Use scanThreshold to find the elbow.
 
         Valid names and their purpose:
-          tauBoundary  — PRIMARY lever. Controls recall/precision for ALL families.
-                         Lower first (try 0.50) before touching anything else.
-          tauNone      — Rejection gate for near-zero candidates.
-                         [DEBUG/TUNING] Only touch if you see noise that tauBoundary ignores.
-          tauCoarse    — Coarse family confidence gate (indicative, structural masking only).
-                         Coarse is selected by argmax(pCoarse) — NOT composite score.
-                         This avoids biasing toward families with few fine labels (ORG, EVENT)
-                         which would always get pFine≈1.0 after masked softmax.
-                         [DEBUG/TUNING] Tune only when pCoarse shows systematic mis-routing.
-          tauSvoBoundary — [NOT in scope — SVO not evaluated in this session]
+          tauBoundary              — PRIMARY lever. Controls recall/precision for ALL families.
+                                     Lower first (try 0.50) before touching anything else.
+          tauNone                  — Rejection gate for near-zero candidates. Rarely needs tuning.
+          tauCoarse                — Coarse family confidence gate (indicative, structural masking only).
+                                     Tune only when pCoarse shows systematic mis-routing.
+          tauSvoBoundary           — [SVO PREVIEW] Minimum pSvoBoundary to detect a syntactic argument span.
+                                     Default 0.50. Raise to reduce SVO noise (fewer but surer roles).
+                                     Does NOT affect NER entity detection.
+          tauSvoAnchoredBoundary   — [SVO PREVIEW] Relaxed NER boundary for spans where SVO is confident
+                                     but NER pBoundary is between this value and tauBoundary.
+                                     Default 0.40. Raise to reduce SVO-promoted entities (svoAnchored=true).
     """)
     fun setThreshold(
-        @ToolParam(description = "Threshold name: tauBoundary | tauNone | tauCoarse  (tauSvoBoundary is out of scope)")
+        @ToolParam(description = "Threshold name: tauBoundary | tauNone | tauCoarse | tauSvoBoundary | tauSvoAnchoredBoundary")
         name: String,
         @ToolParam(description = "New value (float, automatically clamped to valid range)")
         value: Float,
     ): Map<String, Any> {
         val c = nerService.config
         val updated = when (name) {
-            "tauBoundary"    -> c.copy(tauBoundary    = value.coerceIn(0.05f, 0.99f))
-            "tauNone"        -> c.copy(tauNone        = value.coerceIn(0.05f, 1.00f))
-            "tauCoarse"      -> c.copy(tauCoarse      = value.coerceIn(0.00f, 0.99f))
-            "tauSvoBoundary" -> c.copy(tauSvoBoundary = value.coerceIn(0.05f, 0.99f))
-            else -> return mapOf("error" to "Unknown threshold name: $name. Use tauBoundary | tauNone | tauCoarse | tauSvoBoundary")
+            "tauBoundary"            -> c.copy(tauBoundary            = value.coerceIn(0.05f, 0.99f))
+            "tauNone"                -> c.copy(tauNone                = value.coerceIn(0.05f, 1.00f))
+            "tauCoarse"              -> c.copy(tauCoarse              = value.coerceIn(0.00f, 0.99f))
+            "tauSvoBoundary"         -> c.copy(tauSvoBoundary         = value.coerceIn(0.05f, 0.99f))
+            "tauSvoAnchoredBoundary" -> c.copy(tauSvoAnchoredBoundary = value.coerceIn(0.05f, 0.99f))
+            else -> return mapOf("error" to "Unknown threshold name: $name. Use tauBoundary | tauNone | tauCoarse | tauSvoBoundary | tauSvoAnchoredBoundary")
         }
         nerService.updateConfig(updated)
+        val oldValue = when (name) {
+            "tauBoundary"            -> c.tauBoundary
+            "tauNone"                -> c.tauNone
+            "tauCoarse"              -> c.tauCoarse
+            "tauSvoBoundary"         -> c.tauSvoBoundary
+            else                     -> c.tauSvoAnchoredBoundary
+        }
         return mapOf(
-            "updated" to name,
-            "oldValue" to when (name) {
-                "tauBoundary"    -> c.tauBoundary
-                "tauNone"        -> c.tauNone
-                "tauCoarse"      -> c.tauCoarse
-                else             -> c.tauSvoBoundary
-            },
+            "updated"  to name,
+            "oldValue" to oldValue,
             "newValue" to value,
             "config"   to getConfig(),
         )
@@ -322,79 +368,100 @@ class NerMcpTools(private val nerService: NerService) {
     // ── 4. Analyser un texte ─────────────────────────────────────────────────
 
     @Tool(description = """
-        Run NER inference on a text and return all detected entities with their labels and RAW SCORES.
-        ⚠ SVO spans are returned by the API but must be IGNORED — SVO is not in scope for this evaluation.
+        Run NER inference on a text and return all detected entities with their labels, RAW SCORES,
+        and — as a PREVIEW — SVO syntactic roles reconciled from the multi-head model.
+
+        SVO IS NON-DESTRUCTIVE: the SVO heads run on the same forward pass as NER at zero extra cost.
+        They enrich entities with syntactic roles (nsubj/obj/iobj), gender, number, and voice.
+        Calibrate NER thresholds (tauBoundary etc.) independently — SVO does NOT affect NER detection.
+
+        ══════════════════════════════════════════════════════════════
+        ⚠ INSTRUCTION D'ÉVALUATION — OBLIGATOIRE POUR LE LLM JUDGE ⚠
+        Après chaque appel à analyzeText, tu DOIS impérativement :
+          1. Lister et commenter TOUS les spans présents dans "svoSpans" :
+             - le texte du span, son rôle SVO, sa confiance p_svo_bnd et p_role
+             - l'entité NER associée (entityText/entityFine) si présente, ou indiquer "aucune entité matchée"
+             - si la voix (voice) est pertinente, la mentionner
+          2. Pour chaque entité NER ayant un champ "syntacticRole", noter le rôle détecté.
+          3. Émettre un avis qualitatif : les rôles semblent-ils corrects pour la phrase ?
+          4. Signaler les cas suspects : faible p_svo_bnd (< 0.60), rôle incohérent avec la sémantique.
+          Ne pas résumer en une ligne les SVO — les commenter explicitement un par un.
+        ══════════════════════════════════════════════════════════════
 
         CHOICE OF TEST TEXT — important for calibration quality:
           PREFER user-provided sentences: they reflect the real domain, style, and noise level.
-          Self-generated sentences are clean and may over-estimate model quality — a threshold
-          that looks good on synthetic text may miss real entities or generate FP on actual data.
-          If no user text is available, generate diverse sentences (different styles, all coarse
-          families) AND flag in your answer that calibration is PROVISIONAL pending real data.
+          Self-generated sentences are clean and may over-estimate model quality.
+          If no user text is available, flag calibration as PROVISIONAL pending real data.
 
         ENTITY FIELDS:
-          text      — surface form of the detected entity span
-          coarse    — INDICATIVE family only (PER/LOC/ORG/TIME/EVENT/OBJECT/VALUE/ABSTRACT).
-                      Output of the coarse head of the DeBERTa multi-head model.
-                      Used for display colour and structural fine masking (COARSE_TO_FINE).
-                      NOT an evaluated field — do not judge quality on coarse alone.
-          fine      — THE ACTUAL SEMANTIC LABEL (32 values). This is what you evaluate.
-                      Full taxonomy (→ see class KDoc for complete descriptions):
-                        PER family   : hint_person_name, hint_person_role, hint_norp, hint_group_role
-                        LOC family   : hint_gpe, hint_fac_name, hint_loc_generic, hint_infra
-                        ORG family   : hint_org_name
-                        TIME family  : hint_time_date, hint_time_clock, hint_time_duration
-                        EVENT family : hint_event_nominal, hint_event_named
-                        OBJECT family: hint_weapon, hint_vehicle, hint_substance, hint_food,
-                                       hint_tool, hint_object_generic, hint_object_name
-                        VALUE family : hint_quantity, hint_measure, hint_percentage, hint_count,
-                                       hint_money, hint_rate
-                        ABSTRACT fam.: hint_law, hint_work_of_art, hint_concept, hint_disease, hint_language
+          text           — surface form of the detected entity span
+          coarse         — indicative family (PER/LOC/ORG/…), used for display and fine masking
+          fine           — THE ACTUAL SEMANTIC LABEL (32 values). This is what you evaluate.
+          score / pBoundary / pCoarse / pFine — see class KDoc for score formula details
+          nested         — true if fully contained in a parent span with different fine label
+          [SVO PREVIEW]
+          syntacticRole  — "nsubj" | "obj" | "iobj" if SVO head fired on this entity's span (inline)
+          svoRole        — raw SVO label: svo_subject | svo_object | svo_iobj | pron_subj | pron_obj
+          svoRoleProb    — confidence of the SVO role label
+          svoBoundaryScore — confidence of the SVO boundary head on this span
+          gender         — "Masc" | "Fem" if detected (morphology head)
+          number         — "Sing" | "Plur" if detected (morphology head)
+          svoAnchored    — true if entity was promoted by SVO confidence (pBoundary < tauBoundary
+                           but ≥ tauSvoAnchoredBoundary). These have reduced NER confidence.
 
-          score     — COMPOSITE SCORE = pBoundary × pCoarse × pFine.
-                      ⚠ This is a HARSH multiplicative product — do NOT treat it as a
-                      percentage confidence. Interpretation guide:
-                        ≥ 0.65 → all three heads strongly confident
-                        0.45–0.65 → at least one head slightly weaker, but usually valid
-                        0.30–0.45 → one head is uncertain — check pBoundary and pFine
-                        < 0.30 → likely noise OR genuine ambiguity in one head
-                      Example: pBoundary=0.88, pCoarse=0.85, pFine=0.80 → score=0.598
-                               This is a WELL-DETECTED entity, not a weak one.
-                      To assess ACTUAL model confidence, inspect pBoundary + pFine:
-                        • pBoundary ≥ 0.80 → span boundary well detected
-                        • pFine ≥ 0.75 → fine label unambiguous
-                      Both high but score low? → the product is diluting confidence,
-                      consider lowering tauBoundary or using setCoarseScore.
+        SVO SPAN FIELDS (reconciled — includes entity association):
+          text           — surface form of the SVO span
+          role           — svo_verb | svo_subject | svo_object | svo_iobj | pron_subj | pron_obj
+          p_svo_bnd      — SVO boundary confidence
+          p_role         — role label confidence
+          voice          — ACTIVE | PASSIVE (with confidence)
+          entityText     — text of the merged NER entity (null if no entity matched)
+          entityFine     — fine label of the matched entity (null if no entity matched)
+          entityCoarse   — coarse family of the matched entity
+          chars          — character offsets [start:end]
 
-          pBoundary — boundary head confidence: "is this span an entity at all?"
-                      Primary signal for false positives (low pBoundary = noisy span boundary).
-                      Low pBoundary + high pFine → maybe a real entity, just adjust tauBoundary.
-
-          pCoarse   — coarse family head confidence (PER/LOC/ORG/…).
-                      INDICATIVE only — not an evaluated field.
-                      Low pCoarse may cause the COARSE_TO_FINE mask to select a wrong fine set,
-                      potentially leading to a wrong fine label.
-                      Low pCoarse alone does NOT mean the entity is wrong if pFine is high.
-
-          pFine     — fine label head confidence: "which of the 32 labels exactly?"
-                      THE key signal for label quality. Low pFine = ambiguity between two
-                      neighbouring fine labels (e.g. hint_event_nominal vs hint_concept).
-                      High pFine + low score → boundary or coarse head is weaker, not label.
-
-          nested    — true if this span is entirely contained within a longer parent span
-                      AND its fine label differs from the parent's fine label.
-                      Same-fine nested spans are always discarded (treated as duplicates).
-          parentText, parentFine, parentCoarse — (only when nested=true) surface form and
-                      labels of the parent span that contains this entity.
+        [SVO CALIBRATION GUIDE]
+          If too many SVO spans appear → raise tauSvoBoundary (default 0.50).
+          If too many svoAnchored entities appear → raise tauSvoAnchoredBoundary (default 0.40).
+          If NER entities miss their role → lower tauSvoBoundary slightly.
+          NER calibration (tauBoundary etc.) is fully independent.
     """)
     fun analyzeText(
         @ToolParam(description = "The text to analyze (ideally one natural sentence or short paragraph)")
         text: String,
     ): Map<String, Any> {
         val t0 = System.currentTimeMillis()
-        val result = nerService.analyse(text)
+        val result = nerService.analyseSingle(text)
         val inferenceMs = System.currentTimeMillis() - t0
+
+        // Résumé SVO pré-formaté pour guider le LLM judge
+        val svoArgSpans = result.svoSpans.filter {
+            it.role in setOf("svo_subject", "svo_object", "svo_iobj", "pron_subj", "pron_obj")
+        }
+        val svoSummaryLines = if (result.svoSpans.isEmpty()) {
+            listOf("Aucun span SVO détecté avec les seuils actuels (tauSvoBoundary=${nerService.config.tauSvoBoundary}).")
+        } else {
+            result.svoSpans.map { s ->
+                val entityPart = if (s.entity != null)
+                    "→ entité NER : \"${s.entity!!.text}\" (${s.entity!!.type})"
+                else "→ aucune entité NER matchée"
+                "• [${s.role}] \"${s.text}\"  p_bnd=%.3f  p_role=%.3f  voix=${s.voice}  $entityPart".format(
+                    s.svoBoundaryProb, s.roleProb)
+            }
+        }
+
         return mapOf(
+            "⚠_SVO_PREVIEW_A_EVALUER" to mapOf(
+                "instruction" to "Commenter OBLIGATOIREMENT chaque entrée de svoSpansSummary ci-dessous. " +
+                    "Évaluer si les rôles sont corrects pour la phrase analysée. " +
+                    "Indiquer les associations entité NER↔rôle SVO. Signaler tout rôle suspect.",
+                "svoCount"         to result.svoSpans.size,
+                "svoArgCount"      to svoArgSpans.size,
+                "svoSpansSummary"  to svoSummaryLines,
+                "nerEntitiesWithRole" to result.entities
+                    .filter { it.metadata["syntacticRole"] != null }
+                    .map { e -> "\"${e.text}\" (${e.type}) → rôle=${e.metadata["syntacticRole"]} gender=${e.metadata["gender"] ?: "?"} number=${e.metadata["number"] ?: "?"}" },
+            ),
             "thresholdsUsed" to getConfig(),
             "inferenceMs"    to inferenceMs,
             "entityCount"    to result.entities.size,
@@ -410,21 +477,41 @@ class NerMcpTools(private val nerService: NerService) {
                     put("pFine",     fmt(e.metadata["pFine"]))
                     put("chars",     "[${e.span?.start}:${e.span?.end}]")
                     if (e.metadata["nested"] == true) {
-                        put("nested",        true)
-                        put("parentText",    e.metadata["parentText"])
-                        put("parentFine",    e.metadata["parentFine"])
-                        put("parentCoarse",  e.metadata["parentCoarse"])
+                        put("nested",       true)
+                        put("parentText",   e.metadata["parentText"])
+                        put("parentFine",   e.metadata["parentFine"])
+                        put("parentCoarse", e.metadata["parentCoarse"])
                     }
+                    // ── SVO PREVIEW ──────────────────────────────────────────
+                    (e.metadata["syntacticRole"] as? String)?.let { put("syntacticRole", it) }
+                    (e.metadata["svoRole"]       as? String)?.let { put("svoRole",       it) }
+                    (e.metadata["svoRoleProb"]   as? Float )?.let { put("svoRoleProb",   fmt(it)) }
+                    (e.metadata["svoBoundaryScore"] as? Float)?.let { put("svoBoundaryScore", fmt(it)) }
+                    (e.metadata["gender"]        as? String)?.let { put("gender",        it) }
+                    (e.metadata["number"]        as? String)?.let { put("number",        it) }
+                    if (e.metadata["svoAnchored"] == true) put("svoAnchored", true)
                 }
             },
             "svoSpans" to result.svoSpans.map { s ->
-                mapOf(
-                    "text"      to s.text,
-                    "role"      to s.role,
-                    "pBoundary" to fmt(s.svoBoundaryProb),
-                    "pRole"     to fmt(s.roleProb),
-                    "voice"     to s.voice,
-                )
+                buildMap {
+                    put("text",        s.text)
+                    put("role",        s.role)
+                    put("p_svo_bnd",   "%.3f".format(s.svoBoundaryProb))
+                    put("p_role",      "%.3f".format(s.roleProb))
+                    put("voice",       "${s.voice} (%.2f)".format(s.voiceProb))
+                    put("chars",       "[${s.charStart}:${s.charEnd}]")
+                    // Entité NER fusionnée par reconcile() (null si aucun match)
+                    s.entity?.let {
+                        put("entityText",   it.text)
+                        put("entityFine",   it.type)
+                        put("entityCoarse", it.metadata["coarse"] ?: "NONE")
+                    }
+                    if (s.nerOverride != null && s.entity == null)
+                        put("nerOverride", "${s.nerOverride} (${fmt(s.nerOverrideScore)})")
+                    if (s.fromNer) put("fromNer", true)
+                    s.gender?.let { put("gender", it) }
+                    s.number?.let { put("number", it) }
+                }
             },
         )
     }
@@ -464,7 +551,7 @@ class NerMcpTools(private val nerService: NerService) {
         @ToolParam(description = "Step size (e.g. 0.05 or 0.10)")
         step: Float,
     ): Map<String, Any> {
-        if (threshold !in setOf("tauBoundary", "tauNone", "tauCoarse", "tauSvoBoundary"))
+        if (threshold !in setOf("tauBoundary", "tauNone", "tauCoarse", "tauSvoBoundary", "tauSvoAnchoredBoundary"))
             return mapOf("error" to "Unknown threshold: $threshold")
 
         val originalCfg = nerService.config
@@ -473,10 +560,11 @@ class NerMcpTools(private val nerService: NerService) {
         var v = from
         while (v <= to + 1e-5f) {
             val testCfg = when (threshold) {
-                "tauBoundary"    -> originalCfg.copy(tauBoundary    = v)
-                "tauNone"        -> originalCfg.copy(tauNone        = v)
-                "tauCoarse"      -> originalCfg.copy(tauCoarse      = v)
-                else             -> originalCfg.copy(tauSvoBoundary = v)
+                "tauBoundary"            -> originalCfg.copy(tauBoundary            = v)
+                "tauNone"                -> originalCfg.copy(tauNone                = v)
+                "tauCoarse"              -> originalCfg.copy(tauCoarse              = v)
+                "tauSvoBoundary"         -> originalCfg.copy(tauSvoBoundary         = v)
+                else                     -> originalCfg.copy(tauSvoAnchoredBoundary = v)
             }
             nerService.updateConfig(testCfg)
             val result = nerService.analyse(text)
@@ -508,7 +596,7 @@ class NerMcpTools(private val nerService: NerService) {
 
     @Tool(description = """
         Analyze a batch of texts (max 30) and return aggregated NER statistics.
-        ⚠ SVO stats are computed internally but not relevant — SVO is out of scope.
+        SVO role counts are included as a PREVIEW — non-destructive, independent of NER calibration.
 
         CHOICE OF TEXTS:
           Best: real sentences from the user's target domain (news, reports, notes…).
@@ -530,12 +618,13 @@ class NerMcpTools(private val nerService: NerService) {
           - Spot low-confidence entities (score < 0.50) that MAY be false positives
             (but check their pBoundary + pFine before discarding)
           - Evaluate fine-label distribution against domain expectations
+          - [SVO PREVIEW] Check svoRoleDistribution — counts of nsubj/obj/iobj/verb per corpus
 
         Output fields:
           byCoarseType   — per-family count + avgScore / minScore / maxScore.
           lowConfidenceEntities — up to 10 entities with score < 0.50, sorted ascending.
-                                  Low composite score alone is not proof of noise —
-                                  also inspect pBoundary and pFine in analyzeText.
+          svoRoleDistribution — [SVO PREVIEW] count of each SVO role across the corpus.
+          svoEntityCoverage   — [SVO PREVIEW] fraction of SVO argument spans that matched a NER entity.
           hint           — actionable recommendation based on score distribution.
     """)
     fun analyzeBatch(
@@ -544,6 +633,8 @@ class NerMcpTools(private val nerService: NerService) {
     ): Map<String, Any> {
         val limited = texts.take(30)
         val allEntities = mutableListOf<Map<String, Any>>()
+        val svoRoleCounts = mutableMapOf<String, Int>()
+        var svoTotal = 0; var svoWithEntity = 0
         val t0 = System.currentTimeMillis()
 
         nerService.analyseStream(limited) { _, results ->
@@ -556,6 +647,11 @@ class NerMcpTools(private val nerService: NerService) {
                         "score"     to (e.metadata["score"] as? Float ?: 0f),
                         "pBoundary" to (e.metadata["pBoundary"] as? Float ?: 0f),
                     )
+                }
+                r.svoSpans.forEach { s ->
+                    svoRoleCounts[s.role] = (svoRoleCounts[s.role] ?: 0) + 1
+                    val isArg = s.role in setOf("svo_subject","svo_object","svo_iobj","pron_subj","pron_obj")
+                    if (isArg) { svoTotal++; if (s.entity != null) svoWithEntity++ }
                 }
             }
         }
@@ -583,6 +679,11 @@ class NerMcpTools(private val nerService: NerService) {
                 )
             },
             "lowConfidenceEntities" to lowConf,
+            // ── SVO PREVIEW ────────────────────────────────────────────────────
+            "svoRoleDistribution"  to svoRoleCounts,
+            "svoEntityCoverage"    to if (svoTotal == 0) "n/a"
+                                      else "%.1f%%".format(svoWithEntity * 100.0 / svoTotal) +
+                                           " ($svoWithEntity/$svoTotal argument spans matched a NER entity)",
             "hint" to "Low avgScore on a family does NOT imply poor detection — score = pBoundary×pCoarse×pFine " +
                       "is a harsh product (e.g. 0.85³ ≈ 0.61). " +
                       "Use analyzeText on representative sentences to inspect individual head values. " +
@@ -617,13 +718,17 @@ class NerMcpTools(private val nerService: NerService) {
           scoreByCoarse  — per-family score overrides, e.g. {"EVENT": 0.85, "PER": 0.60}.
                            An empty map clears all per-family overrides.
                            Pass null to leave the current per-family map unchanged.
+          [SVO PREVIEW — optional]
+          tauSvoBoundary          — SVO boundary threshold (default 0.50)
+          tauSvoAnchoredBoundary  — relaxed NER boundary for SVO-promoted entities (default 0.40)
 
         Output:
           configApplied  — the full config now active
           configDelta    — fields that changed (old → new)
           entityCount    — total entities detected with the new config
-          entities       — full entity list (same schema as analyzeText)
+          entities       — full entity list with NER scores + SVO role preview fields
           nestedCount    — number of compound/nested spans (fine ≠ parent fine)
+          svoCount       — number of SVO spans detected
     """)
     fun applyAndAnalyze(
         @ToolParam(description = "Reference text to re-analyze after applying the config")
@@ -636,31 +741,33 @@ class NerMcpTools(private val nerService: NerService) {
         tauCoarse: Float?,
         @ToolParam(description = "Per-coarse score overrides map, e.g. {\"EVENT\":0.85}. null = unchanged. Empty map = clear all overrides.")
         scoreByCoarse: Map<String, Float>?,
+        @ToolParam(description = "[SVO PREVIEW] New tauSvoBoundary (null = keep current)")
+        tauSvoBoundary: Float? = null,
+        @ToolParam(description = "[SVO PREVIEW] New tauSvoAnchoredBoundary (null = keep current)")
+        tauSvoAnchoredBoundary: Float? = null,
     ): Map<String, Any> {
         val old = nerService.config
 
-        // Construire la nouvelle config en fusionnant avec les valeurs fournies
         val new = old.copy(
-            tauBoundary   = tauBoundary?.coerceIn(0.05f, 0.99f) ?: old.tauBoundary,
-            tauNone       = tauNone?.coerceIn(0.05f, 1.00f)     ?: old.tauNone,
-            tauCoarse     = tauCoarse?.coerceIn(0.00f, 0.99f)   ?: old.tauCoarse,
-            scoreByCoarse = when {
-                scoreByCoarse == null -> old.scoreByCoarse          // null → inchangé
-                else                  -> scoreByCoarse               // fourni (vide = reset)
-            },
+            tauBoundary            = tauBoundary?.coerceIn(0.05f, 0.99f)           ?: old.tauBoundary,
+            tauNone                = tauNone?.coerceIn(0.05f, 1.00f)               ?: old.tauNone,
+            tauCoarse              = tauCoarse?.coerceIn(0.00f, 0.99f)             ?: old.tauCoarse,
+            tauSvoBoundary         = tauSvoBoundary?.coerceIn(0.05f, 0.99f)        ?: old.tauSvoBoundary,
+            tauSvoAnchoredBoundary = tauSvoAnchoredBoundary?.coerceIn(0.05f, 0.99f) ?: old.tauSvoAnchoredBoundary,
+            scoreByCoarse          = scoreByCoarse ?: old.scoreByCoarse,
         )
         nerService.updateConfig(new)
 
-        // Delta : uniquement les champs qui ont changé
         val delta = buildMap<String, Any> {
-            if (new.tauBoundary   != old.tauBoundary)   put("tauBoundary",   "${old.tauBoundary} → ${new.tauBoundary}")
-            if (new.tauNone       != old.tauNone)       put("tauNone",       "${old.tauNone} → ${new.tauNone}")
-            if (new.tauCoarse     != old.tauCoarse)     put("tauCoarse",     "${old.tauCoarse} → ${new.tauCoarse}")
-            if (new.scoreByCoarse != old.scoreByCoarse) put("scoreByCoarse", "${old.scoreByCoarse} → ${new.scoreByCoarse}")
+            if (new.tauBoundary            != old.tauBoundary)            put("tauBoundary",            "${old.tauBoundary} → ${new.tauBoundary}")
+            if (new.tauNone                != old.tauNone)                put("tauNone",                "${old.tauNone} → ${new.tauNone}")
+            if (new.tauCoarse              != old.tauCoarse)              put("tauCoarse",              "${old.tauCoarse} → ${new.tauCoarse}")
+            if (new.tauSvoBoundary         != old.tauSvoBoundary)         put("tauSvoBoundary",         "${old.tauSvoBoundary} → ${new.tauSvoBoundary}")
+            if (new.tauSvoAnchoredBoundary != old.tauSvoAnchoredBoundary) put("tauSvoAnchoredBoundary", "${old.tauSvoAnchoredBoundary} → ${new.tauSvoAnchoredBoundary}")
+            if (new.scoreByCoarse          != old.scoreByCoarse)          put("scoreByCoarse",          "${old.scoreByCoarse} → ${new.scoreByCoarse}")
         }
 
-        // Analyse avec la nouvelle config
-        val result = nerService.analyse(text)
+        val result = nerService.analyseSingle(text)
         val nestedCount = result.entities.count { it.metadata["nested"] == true }
 
         return mapOf(
@@ -668,7 +775,8 @@ class NerMcpTools(private val nerService: NerService) {
             "configDelta"   to delta.ifEmpty { "(no changes)" },
             "entityCount"   to result.entities.size,
             "nestedCount"   to nestedCount,
-            "entities"      to result.entities.map { e ->
+            "svoCount"      to result.svoSpans.size,
+            "entities" to result.entities.map { e ->
                 buildMap {
                     put("text",      e.text)
                     put("coarse",    e.metadata["coarse"] ?: "NONE")
@@ -678,10 +786,14 @@ class NerMcpTools(private val nerService: NerService) {
                     put("pFine",     fmt(e.metadata["pFine"]))
                     put("chars",     "[${e.span?.start}:${e.span?.end}]")
                     if (e.metadata["nested"] == true) {
-                        put("nested",       true)
-                        put("parentText",   e.metadata["parentText"])
-                        put("parentFine",   e.metadata["parentFine"])
+                        put("nested",     true)
+                        put("parentText", e.metadata["parentText"])
+                        put("parentFine", e.metadata["parentFine"])
                     }
+                    (e.metadata["syntacticRole"] as? String)?.let { put("syntacticRole", it) }
+                    (e.metadata["gender"]        as? String)?.let { put("gender",        it) }
+                    (e.metadata["number"]        as? String)?.let { put("number",        it) }
+                    if (e.metadata["svoAnchored"] == true) put("svoAnchored", true)
                 }
             },
         )
@@ -787,6 +899,105 @@ class NerMcpTools(private val nerService: NerService) {
         }
 
         return result
+    }
+
+    // ── 9. Évaluation dédiée SVO preview ─────────────────────────────────────
+
+    @Tool(description = """
+        [SVO PREVIEW — ÉVALUATION DÉDIÉE]
+        Lance l'inférence sur un texte et retourne UNIQUEMENT les informations SVO
+        pour une évaluation qualitative ciblée par le LLM judge.
+
+        ══════════════════════════════════════════════════════
+        PROTOCOLE D'ÉVALUATION OBLIGATOIRE POUR LE LLM JUDGE
+        ══════════════════════════════════════════════════════
+        Pour chaque span dans "argumentSpans" :
+          1. Lire le texte du span et son rôle (subject / object / iobj)
+          2. Vérifier que le rôle est cohérent avec la phrase source (field "inputText")
+          3. Vérifier l'association entité NER : entityText + entityFine corrects ?
+          4. Évaluer la confiance : p_svo_bnd ≥ 0.70 → fiable, < 0.55 → suspect
+          5. Si voix PASSIVE → vérifier que le sujet grammatical est bien l'agent passif
+        Pour "verbSpans" :
+          - Vérifier que le verbe détecté est bien le verbe principal (ou un verbe auxiliaire)
+        Conclure par : nb rôles corrects / nb total, cas problématiques identifiés,
+        recommandation de réglage seuil si nécessaire.
+        ══════════════════════════════════════════════════════
+
+        Rappel : tauSvoBoundary (défaut 0.50) contrôle le seuil de détection SVO.
+        tauSvoAnchoredBoundary (défaut 0.40) contrôle la promotion d'entités borderline.
+        Ces seuils sont INDÉPENDANTS de la calibration NER.
+    """)
+    fun evaluateSvoPreview(
+        @ToolParam(description = "Le texte à analyser (une phrase ou un court paragraphe)")
+        text: String,
+    ): Map<String, Any> {
+        val result = nerService.analyseSingle(text)
+
+        val argRoles = setOf("svo_subject", "svo_object", "svo_iobj", "pron_subj", "pron_obj")
+        val argSpans  = result.svoSpans.filter { it.role in argRoles }
+        val verbSpans = result.svoSpans.filter { it.role == "svo_verb" }
+
+        return mapOf(
+            "inputText"    to text,
+            "svoThresholds" to mapOf(
+                "tauSvoBoundary"         to nerService.config.tauSvoBoundary,
+                "tauSvoAnchoredBoundary" to nerService.config.tauSvoAnchoredBoundary,
+            ),
+            "argumentSpans" to argSpans.map { s ->
+                buildMap {
+                    put("text",       s.text)
+                    put("role",       s.role)
+                    put("p_svo_bnd",  "%.3f".format(s.svoBoundaryProb))
+                    put("p_role",     "%.3f".format(s.roleProb))
+                    put("voice",      "${s.voice} (%.2f)".format(s.voiceProb))
+                    put("chars",      "[${s.charStart}:${s.charEnd}]")
+                    if (s.entity != null) {
+                        put("entityText",   s.entity!!.text)
+                        put("entityFine",   s.entity!!.type)
+                        put("entityCoarse", s.entity!!.metadata["coarse"] ?: "NONE")
+                        put("entityPBoundary", fmt(s.entity!!.metadata["pBoundary"]))
+                    } else {
+                        put("entityText", null)
+                        put("entityMatchNote", "Aucune entité NER n'a pu être associée à ce span SVO.")
+                    }
+                    s.gender?.let { put("gender", it) }
+                    s.number?.let { put("number", it) }
+                    put("confidence", when {
+                        s.svoBoundaryProb >= 0.70f -> "✅ fiable"
+                        s.svoBoundaryProb >= 0.55f -> "⚠ incertain"
+                        else -> "❌ suspect (p_svo_bnd faible)"
+                    })
+                }
+            },
+            "verbSpans" to verbSpans.map { s ->
+                mapOf(
+                    "text"      to s.text,
+                    "p_svo_bnd" to "%.3f".format(s.svoBoundaryProb),
+                    "p_role"    to "%.3f".format(s.roleProb),
+                    "voice"     to "${s.voice} (%.2f)".format(s.voiceProb),
+                    "chars"     to "[${s.charStart}:${s.charEnd}]",
+                )
+            },
+            "nerEntitiesWithRole" to result.entities
+                .filter { it.metadata["syntacticRole"] != null }
+                .map { e ->
+                    mapOf(
+                        "text"          to e.text,
+                        "fine"          to e.type,
+                        "syntacticRole" to e.metadata["syntacticRole"],
+                        "gender"        to (e.metadata["gender"] ?: "—"),
+                        "number"        to (e.metadata["number"] ?: "—"),
+                        "svoAnchored"   to (e.metadata["svoAnchored"] == true),
+                    )
+                },
+            "summary" to mapOf(
+                "totalSvoSpans" to result.svoSpans.size,
+                "argumentCount" to argSpans.size,
+                "verbCount"     to verbSpans.size,
+                "withEntityMatch" to argSpans.count { it.entity != null },
+                "withoutEntityMatch" to argSpans.count { it.entity == null },
+            ),
+        )
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

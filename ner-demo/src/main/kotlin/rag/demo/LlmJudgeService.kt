@@ -36,11 +36,12 @@ class LlmJudgeService(
             "Returns the current NER thresholds (tauBoundary, tauNone, tauCoarse, batchSize). " +
             "tauBoundary is the PRIMARY lever (recall/precision). " +
             "tauNone and tauCoarse are DEBUG/TUNING parameters. " +
-            "tauSvoBoundary exists but is out of scope — SVO is not evaluated.",
+            "tauSvoBoundary / tauSvoAnchoredBoundary — SVO preview thresholds (mention if present).",
             emptyMap()),
         tool("analyzeText",
             "Run NER inference on a text. Returns entities with fine labels and raw scores. " +
-            "IGNORE svoSpans in the output — SVO is out of scope. " +
+            "[SVO PREVIEW] svoSpans and syntacticRole/gender/number fields are present — " +
+            "report them briefly as bonus observations after the NER evaluation. " +
             "Fields: " +
             "  coarse = INDICATIVE family only (PER/LOC/ORG/TIME/EVENT/OBJECT/VALUE/ABSTRACT) — not evaluated directly; " +
             "  fine   = THE ACTUAL SEMANTIC LABEL to evaluate (32 values): " +
@@ -53,20 +54,21 @@ class LlmJudgeService(
             "    VALUE→ hint_quantity, hint_measure, hint_percentage, hint_count, hint_money, hint_rate; " +
             "    ABSTRACT→ hint_law, hint_work_of_art, hint_concept, hint_disease, hint_language. " +
             "  score = COMPOSITE quality signal (boundary×coarse×fine) — PRIMARY. " +
-            "  pBoundary = [DEBUG] raw BILOU boundary prob — use for threshold tuning. " +
-            "  pCoarse   = [DEBUG] BILOU coarse family confidence — only for diagnosing mis-routing. " +
-            "  pFine     = [DEBUG] SpanClassifier fine label confidence — low value = ambiguity.",
+            "  pBoundary = [DEBUG] raw boundary prob. " +
+            "  pCoarse   = [DEBUG] coarse family confidence. " +
+            "  pFine     = [DEBUG] fine label confidence — low = ambiguity. " +
+            "  [SVO PREVIEW] syntacticRole = nsubj|obj|iobj on the entity; svoSpans = full argument list.",
             mapOf("text" to (mapOf("type" to "string",
                 "description" to "The text to analyze (one sentence or short paragraph)") to true))),
         tool("setThreshold",
             "Update one NER threshold by name. " +
             "tauBoundary is the PRIMARY lever — start here. " +
             "tauNone and tauCoarse are DEBUG/TUNING parameters, rarely need changing. " +
-            "Valid: tauBoundary | tauNone | tauCoarse  (tauSvoBoundary is out of scope). " +
+            "Valid: tauBoundary | tauNone | tauCoarse | tauSvoBoundary | tauSvoAnchoredBoundary. " +
             "Takes effect immediately for all subsequent analyzeText calls.",
             mapOf(
                 "name"  to (mapOf("type" to "string",
-                    "description" to "tauBoundary (primary) | tauNone (debug) | tauCoarse (debug)") to true),
+                    "description" to "tauBoundary (primary) | tauNone | tauCoarse | tauSvoBoundary | tauSvoAnchoredBoundary") to true),
                 "value" to (mapOf("type" to "number", "description" to "New float value") to true),
             )),
         tool("scanThreshold",
@@ -85,10 +87,17 @@ class LlmJudgeService(
             "Analyze multiple texts (max 30) and return aggregated NER stats per coarse family (indicative). " +
             "Useful to detect which fine-label families have low average confidence across a corpus. " +
             "lowConfidenceEntities (score < 0.70) are the most likely false positives. " +
-            "SVO fields in the output are out of scope — ignore them.",
+            "[SVO PREVIEW] svoRoleDistribution and svoEntityCoverage are bonus fields — mention them briefly.",
             mapOf("texts" to (mapOf(
                 "type" to "array", "items" to mapOf("type" to "string"),
                 "description" to "List of texts (max 30)") to true))),
+        tool("evaluateSvoPreview",
+            "[SVO PREVIEW] Run inference and return ONLY SVO-focused output for a qualitative assessment. " +
+            "Use this after analyzeText to get a cleaner view of detected syntactic arguments. " +
+            "Returns: argumentSpans (subject/object/iobj with entity association), verbSpans, summary. " +
+            "Mention briefly: nb correct roles, any suspicious role, entity association quality.",
+            mapOf("text" to (mapOf("type" to "string",
+                "description" to "The text to analyze") to true))),
     )
 
     private fun tool(
@@ -130,6 +139,7 @@ class LlmJudgeService(
             "analyzeBatch"  -> mcpTools.analyzeBatch(
                 (args["texts"] as List<*>).filterIsInstance<String>()
             )
+            "evaluateSvoPreview" -> mcpTools.evaluateSvoPreview(args["text"] as String)
             else -> mapOf("error" to "Unknown tool: $name")
         }
         return mapper.writeValueAsString(result)
@@ -166,14 +176,21 @@ class LlmJudgeService(
         val sb = StringBuilder()
         sb.appendLine("""
 You are an expert NLP evaluator specialised in Named Entity Recognition (NER).
-⚠ SVO extraction is NOT evaluated — focus EXCLUSIVELY on NER quality.
+Primary focus: NER quality (fine labels, precision, recall, thresholds).
+SVO PREVIEW (light): syntacticRole / svoRole / gender / number fields are included as bonus info.
+Briefly note any SVO roles detected per sentence (1–2 lines max) — do not let SVO dominate the verdict.
 
 ═══════════════════════════════════════════════════════
 MODEL ARCHITECTURE
 ═══════════════════════════════════════════════════════
-Two-stage DeBERTa-v3 pipeline:
-  Stage 1 — XLM-RoBERTa BILOU: detects span boundaries + assigns COARSE family.
-  Stage 2 — DeBERTa-v3 SpanClassifier: assigns the FINE label (32 classes).
+Single DeBERTa-v3 model — multi-head span-based NER (ONE forward pass, no two-stage pipeline).
+For each candidate span the model runs FOUR decoding heads simultaneously:
+  • boundary head → "is this span an entity?"           prob = pBoundary
+  • coarse head   → "which broad family (9 + NONE)?"   prob = pCoarse
+  • fine head     → "which of 32 fine labels?"          prob = pFine
+  • SVO heads     → syntactic role / voice / gender / number  [preview — see below]
+
+score = pBoundary × pCoarse × pFine  (harsh composite — all three heads must agree)
 
 ⚠ COARSE = indicative family only (display colour + structural masking via COARSE_TO_FINE).
   It is NOT an evaluated field. Do NOT judge quality on coarse alone.
@@ -229,9 +246,22 @@ Respond in the SAME LANGUAGE as the analyzed text.
                     val pBound = (e.metadata["pBoundary"] as? Float)?.let { "%.3f".format(it) } ?: "?"
                     val pCoarse= (e.metadata["pCoarse"] as? Float)?.let { "%.3f".format(it) } ?: "?"
                     val pFine  = (e.metadata["pFine"] as? Float)?.let { "%.3f".format(it) } ?: "?"
-                    sb.appendLine("  - \"${e.text}\" fine=${e.type} coarse(indicative)=$coarse score=$score pBoundary(debug)=$pBound pCoarse(debug)=$pCoarse pFine(debug)=$pFine")
+                    val svoExtra = buildString {
+                        (e.metadata["syntacticRole"] as? String)?.let { append(" role=$it") }
+                        (e.metadata["gender"] as? String)?.let { append(" gender=$it") }
+                        (e.metadata["number"] as? String)?.let { append(" number=$it") }
+                    }
+                    sb.appendLine("  - \"${e.text}\" fine=${e.type} coarse(indicative)=$coarse score=$score pBoundary(debug)=$pBound pCoarse(debug)=$pCoarse pFine(debug)=$pFine$svoExtra")
                 }
             } else sb.appendLine("**NER:** (none)")
+            // SVO preview — light section
+            if (sent.svoSpans.isNotEmpty()) {
+                sb.appendLine("**SVO preview (${sent.svoSpans.size} spans):**")
+                sent.svoSpans.forEach { s ->
+                    val entity = s.entity?.let { " → entity:\"${it.text}\"(${it.type})" } ?: ""
+                    sb.appendLine("  - [${s.role}] \"${s.text}\" p_bnd=${"%.2f".format(s.svoBoundaryProb)} p_role=${"%.2f".format(s.roleProb)} voice=${s.voice}$entity")
+                }
+            }
         }
         return sb.toString().trim()
     }
@@ -273,17 +303,30 @@ Respond in the SAME LANGUAGE as the analyzed text.
     ): String {
         val systemPrompt = """
             You are an expert NLP evaluator specialised in Named Entity Recognition (NER).
-            ⚠ SVO extraction is NOT part of this evaluation (not ready yet) — ignore SVO fields in all tool outputs.
             You MUST use the provided tools to explore the live NER model before writing any verdict.
             Never give a final answer without first calling at least getConfig() and analyzeText().
+
+            SVO EXTRACTION — LIGHT PREVIEW (non-destructive, additive):
+            The model also detects syntactic argument roles (nsubj/obj/iobj) and morphology (gender/number).
+            This is a preview feature for future participant scoring — NOT the main evaluation target.
+            After each analyzeText() call, briefly mention:
+              - any syntacticRole / gender / number fields found on entities (one line per entity)
+              - any svoSpans detected (role, p_svo_bnd, entity association if present)
+            Keep the SVO section SHORT (a few bullet points). NER quality is the primary focus.
 
             ═══════════════════════════════════════════════════════
             MODEL ARCHITECTURE
             ═══════════════════════════════════════════════════════
-            Two-stage pipeline:
-              Stage 1 — XLM-RoBERTa BILOU: detects span boundaries + assigns a COARSE family.
-              Stage 2 — DeBERTa-v3 SpanClassifier: assigns the FINE label (32 classes) within
-                         the COARSE_TO_FINE structural mask.
+            Single DeBERTa-v3 model — multi-head span-based NER (ONE forward pass, no two-stage pipeline).
+            For each candidate span the model runs FOUR decoding heads simultaneously:
+              • boundary head → "is this span an entity?"           prob = pBoundary
+              • coarse head   → "which broad family (9 + NONE)?"   prob = pCoarse
+              • fine head     → "which of 32 fine labels?"          prob = pFine
+              • SVO heads     → syntactic role / voice / gender / number  [preview — see above]
+
+            score = pBoundary × pCoarse × pFine  (harsh composite — all three heads must agree).
+            A score of 0.50 does NOT mean "50% confidence" — it is the product of three independently
+            confident heads (e.g. 0.85³ ≈ 0.61). Always inspect pBoundary and pFine individually.
 
             ═══════════════════════════════════════════════════════
             TAXONOMY — what you evaluate
@@ -366,9 +409,11 @@ Respond in the SAME LANGUAGE as the analyzed text.
             1. Call getConfig() — read current thresholds.
             2. Call analyzeText() on EACH provided sentence — inspect fine labels and scores.
                Focus on: wrong fine label, missed entity (FN), spurious entity (FP).
+               Also note briefly: syntacticRole / gender / number on entities, svoSpans summary.
             3. For sentences with borderline scores, call scanThreshold() to find the elbow.
             4. Write structured verdict:
                - Per-sentence: FP / FN / wrong fine label / correct detections
+               - [SVO PREVIEW] Brief note: roles detected, any obvious error, entity association
                - Threshold recommendations with numeric values
             5. MANDATORY CONCLUSION — Comparative market score:
                - Rate this NER model on a /10 scale.
@@ -382,7 +427,8 @@ Respond in the SAME LANGUAGE as the analyzed text.
         """.trimIndent()
 
         val userContent = buildString {
-            appendLine("Judge the NER extraction quality on these sentences (SVO is excluded from evaluation):")
+            appendLine("Judge the NER extraction quality on these sentences.")
+            appendLine("SVO roles (syntacticRole, svoSpans) are a light preview — briefly note them as bonus observations after each sentence.")
             results.forEachIndexed { i, s -> appendLine("  ${i + 1}. ${s.text}") }
             appendLine()
             appendLine("Start NOW by calling getConfig(), then analyzeText() on each sentence above.")
