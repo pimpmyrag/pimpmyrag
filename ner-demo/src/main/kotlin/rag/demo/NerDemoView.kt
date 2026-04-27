@@ -820,13 +820,14 @@ class NerDemoView(
             textFlow.add(slot)
         }
 
-        val collected = arrayOfNulls<AnnotatedSentence>(sentences.size)
         val ui = UI.getCurrent()
 
         executor.submit {
             try {
+                // Full-stream : pas de collected[] — lastResults est mis à jour
+                // de façon incrémentale après chaque batch, libérant la pression mémoire
+                // (les tenseurs ONNX natifs du batch précédent peuvent être GC'd).
                 nerService.analyseStream(sentences) { startIdx, batchResults ->
-                    batchResults.forEachIndexed { bi, r -> collected[startIdx + bi] = r }
                     ui.access {
                         batchResults.forEachIndexed { bi, r ->
                             val slot = sentenceSlots[startIdx + bi]
@@ -834,15 +835,14 @@ class NerDemoView(
                             slot.style.remove("color")
                             renderIntoSlot(slot, r)
                         }
+                        // Mise à jour incrémentale : lastResults grandit batch par batch
+                        lastResults = lastResults + batchResults
                     }
                 }
             } catch (e: Exception) {
                 ui.access { Notification.show("${i18n.errorPrefix}${e.message}", 5000, Notification.Position.MIDDLE) }
             } finally {
-                ui.access {
-                    progressBar.isVisible = false
-                    lastResults = collected.filterNotNull()
-                }
+                ui.access { progressBar.isVisible = false }
             }
         }
     }
