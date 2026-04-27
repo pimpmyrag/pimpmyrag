@@ -1,6 +1,7 @@
 # PimpMyRAG
 
 [![Live Demo](https://img.shields.io/badge/🚀%20Live%20Demo-ner--demo-6366f1?style=for-the-badge)](https://ner-demo-ocg3.onrender.com/)
+[![Download](https://img.shields.io/badge/📦%20Download-Installers-22c55e?style=for-the-badge)](https://github.com/pimpmyrag/pimpmyrag/releases/latest)
 [![CI](https://github.com/pimpmyrag/pimpmyrag/actions/workflows/ci.yml/badge.svg)](https://github.com/pimpmyrag/pimpmyrag/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.x-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
@@ -33,6 +34,21 @@ Interface interactive pour tester l'extraction NER/SVO en temps réel :
 | 🌍 **Multilingue** | Interface disponible en FR / EN / DE / ES / IT |
 
 > ⚠️ Le démarrage peut prendre ~30 s (plan Render gratuit avec cold start).
+
+### 📦 Tester localement (sans Docker)
+
+**➡️ [Télécharger les installateurs](https://github.com/pimpmyrag/pimpmyrag/releases/latest)**
+
+| Plateforme | Fichier | Utilisation |
+|---|---|---|
+| 🐧 **Linux** | `ner-demo-linux-x64.tar.gz` | `tar xzf … && ./NER\ Demo/bin/NER\ Demo` |
+| 🍎 **macOS** | `ner-demo-macos.dmg` | Double-clic → glisser dans Applications |
+| 🪟 **Windows** | `ner-demo-windows-x64.zip` | Extraire → `NER Demo\NER Demo.exe` |
+
+> **JRE inclus** — Java n'est pas requis.  
+> **Premier lancement** : le modèle ONNX (~700 MB) est téléchargé automatiquement dans `~/.pimpmyrag/model/`.  
+> **macOS** : si "développeur non identifié" → clic droit → Ouvrir.  
+> Puis ouvrir [http://localhost:8090](http://localhost:8090) dans le navigateur.
 
 ### Architecture
 
@@ -132,6 +148,21 @@ Interactive interface to test NER/SVO extraction in real time:
 | 🌍 **Multilingual UI** | Available in FR / EN / DE / ES / IT |
 
 > ⚠️ First load may take ~30 s (Render free tier cold start).
+
+### 📦 Run locally (no Docker)
+
+**➡️ [Download installers](https://github.com/pimpmyrag/pimpmyrag/releases/latest)**
+
+| Platform | File | How to run |
+|---|---|---|
+| 🐧 **Linux** | `ner-demo-linux-x64.tar.gz` | `tar xzf … && ./NER\ Demo/bin/NER\ Demo` |
+| 🍎 **macOS** | `ner-demo-macos.dmg` | Double-click → drag to Applications |
+| 🪟 **Windows** | `ner-demo-windows-x64.zip` | Extract → `NER Demo\NER Demo.exe` |
+
+> **JRE bundled** — Java not required.  
+> **First launch**: the ONNX model (~700 MB) is downloaded automatically into `~/.pimpmyrag/model/`.  
+> **macOS**: if "unidentified developer" warning → right-click → Open.  
+> Then open [http://localhost:8090](http://localhost:8090) in your browser.
 
 ### Quick start
 

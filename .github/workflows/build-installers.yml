@@ -1,0 +1,243 @@
+name: Build NER Demo Installers
+
+# Triggered on version tags OR manually (without creating a release)
+on:
+  push:
+    tags:
+      - 'v*-ner-demo'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label (e.g. v1.2.0-ner-demo) — used for the release tag when dispatched manually'
+        required: false
+        default: ''
+
+env:
+  MODEL_URL: https://github.com/pimpmyrag/pimpmyrag/releases/download/v1.0.0-ner-model/best_model_multitask_full.onnx
+  APP_VERSION: '1.0.0'
+
+jobs:
+  # ── 1. Build fat JAR (Vaadin production bundle) ───────────────────────────
+  build-jar:
+    name: Build fat JAR (Ubuntu)
+    runs-on: ubuntu-latest
+    outputs:
+      jar-name: ${{ steps.jar.outputs.name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Vaadin 24 plugin incompatible with Gradle 9 → switch to Gradle 8.13 for this build only
+      - name: Patch build files (Gradle 8 + Vaadin plugin)
+        run: |
+          sed -i 's|id("io.spring.dependency-management")|id("io.spring.dependency-management")\n    id("com.vaadin") version "24.7.2"|' ner-demo/build.gradle.kts
+          sed -i 's|gradle-[0-9.]*-bin\.zip|gradle-8.13-bin.zip|g' gradle/wrapper/gradle-wrapper.properties
+          chmod +x ./gradlew && ./gradlew --version
+
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: Build Vaadin frontend + bootJar
+        run: ./gradlew :ner-demo:vaadinBuildFrontend :ner-demo:bootJar -x test --no-daemon -Pvaadin.productionMode=true
+
+      - name: Prepare dist directory
+        id: jar
+        run: |
+          mkdir -p dist/libs
+
+          # Fat JAR (exclude *-plain.jar)
+          cp ner-demo/build/libs/*.jar dist/libs/
+          rm -f dist/libs/*-plain.jar
+
+          JAR_NAME=$(ls dist/libs/*.jar | head -n1 | xargs basename)
+          echo "name=$JAR_NAME" >> "$GITHUB_OUTPUT"
+          echo "[ci] JAR: $JAR_NAME"
+
+          # Tokenizer bundled alongside the JAR so jpackage puts it in $APPDIR
+          cp -r training/multi-head/tokenizer_export_clean dist/libs/tokenizer_export_clean
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ner-demo-dist
+          path: dist/
+          retention-days: 1
+
+  # ── 2. Platform packaging via jpackage ────────────────────────────────────
+  package:
+    name: Package — ${{ matrix.label }}
+    needs: build-jar
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x64
+            os: linux
+            runner: ubuntu-latest
+            pkg-type: app-image
+            archive-name: ner-demo-linux-x64.tar.gz
+
+          - label: macOS (x64 + arm)
+            os: macos
+            runner: macos-latest
+            pkg-type: dmg
+            archive-name: ner-demo-macos.dmg
+
+          - label: Windows x64
+            os: windows
+            runner: windows-latest
+            pkg-type: app-image
+            archive-name: ner-demo-windows-x64.zip
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ner-demo-dist
+          path: dist/
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # ── jpackage (Linux / Windows  →  app-image) ──────────────────────────
+      - name: jpackage app-image
+        if: matrix.pkg-type == 'app-image'
+        shell: bash
+        run: |
+          JAR_NAME="${{ needs.build-jar.outputs.jar-name }}"
+          mkdir -p dist/pkg
+
+          jpackage \
+            --name "NER Demo" \
+            --app-version "$APP_VERSION" \
+            --description "PimpMyRAG — NER/SVO extraction demo (model downloaded on first run)" \
+            --vendor "PimpMyRAG" \
+            --input dist/libs \
+            --main-jar "$JAR_NAME" \
+            --type app-image \
+            --java-options "-Xms128m" \
+            --java-options "-Xmx512m" \
+            --java-options "-XX:+UseG1GC" \
+            --java-options "-XX:MaxMetaspaceSize=192m" \
+            --java-options "-XX:+ExitOnOutOfMemoryError" \
+            --java-options "-Dner.model-url=$MODEL_URL" \
+            --java-options "-Dner.tokenizer-path=\$APPDIR/tokenizer_export_clean" \
+            --dest dist/pkg
+
+      # ── jpackage (macOS → DMG) ─────────────────────────────────────────────
+      - name: jpackage DMG
+        if: matrix.pkg-type == 'dmg'
+        shell: bash
+        run: |
+          JAR_NAME="${{ needs.build-jar.outputs.jar-name }}"
+          mkdir -p dist/pkg
+
+          jpackage \
+            --name "NER Demo" \
+            --app-version "$APP_VERSION" \
+            --description "PimpMyRAG — NER/SVO extraction demo" \
+            --vendor "PimpMyRAG" \
+            --input dist/libs \
+            --main-jar "$JAR_NAME" \
+            --type dmg \
+            --java-options "-Xms128m" \
+            --java-options "-Xmx512m" \
+            --java-options "-XX:+UseG1GC" \
+            --java-options "-XX:MaxMetaspaceSize=192m" \
+            --java-options "-XX:+ExitOnOutOfMemoryError" \
+            --java-options "-Dner.model-url=$MODEL_URL" \
+            --java-options "-Dner.tokenizer-path=\$APPDIR/../Resources/tokenizer_export_clean" \
+            --dest dist/pkg
+
+      # ── Archiving ──────────────────────────────────────────────────────────
+      - name: Archive app-image (Linux → tar.gz)
+        if: matrix.os == 'linux'
+        run: |
+          cd dist/pkg
+          tar -czf "../${{ matrix.archive-name }}" "NER Demo"
+          mv "../${{ matrix.archive-name }}" ./
+
+      - name: Archive app-image (Windows → zip)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist\pkg\NER Demo" -DestinationPath "dist\pkg\${{ matrix.archive-name }}"
+
+      - name: Rename DMG (macOS)
+        if: matrix.os == 'macos'
+        run: |
+          mv dist/pkg/*.dmg "dist/pkg/${{ matrix.archive-name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: dist/pkg/${{ matrix.archive-name }}
+
+  # ── 3. GitHub Release ─────────────────────────────────────────────────────
+  release:
+    name: GitHub Release
+    needs: package
+    # Only create a release on tag push; workflow_dispatch produces artifacts only
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          merge-multiple: true
+          path: installers/
+
+      - name: List installers
+        run: ls -lh installers/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "NER Demo ${{ github.ref_name }}"
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+          body: |
+            ## 📦 NER Demo — Installation sans Docker / No-Docker install
+
+            > **Premier lancement / First launch**: l'app télécharge automatiquement le modèle ONNX (~700 MB) dans `~/.pimpmyrag/model/`  
+            > Java n'est **pas** requis — le JRE 21 est inclus dans chaque package.
+
+            | Plateforme | Fichier | Instructions |
+            |---|---|---|
+            | 🐧 **Linux** x64 | `ner-demo-linux-x64.tar.gz` | `tar xzf ner-demo-linux-x64.tar.gz && ./NER\ Demo/bin/NER\ Demo` |
+            | 🍎 **macOS** (Intel + Apple Silicon) | `ner-demo-macos.dmg` | Double-clic → glisser dans Applications |
+            | 🪟 **Windows** x64 | `ner-demo-windows-x64.zip` | Extraire → `NER Demo\NER Demo.exe` |
+
+            ### Prérequis / Requirements
+            - Connexion internet au **premier lancement** uniquement (téléchargement modèle ~700 MB)
+            - RAM : 1.5 GB minimum recommandé
+            - Port `8090` disponible → ouvrir [http://localhost:8090](http://localhost:8090) dans le navigateur
+
+            ### Notes
+            - macOS : si "développeur non identifié" → clic droit → Ouvrir
+            - Le modèle est mis en cache dans `~/.pimpmyrag/model/` et réutilisé aux démarrages suivants
+          files: |
+            installers/ner-demo-linux-x64.tar.gz
+            installers/ner-demo-macos.dmg
+            installers/ner-demo-windows-x64.zip
+
