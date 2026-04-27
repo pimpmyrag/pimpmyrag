@@ -8,6 +8,7 @@ import rag.connectors.ner.onnx.ExtractionResult
 import rag.connectors.ner.onnx.ExtractionThresholds
 import rag.connectors.ner.onnx.OnnxMultiHeadEntityExtractor
 import rag.connectors.ner.onnx.SvoSpan
+import ai.onnxruntime.OrtSession
 import rag.model.Entity
 import com.ibm.icu.text.BreakIterator
 import java.nio.file.Files
@@ -64,6 +65,9 @@ class NerService(
     @Value("\${ner.tau-coarse:0.45}")         tauCoarse: Float,
     @Value("\${ner.tau-svo-boundary:0.50}")   tauSvo: Float,
     @Value("\${ner.batch-size:8}")            batchSize: Int,
+    @Value("\${ner.intra-op-threads:-1}")     intraOpThreads: Int,
+    @Value("\${ner.cpu-arena:true}")          cpuArena: Boolean,
+    @Value("\${ner.opt-level:ALL_OPT}")       optLevelName: String,
 ) : DisposableBean {
 
     private val log = LoggerFactory.getLogger(NerService::class.java)
@@ -88,7 +92,12 @@ class NerService(
         tauNone        = tauNone,
         tauCoarse      = tauCoarse,
         tauSvoBoundary = tauSvo,
-    ).also { log.info("✅ Modèle NER chargé depuis {}", modelPath) }
+        intraOpThreads = if (intraOpThreads < 1) Runtime.getRuntime().availableProcessors() else intraOpThreads,
+        cpuArena       = cpuArena,
+        optLevel       = runCatching { OrtSession.SessionOptions.OptLevel.valueOf(optLevelName) }
+                             .getOrDefault(OrtSession.SessionOptions.OptLevel.ALL_OPT),
+    ).also { log.info("✅ Modèle NER chargé depuis {} [opt={} arena={} intraThreads={}]",
+        modelPath, optLevelName, cpuArena, intraOpThreads) }
 
     private val _config = AtomicReference(
         DemoConfig(

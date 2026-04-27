@@ -137,7 +137,7 @@ echo "[render] starting on port $SERVER_PORT"
 echo "[render] JAR=$APP_JAR"
 
 exec java \
-  ${JAVA_TOOL_OPTIONS:--Xms512m -Xmx2g} \
+  ${JAVA_TOOL_OPTIONS:--Xms128m -Xmx512m -XX:+UseG1GC -XX:MaxMetaspaceSize=192m -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError} \
   -Dserver.port="$SERVER_PORT" \
   -Dspring.profiles.active="${SPRING_PROFILES_ACTIVE:-render}" \
   -jar "$APP_JAR"

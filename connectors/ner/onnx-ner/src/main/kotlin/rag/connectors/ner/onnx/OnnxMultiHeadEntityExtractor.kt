@@ -418,6 +418,22 @@ class OnnxMultiHeadEntityExtractor(
      * avec branches parallèles et machine multi-socket.
      */
     private val interOpThreads: Int = 1,
+    /**
+     * Niveau d'optimisation du graph ORT.
+     * - ALL_OPT   : fusions maximales (LayerNorm, GELU, Attention…) → pic mémoire au chargement ~2× modèle
+     * - EXTENDED_OPT : fusions node-level sans layout → bon compromis latence/mémoire
+     * - BASIC_OPT : constant folding + shape inference → empreinte mémoire minimale
+     * Défaut : ALL_OPT (max performance, local/ML machines).
+     * En démo contrainte mémoire, utiliser BASIC_OPT.
+     */
+    private val optLevel: OrtSession.SessionOptions.OptLevel = OrtSession.SessionOptions.OptLevel.ALL_OPT,
+    /**
+     * Active l'arène mémoire CPU ORT (pool de blocs réutilisés entre inférences).
+     * true  → performance maximale, mais la RAM de pointe reste allouée entre les requêtes.
+     * false → la RAM est restituée à l'OS après chaque inférence (légèrement plus lent, bien
+     *          adapté aux démos à faible concurrence sur des machines à mémoire limitée).
+     */
+    private val cpuArena: Boolean = true,
 ) : AutoCloseable, NerExtractor {
 
     private val log = LoggerFactory.getLogger(OnnxMultiHeadEntityExtractor::class.java)
@@ -428,7 +444,8 @@ class OnnxMultiHeadEntityExtractor(
         // ALL_OPT = Basic + Extended + Layout optimisations + fused kernels
         //  → fusionne LayerNorm, GELU, Attention, MatMul+Add, etc.
         //  → peut donner 30-60% de gain sur DeBERTa par rapport au défaut (BASIC_OPT)
-        setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+        //  → pic mémoire au chargement ~2× taille modèle ; utiliser BASIC_OPT sur machines contraintes
+        setOptimizationLevel(optLevel)
 
         // ── Thread configuration ───────────────────────────────────────────
         setIntraOpNumThreads(intraOpThreads)
@@ -438,8 +455,10 @@ class OnnxMultiHeadEntityExtractor(
         setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
 
         // ── Memory optimizations ───────────────────────────────────────────
-        // Memory arena CPU : pool d'allocations, évite malloc/free à chaque run
-        setCPUArenaAllocator(true)
+        // CPU Arena : pool d'allocations réutilisées entre inférences.
+        //   true  → perf maximale, mais la RAM reste allouée entre les calls.
+        //   false → RAM restituée à l'OS à chaque fin d'inférence (démos mémoire-contrainte).
+        setCPUArenaAllocator(cpuArena)
         // Memory pattern : mémorise le plan d'allocation du graph (un seul malloc groupé)
         setMemoryPatternOptimization(true)
 
@@ -452,7 +471,8 @@ class OnnxMultiHeadEntityExtractor(
         "provider"       to if (useCoreMl) "CoreML (Apple Neural Engine + GPU)" else "CPU (ONNX Runtime)",
         "intraOpThreads" to intraOpThreads,
         "interOpThreads" to interOpThreads,
-        "optimization"   to "ALL_OPT (fused LayerNorm/GELU/Attention/MatMul)",
+        "optimization"   to optLevel.name,
+        "cpuArena"       to cpuArena,
         "maxSeqLen"      to maxSeqLen,
         "maxSpanLen"     to maxSpanLen,
         "availableProcessors" to Runtime.getRuntime().availableProcessors(),
