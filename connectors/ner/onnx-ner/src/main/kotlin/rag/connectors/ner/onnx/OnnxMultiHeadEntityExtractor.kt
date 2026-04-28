@@ -746,26 +746,20 @@ class OnnxMultiHeadEntityExtractor(
                                 var ni = 0; for (j in 1 until nNumber) if (p[j] > p[ni]) ni = j
                                 NUMBER_LABELS.getOrElse(ni) { "NONE" }.takeUnless { s -> s == "NONE" }
                             }
-                            // ── Rôle SVO ────────────────────────────────────────────────────
-                            // Chemin standard  : boundary SVO ≥ tauSvoBoundary.
-                            // Chemin forcé     : boundary SVO faible mais entité NER confiante
-                            //   (pBoundary ≥ tauBoundary déjà garanti par le bloc parent) ET
-                            //   roleProb ≥ effTauSvoRoleForced.
-                            //   Capture les agents passifs "par X" (p_bnd ~0.20, roleProb ~0.99).
+                            // ── Rôle SVO (uniquement si boundary SVO suffisant) ─────────────
+                            // Note : le chemin "forcé" (faible p_bnd mais roleProb ≥ tauSvoRoleForced)
+                            // est géré dans le bloc SVO standalone ci-dessous, qui lit les logits
+                            // SVO aux BONNES bornes token (span SVO ≠ span NER pour le même texte).
                             val svoBndLocal = onnxOut.svoBndFlat
                             if (svoBndLocal != null && onnxOut.svoFlat != null) {
                                 val pSvo = softmaxProbFlat(svoBndLocal, k * 2, 2, 1)
-                                val aboveBnd  = pSvo >= effTauSvoBoundary
-                                val tryForced = !aboveBnd && effTauSvoRoleForced > 0f
-                                if (aboveBnd || tryForced) {
+                                if (pSvo >= effTauSvoBoundary) {
                                     val p = tlBufSvo.get()
                                     loadRow(onnxOut.svoFlat, k * nSvo, p); softmaxInto(p, p)
                                     var ri = 0
                                     for (j in 1 until nSvo) if (p[j] > p[ri]) ri = j
                                     val name = SVO_LABELS.getOrElse(ri) { "svo_verb" }
-                                    // En mode forcé : seuil strict sur roleProb pour éviter le bruit
-                                    val minRoleProb = if (tryForced) effTauSvoRoleForced else 0f
-                                    if (name != "svo_verb" && p[ri] >= minRoleProb) {
+                                    if (name != "svo_verb") {
                                         nerSvoRole     = name
                                         nerSvoRoleProb = p[ri]
                                         nerSvoBndScore = pSvo
@@ -804,7 +798,15 @@ class OnnxMultiHeadEntityExtractor(
                 val svoBndFlat = onnxOut.svoBndFlat
                 if (svoBndFlat != null) {
                     val pSvoB = softmaxProbFlat(svoBndFlat, k * 2, 2, 1)
-                    if (pSvoB >= effTauSvoBoundary) {
+                    // Chemin standard  : boundary SVO ≥ tauSvoBoundary.
+                    // Chemin forcé     : boundary SVO faible MAIS roleProb ≥ tauSvoRoleForced.
+                    //   Capture les agents passifs "par X" (p_bnd ~0.20, roleProb ~0.99).
+                    //   Ces spans sont émis dans svoByLocal ; reconcile Phase 2 les snappera
+                    //   sur l'entité NER voisine — ce qui évite le problème de décalage de bornes
+                    //   token entre le span NER et le span SVO pour le même mot.
+                    val aboveSvoBnd = pSvoB >= effTauSvoBoundary
+                    val trySvoForced = !aboveSvoBnd && effTauSvoRoleForced > 0f
+                    if (aboveSvoBnd || trySvoForced) {
                         val roleName: String
                         val roleProb: Float
                         if (onnxOut.svoFlat != null) {
@@ -813,6 +815,11 @@ class OnnxMultiHeadEntityExtractor(
                             var ri = 0; for (j in 1 until nSvo) if (p[j] > p[ri]) ri = j
                             roleName = SVO_LABELS.getOrElse(ri) { "svo_verb" }; roleProb = p[ri]
                         } else { roleName = "svo_verb"; roleProb = 0f }
+
+                        // En mode forcé : vérifier le seuil roleProb strict avant d'émettre
+                        if (trySvoForced && roleProb < effTauSvoRoleForced) {
+                            // roleProb insuffisant → on n'émet pas ce span forcé (trop de bruit)
+                        } else {
 
                         val voiceName: String
                         val voiceProb: Float
@@ -885,12 +892,13 @@ class OnnxMultiHeadEntityExtractor(
                                             svoBoundaryScore = pSvoB,
                                             svoGender        = gender,
                                             svoNumber        = number,
-                                            svoAnchored      = true,
+                                             svoAnchored      = true,
                                         )
                                     }
                                 }
                             }
                         }
+                        } // end else (roleProb sufficient)
                     }
                 }
             }
