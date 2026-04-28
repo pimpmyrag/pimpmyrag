@@ -49,6 +49,32 @@ LEVEL_NAMES=("easy" "easy+" "medium" "medium+" "hard" "full")
 HARD_PER_GOLD=(2    3      4       5        6      6)
 SOFT_FACTORS=( 1.0  1.5    2.0     2.0      2.0    2.0)
 
+# ── Lambdas NER (têtes principales, labels gold) ─────────────────────────────
+# lambda_boundary élevé = priorité absolue : c'est la tête la plus fragile.
+# lambda_fine=1.8 identifié empiriquement comme bon compromis fine vs coarse.
+L_BOUNDARY=2.5    # Restauré haut (1.0 avait causé -0.70 de F1 boundary)
+L_COARSE=1.0
+L_FINE=1.8        # Conseillé (vs 1.0 avant) — discrimine mieux les labels fins
+
+# ── Lambdas SVO cibles (têtes secondaires, labels silver Stanza) ─────────────
+# Ces lambdas s'appliquent au PLEIN RÉGIME (niveau 5/full).
+# Budget SVO total = 1.95 vs budget NER = 5.3 → SVO = 27% du total.
+# Aux niveaux inférieurs, un facteur de montée multiplicatif est appliqué.
+L_SVO_BOUNDARY=0.7   # Boundary SVO (silver → moins critique)
+L_SVO=0.6            # Labels SVO (svo_verb/subject/object/iobj/tcomp/lcomp/cause/attr…)
+L_VOICE=0.15         # Voix active/passive (très silver)
+L_MORPHO=0.2         # Gender/Number/Person (silver)
+L_VERB_PTR=0.25      # Pointer head verbe gouverneur (silver)
+
+# ── Ramp SVO par niveau ───────────────────────────────────────────────────────
+# Le modèle apprend NER en premier.  SVO monte progressivement quand le NER
+# est stable, pour éviter l'interférence de gradient sur boundary/fine.
+#   Niveau 0 (easy)   : SVO à  5% → contribution négligeable sur le gradient
+#   Niveau 2 (medium) : SVO à 35% → commence à avoir du signal
+#   Niveau 5 (full)   : SVO à 100% → plein régime
+# Tableau 6 valeurs (1 par niveau), virgule pas supportée en bash → on multiplie ×100
+SVO_RAMP_PCT=(5 15 35 60 85 100)  # pourcentage × 100 du lambda cible
+
 # Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
 START_LEVEL=${START_LEVEL:-0}
 START_EPOCH=${START_EPOCH:-1}
@@ -144,6 +170,17 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
 
     epoch_log="logs/epoch_${current_epoch}.log"
 
+    # ── Calcul des lambdas SVO pour ce niveau (ramp progressif) ──────────────
+    svo_pct=${SVO_RAMP_PCT[$current_level]}
+    L_SVO_B_NOW=$(python3 -c "print(f'{$L_SVO_BOUNDARY * $svo_pct / 100:.4f}')")
+    L_SVO_NOW=$(python3   -c "print(f'{$L_SVO        * $svo_pct / 100:.4f}')")
+    L_VOICE_NOW=$(python3 -c "print(f'{$L_VOICE      * $svo_pct / 100:.4f}')")
+    L_MORPHO_NOW=$(python3 -c "print(f'{$L_MORPHO    * $svo_pct / 100:.4f}')")
+    L_VPTR_NOW=$(python3  -c "print(f'{$L_VERB_PTR   * $svo_pct / 100:.4f}')")
+    echo "🎛️  Lambdas niveau ${LEVEL_NAMES[$current_level]} (SVO ramp=${svo_pct}%)" | tee -a $log_file
+    echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE  fine=$L_FINE" | tee -a $log_file
+    echo "      SVO  : svo_boundary=$L_SVO_B_NOW  svo=$L_SVO_NOW  voice=$L_VOICE_NOW  morpho=$L_MORPHO_NOW  verb_ptr=$L_VPTR_NOW" | tee -a $log_file
+
     python3 train_multi_task.py \
         --train $DATA/train.adaptive.multitask.jsonl \
         --val   $DATA/val.multitask.jsonl \
@@ -156,14 +193,14 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lr 5e-6 \
         --head-lr-multiplier 4.0 \
         --warmup-epochs 0 \
-        --lambda-boundary 2.0 \
-        --lambda-coarse 1.0 \
-        --lambda-fine 1.0 \
-        --lambda-svo-boundary 1.0 \
-        --lambda-svo 0.5 \
-        --lambda-voice 0.2 \
-        --lambda-morpho 0.3 \
-        --lambda-verb-ptr 0.4 \
+        --lambda-boundary   $L_BOUNDARY \
+        --lambda-coarse     $L_COARSE \
+        --lambda-fine       $L_FINE \
+        --lambda-svo-boundary $L_SVO_B_NOW \
+        --lambda-svo        $L_SVO_NOW \
+        --lambda-voice      $L_VOICE_NOW \
+        --lambda-morpho     $L_MORPHO_NOW \
+        --lambda-verb-ptr   $L_VPTR_NOW \
         --focal-gamma 0.5 \
         --device $DEVICE \
         --layer-lr-decay 0.9 \

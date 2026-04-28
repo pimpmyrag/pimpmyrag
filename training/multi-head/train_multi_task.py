@@ -206,14 +206,14 @@ def run_epoch(
         boundary_class_weights=None,
         coarse_class_weights=None,
         fine_class_weights=None,
-        lambda_boundary=1.0,
+        lambda_boundary=2.5,
         lambda_coarse=1.0,
         lambda_fine=1.8,
-        lambda_svo_boundary=0.9,
-        lambda_svo=0.8,
-        lambda_voice=0.5,
+        lambda_svo_boundary=0.7,
+        lambda_svo=0.6,
+        lambda_voice=0.15,
         lambda_morpho=0.3,
-        lambda_verb_ptr=0.5,
+        lambda_verb_ptr=0.25,
         lambda_compat=0.0,
         accum_steps=1,
         log_every=50,
@@ -785,18 +785,18 @@ def main():
     parser.add_argument("--accum-steps", type=int, default=1)
     parser.add_argument("--log-every", type=int, default=50)
 
-    parser.add_argument("--lambda-boundary", type=float, default=1.0)
+    parser.add_argument("--lambda-boundary", type=float, default=2.5)
     parser.add_argument("--lambda-coarse", type=float, default=1.0)
     parser.add_argument("--lambda-fine", type=float, default=1.8)
-    parser.add_argument("--lambda-svo", type=float, default=0.8,
+    parser.add_argument("--lambda-svo", type=float, default=0.6,
                         help="Pondération de la loss SVO (défaut=0.8)")
-    parser.add_argument("--lambda-voice", type=float, default=0.5,
+    parser.add_argument("--lambda-voice", type=float, default=0.15,
                         help="Pondération de la loss voice ACTIVE/PASSIVE (défaut=0.5)")
-    parser.add_argument("--lambda-svo-boundary", type=float, default=0.9,
+    parser.add_argument("--lambda-svo-boundary", type=float, default=0.7,
                         help="Pondération de la loss svo_boundary (détection verbes/pronoms, défaut=0.9)")
     parser.add_argument("--lambda-morpho", type=float, default=0.3,
                         help="Pondération de la loss morpho gender+number+person (défaut=0.3)")
-    parser.add_argument("--lambda-verb-ptr", type=float, default=0.5,
+    parser.add_argument("--lambda-verb-ptr", type=float, default=0.25,
                         help="Pondération de la loss verb-pointer arg→verb (défaut=0.5)")
     parser.add_argument("--lambda-compat", type=float, default=0.2)
     parser.add_argument("--focal-gamma", type=float, default=0.0,
@@ -1110,11 +1110,11 @@ def main():
         scheduler.step()
 
         score = (
-            val_metrics["boundary_f1"] * 1.0
+            val_metrics["boundary_f1"] * 1.5   # +0.5 vs avant : boundary est la tête la plus fragile
             + val_metrics["coarse_macro_f1"] * 1.0
             + val_metrics["fine_macro_f1"] * 2.0
             + val_metrics["svo_macro_f1"] * 0.5
-        ) / 4.5
+        ) / 5.0
 
         print(f"\n📅 Epoch {epoch}")
         print(
