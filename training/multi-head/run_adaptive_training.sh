@@ -186,7 +186,8 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
 
     if [ -z "$val_score" ]; then
         echo "⚠️  Impossible d'extraire le val score — on continue" | tee -a $log_file
-        resume_arg="--resume checkpoint_best_multitask.pt"
+        resume_arg=""
+        [ -f checkpoint_best_multitask.pt ] && resume_arg="--resume checkpoint_best_multitask.pt"
         current_epoch=$((current_epoch + 1))
         continue
     fi
