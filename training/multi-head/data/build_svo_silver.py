@@ -67,7 +67,7 @@ OBJ_DEPRELS   = {"obj", "ccomp", "xcomp"}
 # Stanza fr utilise obl:mod / obl:arg / obl:agent — pas "obl" nu
 IOBJ_DEPRELS  = {"iobj", "obl", "obl:mod", "obl:arg", "obl:agent", "obl:comp"}
 TCOMP_DEPRELS = {"obl:tmod"}   # CC de temps UD (sans préposition obligatoire)
-LCOMP_DEPRELS = {"obl:lmod"}   # CC de lieu UD
+LCOMP_DEPRELS = {"obl:lmod"}   # CC de lieu UD (enhanced; rare dans Stanza fr-GSD — détection principale via LCOMP_PREPS)
 AUX_DEPRELS   = {"aux", "aux:pass", "cop"}
 COPULA_LEMMAS = {"être", "devenir", "rester", "sembler", "paraître", "demeurer"}
 
@@ -94,8 +94,22 @@ CAUSAL_MARKS = {
     "attendu", "sous", "grâce", "suite", "raison", "cause",
 }
 
-# Prépositions causales (obl → svo_cause) — tête de la préposition case
+# Prépositions causales (obl → svo_cause) — lemme de la TÊTE nominale causale
+# Ex : "à cause de" → tête = "cause" ; "en raison de" → tête = "raison"
 CAUSAL_PREPS = {"cause", "raison", "suite", "faute", "grâce", "égard"}
+
+# Lemmes du token "fixed" dans les locutions causales prépositionnelles
+# Ex : "en raison de X" → advmod="en", fixed="raison" → CAUSAL_FIXED
+#      "à cause de X"   → advmod="à",  fixed="cause"
+CAUSAL_FIXED = {"raison", "cause", "manque", "crainte", "peur", "suite", "faute", "égard"}
+
+# Prépositions spatiales non ambiguës → svo_lcomp
+# (on exclut "à" et "en" trop polysémiques avec iobj et temporels)
+LCOMP_PREPS = {"dans", "sur", "sous", "devant", "derrière", "entre",
+               "vers", "autour", "chez"}
+
+# Prépositions temporelles non ambiguës (pour obl:mod → svo_tcomp sans obl:tmod)
+TEMPORAL_PREPS_UNAMBIG = {"pendant", "durant", "depuis", "avant", "après", "lors", "dès", "jusqu"}
 
 # Suffixes déverbaux → nom_event
 DEVERBAL_SUFFIXES = (
@@ -180,8 +194,9 @@ def subtree(root: int, children: dict, by_idx: dict,
 
 def charspan(indices: list[int], by_idx: dict, sent_text: str,
              sent_offset: int) -> tuple[int, int, str]:
+    # Exclure les sous-tokens MWT sans position char (start_char=None → char_start=-1)
     toks = sorted(
-        (by_idx[i] for i in indices if i in by_idx),
+        (by_idx[i] for i in indices if i in by_idx and by_idx[i].char_start >= 0),
         key=lambda t: t.char_start,
     )
     if not toks:
@@ -246,16 +261,21 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str,
     Si require_obl=True, retourne [] si la phrase ne contient aucun oblique (obl/iobj).
     Si max_sent_tokens > 0, retourne [] si la phrase dépasse ce nombre de tokens Stanza.
     """
-    tokens = [Tok(w, sent_offset) for w in sentence.words if w.start_char is not None]
-    if not tokens:
+    # Tous les words sont inclus (y compris sous-tokens MWT avec start_char=None)
+    # pour que les relations de dépendance (case, fixed…) soient correctement tracées.
+    # Les sous-tokens sans position char ont char_start=-1 et sont exclus de charspan().
+    tokens = [Tok(w, sent_offset) for w in sentence.words]
+    # Pour les filtres de longueur et require_obl, ne compter que les tokens positionnés
+    spannable = [t for t in tokens if t.char_start >= 0]
+    if not spannable:
         return []
 
     # Filtre longueur (évite les phrases trop longues pour DeBERTa)
-    if max_sent_tokens > 0 and len(tokens) > max_sent_tokens:
+    if max_sent_tokens > 0 and len(spannable) > max_sent_tokens:
         return []
 
     # Filtre : la phrase doit contenir au moins un oblique
-    if require_obl and not any(t.deprel in IOBJ_DEPRELS for t in tokens):
+    if require_obl and not any(t.deprel in IOBJ_DEPRELS for t in spannable):
         return []
 
     sent_text = sentence.text
@@ -305,13 +325,20 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str,
             if child.deprel in SUBJ_DEPRELS:
                 arg_label = "svo_subject"
             elif child.deprel in OBJ_DEPRELS:
-                arg_label = "svo_object"
+                # xcomp d'un verbe copulatif semi-auxiliaire → attr
+                # ("Marie est devenue directrice" : devenir(root) ← xcomp ← directrice)
+                if child.deprel == "xcomp" and verb.lemma in COPULA_LEMMAS:
+                    arg_label = "attr"
+                else:
+                    arg_label = "svo_object"
             elif child.deprel in TCOMP_DEPRELS:
                 arg_label = "svo_tcomp"
             elif child.deprel in LCOMP_DEPRELS:
                 arg_label = "svo_lcomp"
-            elif child.deprel == "advcl":
-                # advcl causal : subordonnant causal parmi les enfants mark/cc
+            elif child.deprel in {"advcl", "parataxis"}:
+                # advcl/parataxis causal : subordonnant causal parmi les enfants mark/cc
+                # "parce que", "puisque", "comme" → advcl+mark
+                # "car" → souvent parataxis+cc en UD fr
                 marks = [
                     by_idx[c].lemma.lower() for c in children.get(child_idx, [])
                     if c in by_idx and by_idx[c].deprel in {"mark", "cc"}
@@ -322,15 +349,30 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str,
                     continue
             elif child.deprel in IOBJ_DEPRELS:
                 # obl avec préposition causale → svo_cause
+                # IMPORTANT : CAUSAL_PREPS contient les lemmes de la TÊTE nominale causale
+                # ("cause", "raison", "suite"…), PAS les lemmes des prépositions case.
+                # Exemple : "à cause de X" → tête de l'obl = "cause" → child.lemma = "cause"
                 case_lcs = [
                     by_idx[c].lemma.lower() for c in children.get(child_idx, [])
                     if c in by_idx and by_idx[c].deprel in {"case", "mark"}
                 ]
-                if any(p in CAUSAL_PREPS for p in case_lcs):
+                if any(p in CAUSAL_PREPS for p in case_lcs) or child.lemma.lower() in CAUSAL_PREPS:
                     arg_label = "svo_cause"
+                # svo_tcomp : préposition temporelle non ambiguë (pendant, durant, avant…)
+                elif any(p in TEMPORAL_PREPS_UNAMBIG for p in case_lcs):
+                    arg_label = "svo_tcomp"
+                # svo_tcomp : nom temporel nu sans préposition ("lundi matin", "aujourd'hui")
+                elif not case_lcs and child.lemma.lower() in TEMPORAL_ADV_LEMMAS:
+                    arg_label = "svo_tcomp"
+                # svo_lcomp : Stanza fr n'émet pas obl:lmod → détecter via préposition spatiale
+                elif child.upos in {"NOUN", "PROPN"} and any(p in LCOMP_PREPS for p in case_lcs):
+                    arg_label = "svo_lcomp"
                 else:
                     arg_label = "svo_iobj"
-            elif child.deprel in {"xcomp", "amod"} and verb.lemma in COPULA_LEMMAS:
+            elif child.deprel == "xcomp" and verb.lemma in COPULA_LEMMAS:
+                # Prédicat xcomp d'un verbe copulatif semi-auxiliaire ("sembler être président")
+                # Note : la construction copulative standard (Jean est président) est traitée
+                # par la boucle dédiée ci-dessous (tête prédicative + enfant cop).
                 arg_label = "attr"
             else:
                 continue
@@ -442,6 +484,83 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str,
                     "full_np_start":   fcs,
                     "full_np_end":     fce,
                     "full_np_text":    ftxt,
+                 })
+
+        # ── Propositions causales conjointes (X, car Y) ──────────────────────────
+        # Stanza fr parse "car" comme conj+cc (pas parataxis) :
+        #   "abandonné"(root) ← conj ← "manquaient" ← cc ← "car"
+        for conj_idx in children.get(verb.idx, []):
+            if conj_idx not in by_idx:
+                continue
+            conj_tok = by_idx[conj_idx]
+            if conj_tok.deprel != "conj":
+                continue
+            marks = [
+                by_idx[c].lemma.lower() for c in children.get(conj_idx, [])
+                if c in by_idx and by_idx[c].deprel in {"cc", "mark"}
+            ]
+            if not any(m in CAUSAL_MARKS for m in marks):
+                continue
+            if conj_tok.char_start < 0:
+                continue
+            ne_idx = head_ne_indices(conj_idx, children, by_idx)
+            cs, ce, txt = charspan(ne_idx, by_idx, sent_text, sent_offset)
+            if len(txt.strip()) < 2:
+                continue
+            spans.append({
+                "start":           cs,
+                "end":             ce,
+                "text":            txt,
+                "label":           "svo_cause",
+                "voice":           voice,
+                "head_lemma":      conj_tok.lemma,
+                "head_upos":       conj_tok.upos,
+                "verb_char_start": v_cs,
+                "verb_char_end":   v_ce,
+            })
+
+        # ── Locutions causales prépositionnelles (advmod + fixed + obl:arg) ──────
+        # Pattern Stanza fr :
+        #   "en raison du verglas"    → verb ← advmod(en) ← fixed(raison) + obl:arg(verglas)
+        #   "à cause des intempéries" → verb ← advmod(à)  ← fixed(cause)  + obl:arg(intempéries)
+        for advmod_idx in children.get(verb.idx, []):
+            if advmod_idx not in by_idx:
+                continue
+            advmod_tok = by_idx[advmod_idx]
+            if advmod_tok.deprel != "advmod":
+                continue
+            fixed_ch = [
+                by_idx[c] for c in children.get(advmod_idx, [])
+                if c in by_idx
+                and by_idx[c].deprel == "fixed"
+                and by_idx[c].lemma.lower() in CAUSAL_FIXED
+            ]
+            if not fixed_ch:
+                continue
+            cause_np_indices = [
+                c for c in children.get(advmod_idx, [])
+                if c in by_idx
+                and by_idx[c].deprel in {"obl:arg", "obl:mod", "obl", "nmod"}
+                and by_idx[c].upos in {"NOUN", "PROPN", "NUM"}
+            ]
+            for cause_idx in cause_np_indices:
+                cause_tok = by_idx[cause_idx]
+                if cause_tok.char_start < 0:
+                    continue
+                ne_idx = head_ne_indices(cause_idx, children, by_idx)
+                cs, ce, txt = charspan(ne_idx, by_idx, sent_text, sent_offset)
+                if len(txt.strip()) < 2:
+                    continue
+                spans.append({
+                    "start":           cs,
+                    "end":             ce,
+                    "text":            txt,
+                    "label":           "svo_cause",
+                    "voice":           voice,
+                    "head_lemma":      cause_tok.lemma,
+                    "head_upos":       cause_tok.upos,
+                    "verb_char_start": v_cs,
+                    "verb_char_end":   v_ce,
                 })
 
     # ── Appositions NE → rôle/titre ──────────────────────────────────────────
@@ -564,6 +683,44 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str,
             "head_upos":  tok.upos,
             "gender":     _feat(sentence.words[tok.idx - 1], "Gender"),
             "number":     _feat(sentence.words[tok.idx - 1], "Number"),
+        })
+
+    # ── Attributs du sujet (constructions copulatives UD) ──────────────────────
+    # En UD fr, "Jean est président" → "président" est ROOT, "est" est cop enfant.
+    # La boucle verbe ne peut pas détecter ce pattern (la copule n'est pas ROOT).
+    # On cherche donc directement les nœuds NOUN/ADJ/PROPN/NUM qui ont un enfant cop.
+    for tok in tokens:
+        if tok.upos not in {"NOUN", "ADJ", "PROPN", "NUM"}:
+            continue
+        cop_ch = [
+            by_idx[c] for c in children.get(tok.idx, [])
+            if c in by_idx
+            and by_idx[c].deprel == "cop"
+            and by_idx[c].lemma in COPULA_LEMMAS
+        ]
+        if not cop_ch:
+            continue
+        if tok.char_start < 0:
+            continue
+        attr_indices = subtree(tok.idx, children, by_idx, exclude=EXCLUDE_FROM_NP)
+        acs, ace, atxt = charspan(attr_indices, by_idx, sent_text, sent_offset)
+        if len(atxt.strip()) < 2:
+            continue
+        cop = cop_ch[0]
+        is_pass = any(
+            by_idx[c].deprel == "nsubj:pass"
+            for c in children.get(tok.idx, [])
+            if c in by_idx
+        )
+        spans.append({
+            "start":      acs,
+            "end":        ace,
+            "text":       atxt,
+            "label":      "attr",
+            "head_lemma": tok.lemma,
+            "head_upos":  tok.upos,
+            "cop_lemma":  cop.lemma,
+            "voice":      "PASSIVE" if is_pass else "ACTIVE",
         })
 
     # ── Pronoms démonstratifs (pron_dem) ────────────────────────────────────
