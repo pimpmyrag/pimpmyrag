@@ -1002,6 +1002,9 @@ def main():
 
     # Reprise éventuelle depuis checkpoint
     if args.resume is not None:
+        if not os.path.exists(args.resume):
+            print(f"⚠️  Checkpoint '{args.resume}' introuvable — démarrage à froid (pas de reprise)")
+            args.resume = None
         print(f"⤴️ Reprise depuis checkpoint: {args.resume}")
         ckpt = torch.load(args.resume, map_location=device)
         model.load_state_dict(ckpt["model_state"])
