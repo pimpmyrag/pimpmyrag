@@ -19,6 +19,25 @@ else
     fi
 fi
 
+# ── Vérification version PyTorch (CVE-2025-32434) ────────
+# transformers récent bloque torch.load() si torch < 2.6
+TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "0.0")
+TORCH_MAJOR=$(echo "$TORCH_VERSION" | cut -d. -f1)
+TORCH_MINOR=$(echo "$TORCH_VERSION" | cut -d. -f2 | cut -d+ -f1 | cut -da -f1)
+if [ "$TORCH_MAJOR" -lt 2 ] || { [ "$TORCH_MAJOR" -eq 2 ] && [ "$TORCH_MINOR" -lt 6 ]; }; then
+    echo "⚠️  PyTorch $TORCH_VERSION détecté — upgrade vers >=2.6 requis (CVE-2025-32434)"
+    # Détecte la version CUDA pour choisir le bon wheel
+    CUDA_VER=$(python3 -c "import torch; v=torch.version.cuda; print(v.replace('.','') if v else '121')" 2>/dev/null || echo "121")
+    # Normalise : "12.4" → "124", déjà "121" → "121"
+    CUDA_SHORT=$(echo "$CUDA_VER" | sed 's/\.//')
+    echo "   → pip install torch>=2.6.0 --index-url https://download.pytorch.org/whl/cu${CUDA_SHORT}"
+    pip install -q "torch>=2.6.0" --index-url "https://download.pytorch.org/whl/cu${CUDA_SHORT}" \
+        || pip install -q "torch>=2.6.0"  # fallback CPU si wheel CUDA indispo
+    echo "✅ PyTorch $(python3 -c 'import torch; print(torch.__version__)')"
+else
+    echo "✅ PyTorch $TORCH_VERSION >= 2.6 — OK"
+fi
+
 # ── Détection device & batch size ────────────────────────
 if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     DEVICE="cuda"
