@@ -128,8 +128,7 @@ def build_gold_candidates(row, tokenizer):
                     sp.get("pron_person") or sp.get("person"),
                     PERSON_NONE_ID
                 ),
-                "gov_verb_tok_start": gov_verb_tok_start,   # -1 = non supervisé
-                "neg_type":           "svo_gold",
+                "gov_verb_tok_start": gov_verb_tok_start,   # -1 = non supervisé                "neg_type":           "svo_gold",
                 "sample_weight":      1.0,
                 "text":               sp.get("text", text[start:end]),
             }

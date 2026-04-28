@@ -81,8 +81,8 @@ class MultiTaskSpanDataset(Dataset):
                 "gender_label_id":    c.get("gender_label_id", GENDER_NONE_ID),
                 "number_label_id":    c.get("number_label_id", NUMBER_NONE_ID),
                 "person_label_id":    c.get("person_label_id", PERSON_NONE_ID),
-                # +1 décalage CLS ; -1 = non supervisé (verbe lui-même ou NER/négatif)
-                "gov_verb_tok_start": (c["gov_verb_tok_start"] + 1)
+                # +1 décalage CLS ; -1 = non supervisé ; clamp à max_length-1 (bornes DeBERTa)
+                "gov_verb_tok_start": min(c["gov_verb_tok_start"] + 1, self.max_length - 1)
                                       if c.get("gov_verb_tok_start", -1) >= 0 else -1,
                 "sample_weight":      c.get("sample_weight", 1.0),
                 "neg_type":           c.get("neg_type", "unknown"),

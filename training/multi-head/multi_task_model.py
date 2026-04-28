@@ -284,7 +284,12 @@ class SpanMultiTaskModel(nn.Module):
             loss_person = torch.tensor(0.0, device=device)
 
         # ── 8) Verb pointer (arguments SVO uniquement, gov_verb_labels >= 0) ──
-        ptr_mask = (gov_verb_labels >= 0) & (svo_labels < svo_logits.size(-1))
+        seq_len = vptr_logits.size(1)
+        ptr_mask = (
+            (gov_verb_labels >= 0)
+            & (gov_verb_labels < seq_len)      # hors bornes si verbe proche de max_length
+            & (svo_labels < svo_logits.size(-1))
+        )
         if ptr_mask.any() and vptr_logits.size(0) > 0:
             # vptr_logits[ptr_mask] : [K, seq_len]
             # gov_verb_labels[ptr_mask] : [K] — index du token verbe gouverneur
