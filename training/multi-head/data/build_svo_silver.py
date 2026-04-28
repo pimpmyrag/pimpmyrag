@@ -13,9 +13,17 @@ Labels produits
   svo_verb      – verbe principal + ses auxiliaires (span char-level)
   svo_subject   – sujet grammatical (NP, sans relative enchâssée)
   svo_object    – objet direct
-  svo_iobj      – objet indirect / oblique
+  svo_iobj      – objet indirect / oblique prépositionnel (avec case explicite)
+  svo_tcomp     – complément circonstanciel de temps (obl:tmod + advmod temporels)
+  svo_lcomp     – complément circonstanciel de lieu (obl:lmod)
+  svo_cause     – proposition/GN causal (advcl causal + obl causal)
+  attr          – attribut du sujet (prédicat copulatif : "est président")
+  nom_event     – NOUN déverbal avec argument propre ("l'arrestation de X")
+  ent_appos     – apposition NE→rôle/titre ("Macron, président de…")
+  neg           – marqueur de négation (portée sur le verbe gouverneur)
   pron_subj     – pronom sujet   (avec features : person, number, gender)
   pron_obj      – pronom objet
+  pron_dem      – pronom démonstratif ("celui-ci", "cela", "ça")
 
 Métadonnées par span
 ────────────────────
@@ -58,7 +66,46 @@ SUBJ_DEPRELS  = {"nsubj", "nsubj:pass", "csubj", "csubj:pass"}
 OBJ_DEPRELS   = {"obj", "ccomp", "xcomp"}
 # Stanza fr utilise obl:mod / obl:arg / obl:agent — pas "obl" nu
 IOBJ_DEPRELS  = {"iobj", "obl", "obl:mod", "obl:arg", "obl:agent", "obl:comp"}
+TCOMP_DEPRELS = {"obl:tmod"}   # CC de temps UD (sans préposition obligatoire)
+LCOMP_DEPRELS = {"obl:lmod"}   # CC de lieu UD
 AUX_DEPRELS   = {"aux", "aux:pass", "cop"}
+COPULA_LEMMAS = {"être", "devenir", "rester", "sembler", "paraître", "demeurer"}
+
+# Prépositions temporelles (filtre svo_tcomp vs svo_lcomp quand obl:mod ambigu)
+TEMPORAL_PREPS = {"pendant", "durant", "depuis", "avant", "après", "lors", "dès",
+                  "jusqu", "jusque", "en", "au cours", "à partir"}
+SPATIAL_PREPS  = {"à", "en", "dans", "sur", "sous", "devant", "derrière", "entre",
+                  "près", "loin", "autour", "vers", "chez", "par"}
+
+# Adverbes temporels (advmod → svo_tcomp)
+TEMPORAL_ADV_LEMMAS = {
+    "hier", "demain", "aujourd'hui", "maintenant", "alors", "ensuite", "auparavant",
+    "bientôt", "tôt", "tard", "récemment", "prochainement", "jadis", "naguère",
+    "autrefois", "dorénavant", "désormais", "simultanément", "ultérieurement",
+    "antérieurement", "quotidiennement", "hebdomadairement", "annuellement",
+    "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche",
+    "janvier", "février", "mars", "avril", "mai", "juin",
+    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+}
+
+# Subordinateurs causaux (advcl → svo_cause)
+CAUSAL_MARKS = {
+    "car", "parce", "puisque", "comme", "vu", "étant", "considérant",
+    "attendu", "sous", "grâce", "suite", "raison", "cause",
+}
+
+# Prépositions causales (obl → svo_cause) — tête de la préposition case
+CAUSAL_PREPS = {"cause", "raison", "suite", "faute", "grâce", "égard"}
+
+# Suffixes déverbaux → nom_event
+DEVERBAL_SUFFIXES = (
+    "tion", "sion", "ation", "ition", "ment", "ement", "issement",
+    "age", "ure", "ance", "ence", "ade", "ise", "ée",
+)
+
+# Dépendances qui qualifient un NOUN comme porteur d'argument propre (nom_event)
+NOM_EVENT_ARG_DEPRELS = {"nsubj", "nsubj:pass", "obj", "nmod", "obl", "obl:mod",
+                         "obl:arg", "obl:tmod", "obl:lmod"}
 
 # Sous-arbres exclus du span NP pour éviter les relatives longues
 EXCLUDE_FROM_NP = {"relcl", "acl", "advcl", "ccomp", "xcomp", "parataxis"}
@@ -259,8 +306,32 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str,
                 arg_label = "svo_subject"
             elif child.deprel in OBJ_DEPRELS:
                 arg_label = "svo_object"
+            elif child.deprel in TCOMP_DEPRELS:
+                arg_label = "svo_tcomp"
+            elif child.deprel in LCOMP_DEPRELS:
+                arg_label = "svo_lcomp"
+            elif child.deprel == "advcl":
+                # advcl causal : subordonnant causal parmi les enfants mark/cc
+                marks = [
+                    by_idx[c].lemma.lower() for c in children.get(child_idx, [])
+                    if c in by_idx and by_idx[c].deprel in {"mark", "cc"}
+                ]
+                if any(m in CAUSAL_MARKS for m in marks):
+                    arg_label = "svo_cause"
+                else:
+                    continue
             elif child.deprel in IOBJ_DEPRELS:
-                arg_label = "svo_iobj"
+                # obl avec préposition causale → svo_cause
+                case_lcs = [
+                    by_idx[c].lemma.lower() for c in children.get(child_idx, [])
+                    if c in by_idx and by_idx[c].deprel in {"case", "mark"}
+                ]
+                if any(p in CAUSAL_PREPS for p in case_lcs):
+                    arg_label = "svo_cause"
+                else:
+                    arg_label = "svo_iobj"
+            elif child.deprel in {"xcomp", "amod"} and verb.lemma in COPULA_LEMMAS:
+                arg_label = "attr"
             else:
                 continue
 
@@ -292,14 +363,46 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str,
                     if head_lc in FR_PERS_PRONOUNS:
                         continue
                     ne_idx = iobj_indices_with_case(cj_idx, children, by_idx)
+                elif arg_label == "svo_tcomp":
+                    # CC de temps : préposition optionnelle (obl:tmod peut être nu)
+                    # ── Filtre 1 : tête doit être NOUN / PROPN / NUM / ADV ─────────────
+                    if cj.upos not in {"NOUN", "PROPN", "NUM", "ADV"}:
+                        continue
+                    head_lc = cj.text.strip().lower().rstrip("'")
+                    if head_lc in FR_PERS_PRONOUNS:
+                        continue
+                    # Inclure la préposition si présente, sinon juste la tête NE
+                    case_children = [
+                        c for c in children.get(cj_idx, [])
+                        if c in by_idx and by_idx[c].deprel in {"case", "mark"}
+                    ]
+                    if case_children:
+                        ne_idx = iobj_indices_with_case(cj_idx, children, by_idx)
+                    else:
+                        ne_idx = head_ne_indices(cj_idx, children, by_idx)
+                elif arg_label == "svo_lcomp":
+                    # CC de lieu : même logique que tcomp
+                    if cj.upos not in {"NOUN", "PROPN", "NUM", "ADV"}:
+                        continue
+                    head_lc = cj.text.strip().lower().rstrip("'")
+                    if head_lc in FR_PERS_PRONOUNS:
+                        continue
+                    case_children = [
+                        c for c in children.get(cj_idx, [])
+                        if c in by_idx and by_idx[c].deprel in {"case", "mark"}
+                    ]
+                    if case_children:
+                        ne_idx = iobj_indices_with_case(cj_idx, children, by_idx)
+                    else:
+                        ne_idx = head_ne_indices(cj_idx, children, by_idx)
                 else:
                     ne_idx = head_ne_indices(cj_idx, children, by_idx)
                 cs, ce, txt = charspan(ne_idx, by_idx, sent_text, sent_offset)
                 if len(txt.strip()) < 1:
                     continue
 
-                # Filtrer svo_iobj : vérifications complémentaires sur le span complet
-                if arg_label == "svo_iobj":
+                # Filtrer les obliques : vérifications sur le span complet
+                if arg_label in {"svo_iobj", "svo_tcomp", "svo_lcomp", "svo_cause"}:
                     import re as _re
                     txt_lc = txt.strip().lower().rstrip("'")
                     # Longueur minimale + au moins une lettre + pas un mot de bruit
@@ -327,16 +430,174 @@ def extract_sentence(sentence, sent_offset: int, orig_text: str,
                     "voice":           voice,
                     "head_lemma":      cj.lemma,
                     "head_upos":       cj.upos,
+                    # Position du verbe gouverneur (pour le pointer head)
+                    "verb_char_start": v_cs,
+                    "verb_char_end":   v_ce,
                     # Morphologie (coréf)
-                    "gender":          _feat(cj_word, "Gender"),    # Masc | Fem | null
-                    "number":          _feat(cj_word, "Number"),    # Sing | Plur | null
-                    "person":          _feat(cj_word, "Person"),    # 1 | 2 | 3 | null
-                    "animacy":         _feat(cj_word, "Animacy"),   # Anim | Inan | null
-                    "definiteness":    _feat(cj_word, "Definite"),  # Def | Ind | null
-                    "full_np_start":   fcs,   # GN complet conservé en métadonnée
+                    "gender":          _feat(cj_word, "Gender"),
+                    "number":          _feat(cj_word, "Number"),
+                    "person":          _feat(cj_word, "Person"),
+                    "animacy":         _feat(cj_word, "Animacy"),
+                    "definiteness":    _feat(cj_word, "Definite"),
+                    "full_np_start":   fcs,
                     "full_np_end":     fce,
                     "full_np_text":    ftxt,
                 })
+
+    # ── Appositions NE → rôle/titre ──────────────────────────────────────────
+    # "Macron, président de la République" → ent_appos sur "président de la République"
+    for tok in tokens:
+        if tok.deprel != "appos":
+            continue
+        if tok.upos not in {"NOUN", "PROPN"}:
+            continue
+        # La tête de l'apposition doit elle-même être NOUN/PROPN (NE)
+        if tok.head not in by_idx:
+            continue
+        head_tok = by_idx[tok.head]
+        if head_tok.upos not in {"NOUN", "PROPN"}:
+            continue
+        # Span : sous-arbre de l'apposition sans relative ni advcl
+        appos_idx = subtree(tok.idx, children, by_idx, exclude=EXCLUDE_FROM_NP)
+        acs, ace, atxt = charspan(appos_idx, by_idx, sent_text, sent_offset)
+        if len(atxt.strip()) < 2:
+            continue
+        spans.append({
+            "start":      acs,
+            "end":        ace,
+            "text":       atxt,
+            "label":      "ent_appos",
+            "head_lemma": tok.lemma,
+            "head_upos":  tok.upos,
+            # Entité tête à laquelle se rattache l'apposition
+            "appos_head_start": head_tok.char_start,
+            "appos_head_end":   head_tok.char_end,
+            "appos_head_text":  head_tok.text,
+        })
+
+    # ── Marqueurs de négation ─────────────────────────────────────────────────
+    # Portée : sur le verbe gouverneur (head)
+    for tok in tokens:
+        if tok.deprel != "advmod":
+            continue
+        # Stanza fr : Polarity=Neg sur "ne", "pas", "jamais", "plus", "rien", "jamais"…
+        polarity = _feat(sentence.words[tok.idx - 1], "Polarity")
+        if polarity != "Neg":
+            # Fallback : liste fermée pour les cas non annotés par Stanza
+            if tok.lemma.lower() not in {"ne", "pas", "jamais", "plus", "rien",
+                                         "guère", "nullement", "aucunement"}:
+                continue
+        if tok.char_start < 0:
+            continue
+        gov_lemma, gov_upos = None, None
+        if tok.head in by_idx:
+            gov = by_idx[tok.head]
+            gov_lemma = gov.lemma
+            gov_upos  = gov.upos
+        spans.append({
+            "start":      tok.char_start,
+            "end":        tok.char_end,
+            "text":       tok.text,
+            "label":      "neg",
+            "head_lemma": tok.lemma,
+            "head_upos":  tok.upos,
+            "gov_lemma":  gov_lemma,   # verbe nié
+            "gov_upos":   gov_upos,
+        })
+
+    # ── Adverbes temporels (advmod → svo_tcomp) ─────────────────────────────
+    # "hier", "demain", "lundi"… non couverts par obl:tmod
+    for tok in tokens:
+        if tok.deprel != "advmod":
+            continue
+        if tok.upos not in {"ADV", "NOUN", "PROPN"}:
+            continue
+        if tok.lemma.lower() not in TEMPORAL_ADV_LEMMAS and tok.text.lower() not in TEMPORAL_ADV_LEMMAS:
+            continue
+        if tok.char_start < 0:
+            continue
+        gov_lemma, gov_upos = None, None
+        if tok.head in by_idx:
+            gov = by_idx[tok.head]
+            gov_lemma = gov.lemma
+            gov_upos  = gov.upos
+        spans.append({
+            "start":      tok.char_start,
+            "end":        tok.char_end,
+            "text":       tok.text,
+            "label":      "svo_tcomp",
+            "head_lemma": tok.lemma,
+            "head_upos":  tok.upos,
+            "gov_lemma":  gov_lemma,
+            "gov_upos":   gov_upos,
+        })
+
+    # ── Nominalisations d'événements (nom_event) ──────────────────────────────
+    # NOUN déverbal (suffixe) qui porte lui-même un argument syntaxique
+    # Ex : "l'arrestation de X", "l'élection du président"
+    for tok in tokens:
+        if tok.upos != "NOUN":
+            continue
+        lemma_lc = tok.lemma.lower()
+        if not any(lemma_lc.endswith(suf) for suf in DEVERBAL_SUFFIXES):
+            continue
+        # Le nom doit avoir au moins un enfant argumental
+        arg_children = [
+            c for c in children.get(tok.idx, [])
+            if c in by_idx and by_idx[c].deprel in NOM_EVENT_ARG_DEPRELS
+        ]
+        if not arg_children:
+            continue
+        if tok.char_start < 0:
+            continue
+        # Span : tête NE uniquement (sans le GN complet)
+        ne_idx = head_ne_indices(tok.idx, children, by_idx)
+        cs, ce, txt = charspan(ne_idx, by_idx, sent_text, sent_offset)
+        if len(txt.strip()) < 3:
+            continue
+        spans.append({
+            "start":      cs,
+            "end":        ce,
+            "text":       txt,
+            "label":      "nom_event",
+            "head_lemma": tok.lemma,
+            "head_upos":  tok.upos,
+            "gender":     _feat(sentence.words[tok.idx - 1], "Gender"),
+            "number":     _feat(sentence.words[tok.idx - 1], "Number"),
+        })
+
+    # ── Pronoms démonstratifs (pron_dem) ────────────────────────────────────
+    # "celui-ci", "celle-là", "cela", "ça", "ce", "ceci"
+    for tok in tokens:
+        if tok.upos != "PRON":
+            continue
+        pron_type = _feat(sentence.words[tok.idx - 1], "PronType")
+        if pron_type != "Dem":
+            continue
+        if tok.char_start < 0:
+            continue
+        person = _feat(sentence.words[tok.idx - 1], "Person")
+        number = _feat(sentence.words[tok.idx - 1], "Number")
+        gender = _feat(sentence.words[tok.idx - 1], "Gender")
+        gov_lemma, gov_upos = None, None
+        if tok.head in by_idx:
+            gov = by_idx[tok.head]
+            gov_lemma = gov.lemma
+            gov_upos  = gov.upos
+        spans.append({
+            "start":       tok.char_start,
+            "end":         tok.char_end,
+            "text":        tok.text,
+            "label":       "pron_dem",
+            "head_lemma":  tok.lemma,
+            "head_upos":   tok.upos,
+            "deprel":      tok.deprel,
+            "pron_person": person,
+            "pron_number": number,
+            "pron_gender": gender,
+            "gov_lemma":   gov_lemma,
+            "gov_upos":    gov_upos,
+        })
 
     # ── Pronoms personnels (avec features morpho) ─────────────────────────────
     for tok in tokens:

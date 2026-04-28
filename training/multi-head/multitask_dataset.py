@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset
 
-from labels import SVO_NONE_ID, VOICE_NONE_ID, GENDER_NONE_ID, NUMBER_NONE_ID
+from labels import SVO_NONE_ID, VOICE_NONE_ID, GENDER_NONE_ID, NUMBER_NONE_ID, PERSON_NONE_ID
 
 
 class MultiTaskSpanDataset(Dataset):
@@ -70,19 +70,22 @@ class MultiTaskSpanDataset(Dataset):
                 continue
 
             candidates.append({
-                # décalage +1 à cause du token spécial initial
-                "tok_start": ts + 1,
-                "tok_end": te + 1,
-                "boundary_label": c["boundary_label"],
+                "tok_start":          ts + 1,
+                "tok_end":            te + 1,
+                "boundary_label":     c["boundary_label"],
                 "svo_boundary_label": c.get("svo_boundary_label", 0),
-                "coarse_label_id": c["coarse_label_id"],
-                "fine_label_id": c["fine_label_id"],
-                "svo_label_id": c.get("svo_label_id", SVO_NONE_ID),
-                "voice_label_id": c.get("voice_label_id", VOICE_NONE_ID),
-                "gender_label_id": c.get("gender_label_id", GENDER_NONE_ID),
-                "number_label_id": c.get("number_label_id", NUMBER_NONE_ID),
-                "sample_weight": c.get("sample_weight", 1.0),
-                "neg_type": c.get("neg_type", "unknown"),
+                "coarse_label_id":    c["coarse_label_id"],
+                "fine_label_id":      c["fine_label_id"],
+                "svo_label_id":       c.get("svo_label_id", SVO_NONE_ID),
+                "voice_label_id":     c.get("voice_label_id", VOICE_NONE_ID),
+                "gender_label_id":    c.get("gender_label_id", GENDER_NONE_ID),
+                "number_label_id":    c.get("number_label_id", NUMBER_NONE_ID),
+                "person_label_id":    c.get("person_label_id", PERSON_NONE_ID),
+                # +1 décalage CLS ; -1 = non supervisé (verbe lui-même ou NER/négatif)
+                "gov_verb_tok_start": (c["gov_verb_tok_start"] + 1)
+                                      if c.get("gov_verb_tok_start", -1) >= 0 else -1,
+                "sample_weight":      c.get("sample_weight", 1.0),
+                "neg_type":           c.get("neg_type", "unknown"),
             })
 
         return {
@@ -112,6 +115,8 @@ def make_collate_fn(tokenizer):
         voice_labels = []
         gender_labels = []
         number_labels = []
+        person_labels = []
+        gov_verb_labels = []
         sample_weights = []
 
         ids = []
@@ -152,6 +157,8 @@ def make_collate_fn(tokenizer):
                 voice_labels.append(c["voice_label_id"])
                 gender_labels.append(c["gender_label_id"])
                 number_labels.append(c["number_label_id"])
+                person_labels.append(c["person_label_id"])
+                gov_verb_labels.append(c["gov_verb_tok_start"])
                 sample_weights.append(c["sample_weight"])
 
             spans.append(sample_spans)
@@ -169,7 +176,9 @@ def make_collate_fn(tokenizer):
             "voice_labels": torch.tensor(voice_labels, dtype=torch.long),
             "gender_labels": torch.tensor(gender_labels, dtype=torch.long),
             "number_labels": torch.tensor(number_labels, dtype=torch.long),
-            "sample_weights": torch.tensor(sample_weights, dtype=torch.float32),
+            "person_labels":    torch.tensor(person_labels, dtype=torch.long),
+            "gov_verb_labels":  torch.tensor(gov_verb_labels, dtype=torch.long),
+            "sample_weights":   torch.tensor(sample_weights, dtype=torch.float32),
             "invalid_candidate_count": invalid_candidate_count,
         }
 

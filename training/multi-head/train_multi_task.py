@@ -16,7 +16,7 @@ from sklearn.metrics import f1_score, classification_report
 
 from multitask_dataset import MultiTaskSpanDataset, make_collate_fn
 from multitask_model import SpanMultiTaskModel
-from labels import COARSE_LABELS, FINE_LABELS, SVO_LABELS, NUM_SVO, NUM_VOICE, NUM_GENDER, NUM_NUMBER
+from labels import COARSE_LABELS, FINE_LABELS, SVO_LABELS, NUM_SVO, NUM_VOICE, NUM_GENDER, NUM_NUMBER, NUM_PERSON, PERSON_LABELS
 
 # ──────────────────────────────────────────────────────────
 #  Inline Hard Negative Mining — constantes
@@ -79,6 +79,12 @@ def get_layerwise_param_groups(model, base_lr: float, head_lr: float, decay: flo
         + list(model.coarse_head.parameters())
         + list(model.fine_head.parameters())
         + list(model.width_emb.parameters())
+        + list(model.svo_head.parameters())
+        + list(model.svo_boundary_head.parameters())
+        + list(model.voice_head.parameters())
+        + list(model.gender_head.parameters())
+        + list(model.number_head.parameters())
+        + list(model.person_head.parameters())
     )
     seen = {id(p) for p in head_params}
     param_groups = [{"params": head_params, "lr": head_lr, "name": "heads"}]
@@ -207,6 +213,7 @@ def run_epoch(
         lambda_svo=1.0,
         lambda_voice=0.5,
         lambda_morpho=0.3,
+        lambda_verb_ptr=0.5,
         lambda_compat=0.0,
         accum_steps=1,
         log_every=50,
@@ -311,6 +318,7 @@ def run_epoch(
     # morpho positive-only (spans SVO actifs)
     all_gender_true, all_gender_pred = [], []
     all_number_true, all_number_pred = [], []
+    all_person_true, all_person_pred = [], []
 
     # inline HN mining : id → list[(err_type|None, pred_coarse, pred_fine)]
     hn_results_by_id: dict[str, list] = {} if collect_hn else None
@@ -337,6 +345,8 @@ def run_epoch(
         voice_labels = batch["voice_labels"].to(device)
         gender_labels = batch["gender_labels"].to(device)
         number_labels = batch["number_labels"].to(device)
+        person_labels = batch["person_labels"].to(device)
+        gov_verb_labels = batch["gov_verb_labels"].to(device)
         sample_weights = batch["sample_weights"].to(device)
 
         # Sanity check avant forward
@@ -351,6 +361,8 @@ def run_epoch(
                 == voice_labels.size(0)
                 == gender_labels.size(0)
                 == number_labels.size(0)
+                == person_labels.size(0)
+                == gov_verb_labels.size(0)
                 == sample_weights.size(0)
         ):
             raise ValueError(
@@ -382,6 +394,8 @@ def run_epoch(
                 voice_labels_loss = voice_labels[si]
                 gender_labels_loss = gender_labels[si]
                 number_labels_loss = number_labels[si]
+                person_labels_loss = person_labels[si]
+                gov_verb_labels_loss = gov_verb_labels[si]
                 sample_weights_loss = sample_weights[si]
             else:
                 boundary_labels_loss = boundary_labels
@@ -392,6 +406,8 @@ def run_epoch(
                 voice_labels_loss = voice_labels
                 gender_labels_loss = gender_labels
                 number_labels_loss = number_labels
+                person_labels_loss = person_labels
+                gov_verb_labels_loss = gov_verb_labels
                 sample_weights_loss = sample_weights
 
             # Sanity check après forward / avant loss
@@ -423,6 +439,8 @@ def run_epoch(
                 voice_labels=voice_labels_loss,
                 gender_labels=gender_labels_loss,
                 number_labels=number_labels_loss,
+                person_labels=person_labels_loss,
+                gov_verb_labels=gov_verb_labels_loss,
                 sample_weights=sample_weights_loss,
                 boundary_class_weights=boundary_class_weights,
                 coarse_class_weights=coarse_class_weights,
@@ -433,6 +451,7 @@ def run_epoch(
                 lambda_svo=lambda_svo,
                 lambda_voice=lambda_voice,
                 lambda_morpho=lambda_morpho,
+                lambda_verb_ptr=lambda_verb_ptr,
                 focal_gamma=focal_gamma,
             )
 
@@ -485,6 +504,7 @@ def run_epoch(
             voice_true = voice_labels.detach().cpu()[si_cpu].tolist()
             gender_true = gender_labels.detach().cpu()[si_cpu].tolist()
             number_true = number_labels.detach().cpu()[si_cpu].tolist()
+            person_true = person_labels.detach().cpu()[si_cpu].tolist()
         else:
             b_true = boundary_labels.detach().cpu().tolist()
             c_true = coarse_labels.detach().cpu().tolist()
@@ -494,11 +514,13 @@ def run_epoch(
             voice_true = voice_labels.detach().cpu().tolist()
             gender_true = gender_labels.detach().cpu().tolist()
             number_true = number_labels.detach().cpu().tolist()
+            person_true = person_labels.detach().cpu().tolist()
 
         svo_pred_raw = outputs["svo_logits"].argmax(dim=-1).detach().cpu().tolist()
         voice_pred_raw = outputs["voice_logits"].argmax(dim=-1).detach().cpu().tolist()
         gender_pred_raw = outputs["gender_logits"].argmax(dim=-1).detach().cpu().tolist()
         number_pred_raw = outputs["number_logits"].argmax(dim=-1).detach().cpu().tolist()
+        person_pred_raw = outputs["person_logits"].argmax(dim=-1).detach().cpu().tolist()
 
         # Accumulate boundary / coarse
         all_b_true.extend(b_true)
@@ -534,7 +556,11 @@ def run_epoch(
                 all_voice_true.append(vt)
                 all_voice_pred.append(vp)
         # Morpho : sur spans SVO actifs uniquement
-        for svot, gt, gp, nt, np_ in zip(svo_true, gender_true, gender_pred_raw, number_true, number_pred_raw):
+        for svot, gt, gp, nt, np_, pt, pp in zip(
+            svo_true, gender_true, gender_pred_raw,
+            number_true, number_pred_raw,
+            person_true, person_pred_raw
+        ):
             if svot < NUM_SVO:
                 if gt < NUM_GENDER:
                     all_gender_true.append(gt)
@@ -542,6 +568,9 @@ def run_epoch(
                 if nt < NUM_NUMBER:
                     all_number_true.append(nt)
                     all_number_pred.append(np_)
+                if pt < NUM_PERSON:
+                    all_person_true.append(pt)
+                    all_person_pred.append(pp)
 
         # ── Inline HN mining : collecter erreurs par candidat ────────────────
         if collect_hn:
@@ -631,6 +660,11 @@ def run_epoch(
             all_number_pred,
             labels=list(range(NUM_NUMBER - 1))  # excl. NONE
         ) if all_number_true else 0.0,
+        "person_macro_f1": safe_macro_f1_local(
+            all_person_true,
+            all_person_pred,
+            labels=list(range(NUM_PERSON - 1))  # excl. NONE
+        ) if all_person_true else 0.0,
         "boundary_report": classification_report(
             all_b_true,
             all_b_pred,
@@ -761,7 +795,9 @@ def main():
     parser.add_argument("--lambda-svo-boundary", type=float, default=1.0,
                         help="Pondération de la loss svo_boundary (détection verbes/pronoms, défaut=1.0)")
     parser.add_argument("--lambda-morpho", type=float, default=0.3,
-                        help="Pondération de la loss morpho gender+number (défaut=0.3)")
+                        help="Pondération de la loss morpho gender+number+person (défaut=0.3)")
+    parser.add_argument("--lambda-verb-ptr", type=float, default=0.5,
+                        help="Pondération de la loss verb-pointer arg→verb (défaut=0.5)")
     parser.add_argument("--lambda-compat", type=float, default=0.2)
     parser.add_argument("--focal-gamma", type=float, default=0.0,
                         help="Focal loss gamma pour boundary (0=CE, 2.0=focal)")
@@ -1014,6 +1050,7 @@ def main():
             lambda_svo=args.lambda_svo,
             lambda_voice=args.lambda_voice,
             lambda_morpho=args.lambda_morpho,
+            lambda_verb_ptr=args.lambda_verb_ptr,
             lambda_compat=args.lambda_compat,
             accum_steps=args.accum_steps,
             log_every=args.log_every,
@@ -1056,6 +1093,7 @@ def main():
             lambda_svo=args.lambda_svo,
             lambda_voice=args.lambda_voice,
             lambda_morpho=args.lambda_morpho,
+            lambda_verb_ptr=args.lambda_verb_ptr,
             lambda_compat=args.lambda_compat,
             accum_steps=args.accum_steps,
             log_every=args.log_every,
@@ -1084,7 +1122,8 @@ def main():
             f"SVO F1={train_metrics['svo_macro_f1']:.4f} | "
             f"Voice F1={train_metrics['voice_macro_f1']:.4f} | "
             f"Gender F1={train_metrics['gender_macro_f1']:.4f} | "
-            f"Number F1={train_metrics['number_macro_f1']:.4f}"
+            f"Number F1={train_metrics['number_macro_f1']:.4f} | "
+            f"Person F1={train_metrics['person_macro_f1']:.4f}"
         )
         print(
             f"Val   loss={val_metrics['loss']:.4f} | "
@@ -1095,6 +1134,7 @@ def main():
             f"Voice F1={val_metrics['voice_macro_f1']:.4f} | "
             f"Gender F1={val_metrics['gender_macro_f1']:.4f} | "
             f"Number F1={val_metrics['number_macro_f1']:.4f} | "
+            f"Person F1={val_metrics['person_macro_f1']:.4f} | "
             f"Score={score:.4f}"
         )
 
@@ -1107,7 +1147,7 @@ def main():
         print("[VAL svo]")
         print(val_metrics["svo_report"])
         if val_metrics.get("gender_macro_f1", 0) > 0:
-            print(f"[VAL morpho]  Gender F1={val_metrics['gender_macro_f1']:.4f}  Number F1={val_metrics['number_macro_f1']:.4f}")
+            print(f"[VAL morpho]  Gender F1={val_metrics['gender_macro_f1']:.4f}  Number F1={val_metrics['number_macro_f1']:.4f}  Person F1={val_metrics['person_macro_f1']:.4f}")
 
         torch.save({
             "epoch": epoch,
@@ -1160,6 +1200,7 @@ def main():
         lambda_svo=args.lambda_svo,
         lambda_voice=args.lambda_voice,
         lambda_morpho=args.lambda_morpho,
+        lambda_verb_ptr=args.lambda_verb_ptr,
         lambda_compat=args.lambda_compat,
         accum_steps=args.accum_steps,
         log_every=args.log_every,
@@ -1175,6 +1216,7 @@ def main():
     print(f"Voice    F1={test_metrics['voice_macro_f1']:.4f}")
     print(f"Gender   F1={test_metrics['gender_macro_f1']:.4f}")
     print(f"Number   F1={test_metrics['number_macro_f1']:.4f}")
+    print(f"Person   F1={test_metrics['person_macro_f1']:.4f}")
 
     print("\n[TEST boundary]")
     print(test_metrics["boundary_report"])
@@ -1185,7 +1227,7 @@ def main():
     print("[TEST svo]")
     print(test_metrics["svo_report"])
     if test_metrics.get("gender_macro_f1", 0) > 0:
-        print(f"[TEST morpho]  Gender F1={test_metrics['gender_macro_f1']:.4f}  Number F1={test_metrics['number_macro_f1']:.4f}")
+        print(f"[TEST morpho]  Gender F1={test_metrics['gender_macro_f1']:.4f}  Number F1={test_metrics['number_macro_f1']:.4f}  Person F1={test_metrics['person_macro_f1']:.4f}")
 
 
 if __name__ == "__main__":

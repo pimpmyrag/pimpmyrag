@@ -162,9 +162,17 @@ SVO_LABELS = [
     "svo_verb",      # 0  verbe principal (+ aux)
     "svo_subject",   # 1  sujet grammatical (NP)
     "svo_object",    # 2  objet direct
-    "svo_iobj",      # 3  objet indirect / oblique
-    "pron_subj",     # 4  pronom sujet
-    "pron_obj",      # 5  pronom objet
+    "svo_iobj",      # 3  objet indirect / oblique prép.
+    "svo_tcomp",     # 4  CC de temps
+    "svo_lcomp",     # 5  CC de lieu
+    "svo_cause",     # 6  proposition / GN causal
+    "attr",          # 7  attribut du sujet (copule)
+    "nom_event",     # 8  NOUN déverbal avec argument ("l'arrestation de X")
+    "ent_appos",     # 9  apposition NE → rôle/titre
+    "pron_subj",     # 10 pronom sujet
+    "pron_obj",      # 11 pronom objet
+    "pron_dem",      # 12 pronom démonstratif ("celui-ci", "ça")
+    "neg",           # 13 marqueur de négation
 ]
 
 SVO2ID   = {x: i for i, x in enumerate(SVO_LABELS)}
@@ -202,4 +210,11 @@ NUMBER2ID      = {x: i for i, x in enumerate(NUMBER_LABELS)}
 ID2NUMBER      = {i: x for x, i in NUMBER2ID.items()}
 NUM_NUMBER     = len(NUMBER_LABELS)
 NUMBER_NONE_ID = NUMBER2ID["NONE"]         # = 2
+
+# PERSON : supervisé sur les pronoms (pron_subj / pron_obj / pron_dem)
+PERSON_LABELS  = ["1", "2", "3", "NONE"]   # 0, 1, 2, 3
+PERSON2ID      = {x: i for i, x in enumerate(PERSON_LABELS)}
+ID2PERSON      = {i: x for x, i in PERSON2ID.items()}
+NUM_PERSON     = len(PERSON_LABELS)
+PERSON_NONE_ID = PERSON2ID["NONE"]         # = 3
 
