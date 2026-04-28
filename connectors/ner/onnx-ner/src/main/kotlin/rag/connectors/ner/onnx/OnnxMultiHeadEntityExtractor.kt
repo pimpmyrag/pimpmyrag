@@ -329,6 +329,14 @@ data class ExtractionThresholds(
      * null → repli sur la valeur de construction de l'extracteur (défaut 0.40).
      */
     val tauSvoAnchoredBoundary: Float? = null,
+    /**
+     * Seuil de roleProb pour le chemin SVO "forcé" : quand une entité NER a un bon score
+     * mais que svoBoundaryProb est en-dessous de tauSvoBoundary, on score quand même la
+     * tête SVO et on retient le rôle si roleProb ≥ tauSvoRoleForced.
+     * Capture notamment les agents passifs "par le président" (p_bnd ~0.20, roleProb ~0.99).
+     * 0f ou null → chemin forcé désactivé (comportement historique).
+     */
+    val tauSvoRoleForced: Float? = null,
     /** Score minimum (pBnd × pCoarse × pFine) par label coarse. Si absent → minScore global. */
     val scoreByCoarse: Map<String, Float> = emptyMap(),
 )
@@ -404,6 +412,14 @@ class OnnxMultiHeadEntityExtractor(
      * Défaut 0.40 : en-dessous du seuil normal (0.70) mais au-dessus du bruit.
      */
     private val tauSvoAnchoredBoundary: Float = 0.40f,
+    /**
+     * Chemin SVO "forcé" : pour les entités NER avec un bon score (pBoundary ≥ tauBoundary déjà
+     * garanti), si svoBoundaryProb < tauSvoBoundary, on score quand même la tête de rôle SVO
+     * et on retient le résultat si roleProb ≥ tauSvoRoleForced.
+     * Capture les agents passifs "par le président" (p_bnd ~0.20, roleProb ~0.99).
+     * 0f → désactivé (comportement historique).
+     */
+    private val tauSvoRoleForced: Float = 0f,
     private val useCoreMl: Boolean = false,
     /**
      * Nombre de threads intra-op (parallélisme au sein d'un seul opérateur).
@@ -538,6 +554,7 @@ class OnnxMultiHeadEntityExtractor(
         val effTauCoarse           = overrides?.tauCoarse             ?: tauCoarse
         val effTauSvoBoundary      = overrides?.tauSvoBoundary        ?: tauSvoBoundary
         val effTauSvoAnchored      = overrides?.tauSvoAnchoredBoundary ?: tauSvoAnchoredBoundary
+        val effTauSvoRoleForced    = overrides?.tauSvoRoleForced       ?: tauSvoRoleForced
         val effScoreByCoarse       = overrides?.scoreByCoarse         ?: emptyMap()
         if (texts.isEmpty()) return emptyList()
         val t0 = System.nanoTime()
@@ -729,17 +746,26 @@ class OnnxMultiHeadEntityExtractor(
                                 var ni = 0; for (j in 1 until nNumber) if (p[j] > p[ni]) ni = j
                                 NUMBER_LABELS.getOrElse(ni) { "NONE" }.takeUnless { s -> s == "NONE" }
                             }
-                            // ── Rôle SVO (uniquement si boundary SVO suffisant) ─────────────
+                            // ── Rôle SVO ────────────────────────────────────────────────────
+                            // Chemin standard  : boundary SVO ≥ tauSvoBoundary.
+                            // Chemin forcé     : boundary SVO faible mais entité NER confiante
+                            //   (pBoundary ≥ tauBoundary déjà garanti par le bloc parent) ET
+                            //   roleProb ≥ effTauSvoRoleForced.
+                            //   Capture les agents passifs "par X" (p_bnd ~0.20, roleProb ~0.99).
                             val svoBndLocal = onnxOut.svoBndFlat
                             if (svoBndLocal != null && onnxOut.svoFlat != null) {
                                 val pSvo = softmaxProbFlat(svoBndLocal, k * 2, 2, 1)
-                                if (pSvo >= effTauSvoBoundary) {
+                                val aboveBnd  = pSvo >= effTauSvoBoundary
+                                val tryForced = !aboveBnd && effTauSvoRoleForced > 0f
+                                if (aboveBnd || tryForced) {
                                     val p = tlBufSvo.get()
                                     loadRow(onnxOut.svoFlat, k * nSvo, p); softmaxInto(p, p)
                                     var ri = 0
                                     for (j in 1 until nSvo) if (p[j] > p[ri]) ri = j
                                     val name = SVO_LABELS.getOrElse(ri) { "svo_verb" }
-                                    if (name != "svo_verb") {
+                                    // En mode forcé : seuil strict sur roleProb pour éviter le bruit
+                                    val minRoleProb = if (tryForced) effTauSvoRoleForced else 0f
+                                    if (name != "svo_verb" && p[ri] >= minRoleProb) {
                                         nerSvoRole     = name
                                         nerSvoRoleProb = p[ri]
                                         nerSvoBndScore = pSvo
