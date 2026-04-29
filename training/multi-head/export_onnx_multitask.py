@@ -17,10 +17,11 @@ Interface ONNX exportée :
 
   Outputs (SVO / syntaxe) :
     - svo_boundary_logits [N, 2]            float32   détecte les spans verbe/pronom
-    - svo_logits          [N, 6]            float32   rôle SVO
+    - svo_logits          [N, 14]           float32   rôle SVO (14 labels)
     - voice_logits        [N, 2]            float32   ACTIVE / PASSIVE
     - gender_logits       [N, 3]            float32   Masc / Fem / NONE
     - number_logits       [N, 3]            float32   Sing / Plur / NONE
+    - person_logits       [N, 4]            float32   1 / 2 / 3 / NONE
 """
 import argparse
 from pathlib import Path
@@ -30,7 +31,7 @@ import torch.nn as nn
 from transformers import AutoModel
 
 from labels import (
-    NUM_FINE, NUM_SVO, NUM_VOICE, NUM_GENDER, NUM_NUMBER,
+    NUM_FINE, NUM_SVO, NUM_VOICE, NUM_GENDER, NUM_NUMBER, NUM_PERSON,
     COARSE_LABELS, FINE_LABELS, SVO_LABELS,
     build_coarse_to_fine_mask,
 )
@@ -41,7 +42,7 @@ class OnnxSpanMultiTaskWrapper(nn.Module):
     """
     Wrapper autour de SpanMultiTaskModel pour export ONNX.
     Remplace les spans Python par des tenseurs plats.
-    Exporte les 8 sorties : boundary/coarse/fine (NER) + svo_boundary/svo/voice/gender/number.
+    Exporte les 9 sorties : boundary/coarse/fine (NER) + svo_boundary/svo/voice/gender/number/person.
     """
 
     def __init__(self, inner: SpanMultiTaskModel):
@@ -59,6 +60,7 @@ class OnnxSpanMultiTaskWrapper(nn.Module):
         self.voice_head        = inner.voice_head
         self.gender_head       = inner.gender_head
         self.number_head       = inner.number_head
+        self.person_head       = inner.person_head
 
         self.max_width_bucket = inner.max_width_bucket
 
@@ -102,10 +104,11 @@ class OnnxSpanMultiTaskWrapper(nn.Module):
             self.coarse_head(span_h),         # [N, 9]
             self.fine_head(span_h),           # [N, 32]
             self.svo_boundary_head(span_h),   # [N, 2]
-            self.svo_head(span_h),            # [N, 6]
+            self.svo_head(span_h),            # [N, 14]
             self.voice_head(span_h),          # [N, 2]
             self.gender_head(span_h),         # [N, 3]
             self.number_head(span_h),         # [N, 3]
+            self.person_head(span_h),         # [N, 4]
         )
 
 
@@ -142,7 +145,7 @@ def main():
     OUTPUT_NAMES = [
         "boundary_logits", "coarse_logits", "fine_logits",
         "svo_boundary_logits", "svo_logits", "voice_logits",
-        "gender_logits", "number_logits",
+        "gender_logits", "number_logits", "person_logits",
     ]
     dynamic_axes = {
         "input_ids":           {0: "batch", 1: "seq_len"},

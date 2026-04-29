@@ -155,66 +155,100 @@ def build_coarse_to_fine_mask() -> torch.Tensor:
 
 
 # ─────────────────────────────────────────────────────────────
-# SVO LABELS  (tête syntaxique / silver Stanza)
+# SYNTACTIC SPAN LABELS  (v4 — annotation Claude gold)
+# Remplace les 14 labels SVO Stanza silver.
+# verb_trigger et pronoms sont des spans syntaxiques distincts
+# des spans NER.
 # ─────────────────────────────────────────────────────────────
 
-SVO_LABELS = [
-    "svo_verb",      # 0  verbe principal (+ aux)
-    "svo_subject",   # 1  sujet grammatical (NP)
-    "svo_object",    # 2  objet direct
-    "svo_iobj",      # 3  objet indirect / oblique prép.
-    "svo_tcomp",     # 4  CC de temps
-    "svo_lcomp",     # 5  CC de lieu
-    "svo_cause",     # 6  proposition / GN causal
-    "attr",          # 7  attribut du sujet (copule)
-    "nom_event",     # 8  NOUN déverbal avec argument ("l'arrestation de X")
-    "ent_appos",     # 9  apposition NE → rôle/titre
-    "pron_subj",     # 10 pronom sujet
-    "pron_obj",      # 11 pronom objet
-    "pron_dem",      # 12 pronom démonstratif ("celui-ci", "ça")
-    "neg",           # 13 marqueur de négation
+SYN_LABELS = [
+    "verb_trigger",  # 0  verbe d'action gouverneur (+ auxiliaire)
+    "pron_subj",     # 1  pronom sujet
+    "pron_obj",      # 2  pronom objet clitique
 ]
+SYN2ID      = {x: i for i, x in enumerate(SYN_LABELS)}
+ID2SYN      = {i: x for x, i in SYN2ID.items()}
+NUM_SYN     = len(SYN_LABELS)
+SYN_NONE_ID = NUM_SYN   # sentinel (span sans rôle syntaxique)
 
-SVO2ID   = {x: i for i, x in enumerate(SVO_LABELS)}
-ID2SVO   = {i: x for x, i in SVO2ID.items()}
-NUM_SVO  = len(SVO_LABELS)
-# Sentinel pour les spans sans rôle SVO (NER purs, négatifs)
-SVO_NONE_ID = NUM_SVO   # = 6, hors range [0..5]
+# Compat alias (utilisé dans build_multitask_dataset + train)
+ALL_SYN_LABELS: set[str] = set(SYN_LABELS)
 
 # ─────────────────────────────────────────────────────────────
-# VOICE LABELS  (pour la tête voice, prédite sur les svo_verb)
+# ROLE LABELS  (rôle SVO prédit sur chaque span NER et pronom)
 # ─────────────────────────────────────────────────────────────
 
-VOICE_LABELS = ["ACTIVE", "PASSIVE"]
-VOICE2ID     = {x: i for i, x in enumerate(VOICE_LABELS)}
-ID2VOICE     = {i: x for x, i in VOICE2ID.items()}
-NUM_VOICE    = len(VOICE_LABELS)
+ROLE_LABELS = [
+    "SUBJECT",        # 0  sujet grammatical
+    "OBJECT",         # 1  objet direct
+    "OBLIQUE",        # 2  complément circonstanciel (lieu/temps/manière)
+    "OBLIQUE_AGENT",  # 3  agent sémantique en passif ("par la police")
+    "OBLIQUE_CAUSE",  # 4  complément causal ("suite à…")
+    "APPOS",          # 5  apposition
+    "NONE",           # 6  pas d'argument verbal direct
+]
+ROLE2ID      = {x: i for i, x in enumerate(ROLE_LABELS)}
+ID2ROLE      = {i: x for x, i in ROLE2ID.items()}
+NUM_ROLE     = len(ROLE_LABELS)
+ROLE_NONE_ID = ROLE2ID["NONE"]   # = 6
+
+# ─────────────────────────────────────────────────────────────
+# VOICE LABELS  (prédit sur les verb_trigger)
+# ─────────────────────────────────────────────────────────────
+
+VOICE_LABELS  = ["active", "passive"]
+VOICE2ID      = {x: i for i, x in enumerate(VOICE_LABELS)}
+ID2VOICE      = {i: x for x, i in VOICE2ID.items()}
+NUM_VOICE     = len(VOICE_LABELS)
 VOICE_NONE_ID = NUM_VOICE   # sentinel
 
-# Ensemble des labels silver SVO (pour le routage dans build_multitask_dataset)
-ALL_SVO_LABELS: set[str] = set(SVO_LABELS)
-
 # ─────────────────────────────────────────────────────────────
-# MORPHO LABELS  (gender + number, pour la coréf future)
-# Supervisés sur tous les spans SVO actifs (svo_label != SVO_NONE_ID)
+# CERTAINTY LABELS  (prédit sur les verb_trigger)
 # ─────────────────────────────────────────────────────────────
 
-GENDER_LABELS  = ["Masc", "Fem", "NONE"]   # 0, 1, 2
+CERTAINTY_LABELS  = ["certain", "modal", "denied"]
+CERTAINTY2ID      = {x: i for i, x in enumerate(CERTAINTY_LABELS)}
+ID2CERTAINTY      = {i: x for x, i in CERTAINTY2ID.items()}
+NUM_CERTAINTY     = len(CERTAINTY_LABELS)
+CERTAINTY_NONE_ID = NUM_CERTAINTY   # sentinel
+
+# ─────────────────────────────────────────────────────────────
+# MORPHO LABELS  (gender + number + person)
+# gender/number : sur spans NER PER/ORG/EVENT + pronoms
+# person        : sur pronoms uniquement
+# ─────────────────────────────────────────────────────────────
+
+GENDER_LABELS  = ["M", "F", "N"]    # 0 Masc, 1 Fem, 2 Neutre
 GENDER2ID      = {x: i for i, x in enumerate(GENDER_LABELS)}
-ID2GENDER      = {i: x for x, i in GENDER2ID.items()}
-NUM_GENDER     = len(GENDER_LABELS)
-GENDER_NONE_ID = GENDER2ID["NONE"]         # = 2
+# Compat anciens labels Stanza
+GENDER2ID["Masc"] = GENDER2ID["M"]
+GENDER2ID["Fem"]  = GENDER2ID["F"]
+ID2GENDER      = {0: "M", 1: "F", 2: "N"}
+NUM_GENDER     = 3
+GENDER_NONE_ID = NUM_GENDER   # sentinel = 3
 
-NUMBER_LABELS  = ["Sing", "Plur", "NONE"]  # 0, 1, 2
+NUMBER_LABELS  = ["SG", "PL"]
 NUMBER2ID      = {x: i for i, x in enumerate(NUMBER_LABELS)}
-ID2NUMBER      = {i: x for x, i in NUMBER2ID.items()}
-NUM_NUMBER     = len(NUMBER_LABELS)
-NUMBER_NONE_ID = NUMBER2ID["NONE"]         # = 2
+# Compat anciens labels Stanza
+NUMBER2ID["Sing"] = NUMBER2ID["SG"]
+NUMBER2ID["Plur"] = NUMBER2ID["PL"]
+ID2NUMBER      = {0: "SG", 1: "PL"}
+NUM_NUMBER     = 2
+NUMBER_NONE_ID = NUM_NUMBER   # sentinel = 2
 
-# PERSON : supervisé sur les pronoms (pron_subj / pron_obj / pron_dem)
-PERSON_LABELS  = ["1", "2", "3", "NONE"]   # 0, 1, 2, 3
+PERSON_LABELS  = ["1", "2", "3"]
 PERSON2ID      = {x: i for i, x in enumerate(PERSON_LABELS)}
 ID2PERSON      = {i: x for x, i in PERSON2ID.items()}
 NUM_PERSON     = len(PERSON_LABELS)
-PERSON_NONE_ID = PERSON2ID["NONE"]         # = 3
+PERSON_NONE_ID = NUM_PERSON   # sentinel = 3
+
+# ─────────────────────────────────────────────────────────────
+# Compat aliases (pour ne pas casser les imports existants)
+# ─────────────────────────────────────────────────────────────
+SVO_LABELS   = SYN_LABELS    # alias
+SVO2ID       = SYN2ID
+ID2SVO       = ID2SYN
+NUM_SVO      = NUM_SYN
+SVO_NONE_ID  = SYN_NONE_ID
+ALL_SVO_LABELS = ALL_SYN_LABELS
 
