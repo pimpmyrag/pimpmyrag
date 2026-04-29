@@ -108,20 +108,41 @@ Pour chaque span hint_* qui est argument d'un trigger, ajouter :
 - "gov_verb_start": int  ← position start du verb_trigger OR du hint_event_nominal gouverneur
 
 Définitions :
-- SUBJECT : sujet grammatical ("Macron a signé" → Macron=SUBJECT)
-  ⚠️ En voix PASSIVE, le SUBJECT grammatical est le PATIENT sémantique
-  ⚠️ En voix PASSIVE, l'agent sémantique est en OBLIQUE introduit par "par"
-- OBJECT : objet direct ("a signé la loi" → loi=OBJECT)
-- OBLIQUE : complément indirect/circonstanciel ("à Paris"=OBLIQUE, "par la police"=OBLIQUE)
-- APPOS : apposition explicative ("Macron, le président" → "président"=APPOS de Macron)
-- NONE : entité sans lien syntaxique direct avec un verbe
+- SUBJECT       : sujet grammatical ("Macron a signé" → Macron=SUBJECT)
+                  ⚠️ En voix PASSIVE, le SUBJECT grammatical est le PATIENT sémantique
+- OBJECT        : objet direct ("a signé la loi" → loi=OBJECT)
+- OBLIQUE       : complément circonstanciel de lieu/temps/manière ("à Paris", "hier", "violemment")
+- OBLIQUE_AGENT : agent sémantique en construction passive, introduit par "par"
+                  "a été arrêté PAR LA POLICE" → "police"=OBLIQUE_AGENT  (semantic agent !)
+                  "a été signé PAR MACRON"     → "Macron"=OBLIQUE_AGENT
+- OBLIQUE_CAUSE : complément causal ("à cause de la crise", "suite à l'attentat", "en raison de…")
+- APPOS         : apposition explicative ("Macron, le président" → "président"=APPOS de Macron)
+- NONE          : entité sans lien syntaxique direct avec un verbe
+
+Modificateurs nominaux (champ "mod_of_start") :
+Si un span est un GÉNITIF ou MODIFICATEUR D'UN AUTRE SPAN (pas argument du verbe), ajouter :
+- "mod_of_start": int  ← position start du span NER dont ce span est modificateur
+- NE PAS mettre svo_role sur ce span (ou mettre NONE)
+Exemples :
+  "pompier de Paris" → "Paris" a mod_of_start=4 (start de "pompier"), pas de svo_role
+  "tribunal de Lyon" → "Lyon" a mod_of_start=9
+  "ministre de l'Économie" → "Économie" a mod_of_start=9
+  "forces de l'ordre" → "l'ordre" est dans le span "forces de l'ordre", pas de span séparé ici
 
 Coordination : si plusieurs spans sont SUBJECT/OBJECT du même verbe, chacun a son propre
 gov_verb_start identique. Ex: "Macron et Scholz ont signé" → les deux = SUBJECT, gov_verb_start=15.
 
+Clauses relatives : si un span est argument d'un verbe VIA une relative, annoter normalement
+avec gov_verb_start pointant vers le verbe de la relative.
+Ex: "Le pompier qui a secouru la victime" →
+  "pompier" a svo_role=SUBJECT, gov_verb_start=start("a secouru")
+  "victime" a svo_role=OBJECT, gov_verb_start=start("a secouru")
+
 Nominalisations : si un hint_event_nominal joue le rôle de trigger implicite (pas de verb_trigger),
 utiliser gov_verb_start pointant vers le start du hint_event_nominal.
-Ex: "L'arrestation de Dupont" → "Dupont" a gov_verb_start=2 (start de "arrestation"), svo_role=OBJECT.
+Ex: "L'arrestation de Dupont par la police" →
+  "Dupont" : svo_role=OBJECT, gov_verb_start=2 (start de "arrestation")
+  "police" : svo_role=OBLIQUE_AGENT, gov_verb_start=2
 
 ### C. Morphologie sur les spans NER (champs "gender", "number")
 Pour PER (hint_person_name, hint_person_role, hint_norp, hint_group_role),
@@ -165,10 +186,26 @@ Spans:
    "gender": "M", "number": "SG", "svo_role": "SUBJECT", "gov_verb_start": 7},
   {"label": "verb_trigger", "start": 7, "end": 22, "text": "a été arrêté", "voice": "passive", "certainty": "certain"},
   {"label": "hint_group_role", "start": 27, "end": 34, "text": "police",
-   "gender": "F", "number": "SG", "svo_role": "OBLIQUE", "gov_verb_start": 7},
+   "gender": "F", "number": "SG", "svo_role": "OBLIQUE_AGENT", "gov_verb_start": 7},
   {"label": "pron_subj", "start": 36, "end": 38, "text": "Il",
    "gender": "M", "number": "SG", "person": "3", "svo_role": "SUBJECT", "gov_verb_start": 39},
   {"label": "verb_trigger", "start": 39, "end": 51, "text": "n'a pas résisté", "voice": "active", "certainty": "denied", "negated": true}
+]
+
+Phrase: "Le pompier de Paris a effectué un sauvetage à Marseille hier."
+Spans:
+[
+  {"label": "hint_group_role", "start": 3, "end": 10, "text": "pompier",
+   "gender": "M", "number": "SG", "svo_role": "SUBJECT", "gov_verb_start": 19},
+  {"label": "hint_gpe", "start": 14, "end": 19, "text": "Paris",
+   "mod_of_start": 3},
+  {"label": "verb_trigger", "start": 19, "end": 28, "text": "a effectué", "voice": "active", "certainty": "certain"},
+  {"label": "hint_event_nominal", "start": 32, "end": 41, "text": "sauvetage",
+   "gender": "M", "number": "SG", "svo_role": "OBJECT", "gov_verb_start": 19},
+  {"label": "hint_gpe", "start": 44, "end": 52, "text": "Marseille",
+   "svo_role": "OBLIQUE", "gov_verb_start": 19},
+  {"label": "hint_time_date", "start": 53, "end": 57, "text": "hier",
+   "svo_role": "OBLIQUE", "gov_verb_start": 19}
 ]
 
 Phrase: "Les soldats ont été tués. Ils étaient stationnés à Kaboul."
@@ -260,7 +297,7 @@ VALID_NER_LABELS = {
 VALID_SVO_LABELS = {"verb_trigger", "pron_subj", "pron_obj"}
 VALID_LABELS = VALID_NER_LABELS | VALID_SVO_LABELS
 
-VALID_ROLES = {"SUBJECT", "OBJECT", "OBLIQUE", "APPOS", "NONE"}
+VALID_ROLES = {"SUBJECT", "OBJECT", "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE", "APPOS", "NONE"}
 VALID_GENDER = {"M", "F", "N"}
 VALID_NUMBER = {"SG", "PL"}
 VALID_PERSON = {"1", "2", "3"}
@@ -293,6 +330,8 @@ def validate_span_extras(s: dict) -> dict:
         clean["svo_role"] = s["svo_role"]
     if isinstance(s.get("gov_verb_start"), int):
         clean["gov_verb_start"] = s["gov_verb_start"]
+    if isinstance(s.get("mod_of_start"), int):
+        clean["mod_of_start"] = s["mod_of_start"]
     # Morpho
     if s.get("gender") in VALID_GENDER:
         clean["gender"] = s["gender"]
