@@ -644,7 +644,9 @@ def run_epoch(
         "svo_macro_f1": safe_macro_f1_local(
             all_svo_true,
             all_svo_pred,
-            labels=list(range(NUM_SVO))
+            # N'évaluer que les labels réellement présents dans y_true :
+            # évite que les labels absents du val/test (support=0) tirent le macro vers 0.
+            labels=[l for l in range(NUM_SVO) if l in set(all_svo_true)]
         ) if all_svo_true else 0.0,
         "voice_macro_f1": safe_macro_f1_local(
             all_voice_true,
