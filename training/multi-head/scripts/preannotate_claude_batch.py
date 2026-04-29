@@ -420,7 +420,26 @@ def create_batch_requests(candidates: list[dict], batch_size: int, output_jsonl:
 
 # ─── Étape 2 : Soumettre le batch ────────────────────────────────────────────
 
-def submit_batch(api_key: str, requests_jsonl: str) -> str:
+def _batch_id_file(requests_jsonl: str) -> str:
+    """Chemin du fichier .batch_id associé à un fichier de requêtes."""
+    return requests_jsonl.replace(".jsonl", ".batch_id")
+
+def _save_batch_id(batch_id: str, requests_jsonl: str):
+    path = _batch_id_file(requests_jsonl)
+    with open(path, "w") as f:
+        f.write(batch_id)
+    print(f"💾 Batch ID sauvegardé dans {path}")
+
+def _load_batch_id(requests_jsonl: str) -> str | None:
+    path = _batch_id_file(requests_jsonl)
+    if os.path.exists(path):
+        with open(path) as f:
+            bid = f.read().strip()
+        if bid:
+            return bid
+    return None
+
+def submit_batch(api_key: str, requests_jsonl: str, max_retries: int = 6) -> str:
     url = "https://api.anthropic.com/v1/messages/batches"
     headers = {
         "x-api-key": api_key,
@@ -435,14 +454,43 @@ def submit_batch(api_key: str, requests_jsonl: str) -> str:
                 requests_list.append(json.loads(line))
 
     print(f"📤 Envoi de {len(requests_list)} requêtes au Batch API...")
-    with httpx.Client(timeout=120.0) as client:
-        resp = client.post(url, headers=headers, json={"requests": requests_list})
-        resp.raise_for_status()
-        data = resp.json()
 
-    batch_id = data["id"]
-    print(f"✅ Batch créé : {batch_id}  |  Status: {data.get('processing_status', 'unknown')}")
-    return batch_id
+    last_exc = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            with httpx.Client(timeout=120.0) as client:
+                resp = client.post(url, headers=headers, json={"requests": requests_list})
+                resp.raise_for_status()
+                data = resp.json()
+
+            batch_id = data["id"]
+            # Sauvegarde locale de l'ID pour pouvoir reprendre en cas de crash
+            _save_batch_id(batch_id, requests_jsonl)
+            print(f"✅ Batch créé : {batch_id}  |  Status: {data.get('processing_status', 'unknown')}")
+            return batch_id
+
+        except httpx.HTTPStatusError as e:
+            status_code = e.response.status_code
+            # Retry uniquement sur erreurs serveur transitoires (5xx)
+            if status_code >= 500:
+                wait = min(10 * 2 ** (attempt - 1), 120)   # 10s, 20s, 40s, 80s, 120s…
+                print(f"⚠️  Tentative {attempt}/{max_retries} — HTTP {status_code}, retry dans {wait}s…")
+                last_exc = e
+                time.sleep(wait)
+            else:
+                raise   # 4xx → pas de retry (auth, quota…)
+
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            wait = min(10 * 2 ** (attempt - 1), 120)
+            print(f"⚠️  Tentative {attempt}/{max_retries} — réseau ({type(e).__name__}), retry dans {wait}s…")
+            last_exc = e
+            time.sleep(wait)
+
+    raise RuntimeError(
+        f"❌ submit_batch échoué après {max_retries} tentatives. Dernière erreur : {last_exc}\n"
+        f"💡 Astuce : relance avec --requests-file {requests_jsonl} pour éviter de recréer le fichier, "
+        f"ou --batch-id <id> si le batch a quand même été créé côté Anthropic."
+    )
 
 
 # ─── Étape 3 : Poll ──────────────────────────────────────────────────────────
@@ -455,11 +503,22 @@ def poll_batch(api_key: str, batch_id: str, poll_interval: int = 30) -> dict:
         "anthropic-beta": "message-batches-2024-09-24",
     }
     t_start = time.time()
+    consecutive_errors = 0
     while True:
-        with httpx.Client(timeout=60.0) as client:
-            resp = client.get(url, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        try:
+            with httpx.Client(timeout=60.0) as client:
+                resp = client.get(url, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+            consecutive_errors = 0
+        except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as e:
+            consecutive_errors += 1
+            wait = min(15 * 2 ** (consecutive_errors - 1), 120)
+            print(f"  ⚠️  Erreur poll ({type(e).__name__}), retry dans {wait}s… ({consecutive_errors} consécutives)")
+            if consecutive_errors >= 8:
+                raise RuntimeError(f"❌ poll_batch : trop d'erreurs consécutives — {e}") from e
+            time.sleep(wait)
+            continue
 
         status = data.get("processing_status", "unknown")
         counts = data.get("request_counts", {})
@@ -478,30 +537,39 @@ def poll_batch(api_key: str, batch_id: str, poll_interval: int = 30) -> dict:
 
 # ─── Étape 4 : Récupérer les résultats ───────────────────────────────────────
 
-def fetch_results(api_key: str, batch_id: str) -> list[dict]:
+def fetch_results(api_key: str, batch_id: str, max_retries: int = 5) -> list[dict]:
     url = f"https://api.anthropic.com/v1/messages/batches/{batch_id}/results"
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
         "anthropic-beta": "message-batches-2024-09-24",
     }
-    results = []
-    with httpx.Client(timeout=120.0) as client:
-        with client.stream("GET", url, headers=headers) as resp:
-            resp.raise_for_status()
-            buffer = ""
-            for chunk in resp.iter_text():
-                buffer += chunk
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    line = line.strip()
-                    if line:
-                        try:
-                            results.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            pass
-    print(f"📥 {len(results)} résultats récupérés")
-    return results
+    last_exc = None
+    for attempt in range(1, max_retries + 1):
+        results = []
+        try:
+            with httpx.Client(timeout=120.0) as client:
+                with client.stream("GET", url, headers=headers) as resp:
+                    resp.raise_for_status()
+                    buffer = ""
+                    for chunk in resp.iter_text():
+                        buffer += chunk
+                        while "\n" in buffer:
+                            line, buffer = buffer.split("\n", 1)
+                            line = line.strip()
+                            if line:
+                                try:
+                                    results.append(json.loads(line))
+                                except json.JSONDecodeError:
+                                    pass
+            print(f"📥 {len(results)} résultats récupérés")
+            return results
+        except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as e:
+            wait = min(10 * 2 ** (attempt - 1), 120)
+            print(f"⚠️  fetch_results tentative {attempt}/{max_retries} — {type(e).__name__}, retry dans {wait}s…")
+            last_exc = e
+            time.sleep(wait)
+    raise RuntimeError(f"❌ fetch_results échoué après {max_retries} tentatives : {last_exc}")
 
 
 # ─── Étape 5 : Parser et écrire ──────────────────────────────────────────────
@@ -708,8 +776,14 @@ def main():
         return
 
     if not args.batch_id:
-        create_batch_requests(candidates, args.batch_size, args.requests_file, args.model)
-        batch_id = submit_batch(api_key, args.requests_file)
+        # Vérifie s'il existe un batch ID sauvegardé pour ce fichier de requêtes
+        saved_id = _load_batch_id(args.requests_file)
+        if saved_id:
+            print(f"🔄 Batch ID trouvé dans le fichier de sauvegarde : {saved_id}")
+            batch_id = saved_id
+        else:
+            create_batch_requests(candidates, args.batch_size, args.requests_file, args.model)
+            batch_id = submit_batch(api_key, args.requests_file)
     else:
         batch_id = args.batch_id
         print(f"🔄 Reprise batch {batch_id}")

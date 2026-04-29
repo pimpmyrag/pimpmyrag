@@ -16,7 +16,14 @@ from sklearn.metrics import f1_score, classification_report
 
 from multitask_dataset import MultiTaskSpanDataset, make_collate_fn
 from multitask_model import SpanMultiTaskModel
-from labels import COARSE_LABELS, FINE_LABELS, SVO_LABELS, NUM_SVO, NUM_VOICE, NUM_GENDER, NUM_NUMBER, NUM_PERSON, PERSON_LABELS
+from labels import (
+    COARSE_LABELS, FINE_LABELS,
+    SYN_LABELS, NUM_SYN, ROLE_LABELS, NUM_ROLE,
+    NUM_VOICE, NUM_CERTAINTY, NUM_GENDER, NUM_NUMBER, NUM_PERSON,
+    PERSON_LABELS, ROLE_NONE_ID,
+    # compat
+    SVO_LABELS, NUM_SVO,
+)
 
 # ──────────────────────────────────────────────────────────
 #  Inline Hard Negative Mining — constantes
@@ -79,12 +86,16 @@ def get_layerwise_param_groups(model, base_lr: float, head_lr: float, decay: flo
         + list(model.coarse_head.parameters())
         + list(model.fine_head.parameters())
         + list(model.width_emb.parameters())
-        + list(model.svo_head.parameters())
+        + list(model.syn_head.parameters())
         + list(model.svo_boundary_head.parameters())
+        + list(model.role_head.parameters())
         + list(model.voice_head.parameters())
+        + list(model.certainty_head.parameters())
         + list(model.gender_head.parameters())
         + list(model.number_head.parameters())
         + list(model.person_head.parameters())
+        + list(model.verb_ptr_query.parameters())
+        + list(model.verb_ptr_key.parameters())
     )
     seen = {id(p) for p in head_params}
     param_groups = [{"params": head_params, "lr": head_lr, "name": "heads"}]
@@ -214,10 +225,11 @@ def run_epoch(
         lambda_voice=0.15,
         lambda_morpho=0.3,
         lambda_verb_ptr=0.25,
-        lambda_compat=0.0,
+        lambda_compat=0.0,   # transmis à compute_loss (compat inter-têtes pour eventlets)
         accum_steps=1,
         log_every=50,
         focal_gamma=0.0,
+        max_grad_norm=1.0,
         ema: "ModelEMA | None" = None,
         collect_hn: bool = False,
 ):
@@ -341,8 +353,15 @@ def run_epoch(
         coarse_labels = batch["coarse_labels"].to(device)
         fine_labels = batch["fine_labels"].to(device)
         svo_boundary_labels = batch["svo_boundary_labels"].to(device)
-        svo_labels = batch["svo_labels"].to(device)
-        voice_labels = batch["voice_labels"].to(device)
+        syn_labels    = batch["syn_labels"].to(device)
+        role_labels   = batch["role_labels"].to(device)
+        voice_labels  = batch["voice_labels"].to(device)
+        certainty_labels = batch.get("certainty_labels")
+        if certainty_labels is not None:
+            certainty_labels = certainty_labels.to(device)
+        else:
+            from labels import CERTAINTY_NONE_ID
+            certainty_labels = torch.full_like(syn_labels, CERTAINTY_NONE_ID)
         gender_labels = batch["gender_labels"].to(device)
         number_labels = batch["number_labels"].to(device)
         person_labels = batch["person_labels"].to(device)
@@ -357,8 +376,10 @@ def run_epoch(
                 == coarse_labels.size(0)
                 == fine_labels.size(0)
                 == svo_boundary_labels.size(0)
-                == svo_labels.size(0)
+                == syn_labels.size(0)
                 == voice_labels.size(0)
+                == role_labels.size(0)
+                == certainty_labels.size(0)
                 == gender_labels.size(0)
                 == number_labels.size(0)
                 == person_labels.size(0)
@@ -386,29 +407,33 @@ def run_epoch(
             span_indices = outputs.get("span_indices", None)
             if span_indices is not None:
                 si = span_indices.to(device=device, dtype=torch.long)
-                boundary_labels_loss = boundary_labels[si]
-                coarse_labels_loss = coarse_labels[si]
-                fine_labels_loss = fine_labels[si]
+                boundary_labels_loss     = boundary_labels[si]
+                coarse_labels_loss       = coarse_labels[si]
+                fine_labels_loss         = fine_labels[si]
                 svo_boundary_labels_loss = svo_boundary_labels[si]
-                svo_labels_loss = svo_labels[si]
-                voice_labels_loss = voice_labels[si]
-                gender_labels_loss = gender_labels[si]
-                number_labels_loss = number_labels[si]
-                person_labels_loss = person_labels[si]
-                gov_verb_labels_loss = gov_verb_labels[si]
-                sample_weights_loss = sample_weights[si]
+                syn_labels_loss          = syn_labels[si]
+                role_labels_loss         = role_labels[si]
+                voice_labels_loss        = voice_labels[si]
+                certainty_labels_loss    = certainty_labels[si]
+                gender_labels_loss       = gender_labels[si]
+                number_labels_loss       = number_labels[si]
+                person_labels_loss       = person_labels[si]
+                gov_verb_labels_loss     = gov_verb_labels[si]
+                sample_weights_loss      = sample_weights[si]
             else:
-                boundary_labels_loss = boundary_labels
-                coarse_labels_loss = coarse_labels
-                fine_labels_loss = fine_labels
+                boundary_labels_loss     = boundary_labels
+                coarse_labels_loss       = coarse_labels
+                fine_labels_loss         = fine_labels
                 svo_boundary_labels_loss = svo_boundary_labels
-                svo_labels_loss = svo_labels
-                voice_labels_loss = voice_labels
-                gender_labels_loss = gender_labels
-                number_labels_loss = number_labels
-                person_labels_loss = person_labels
-                gov_verb_labels_loss = gov_verb_labels
-                sample_weights_loss = sample_weights
+                syn_labels_loss          = syn_labels
+                role_labels_loss         = role_labels
+                voice_labels_loss        = voice_labels
+                certainty_labels_loss    = certainty_labels
+                gender_labels_loss       = gender_labels
+                number_labels_loss       = number_labels
+                person_labels_loss       = person_labels
+                gov_verb_labels_loss     = gov_verb_labels
+                sample_weights_loss      = sample_weights
 
             # Sanity check après forward / avant loss
             num_logits = outputs["fine_logits"].size(0)
@@ -435,8 +460,10 @@ def run_epoch(
                 coarse_labels=coarse_labels_loss,
                 fine_labels=fine_labels_loss,
                 svo_boundary_labels=svo_boundary_labels_loss,
-                svo_labels=svo_labels_loss,
+                syn_labels=syn_labels_loss,
+                role_labels=role_labels_loss,
                 voice_labels=voice_labels_loss,
+                certainty_labels=certainty_labels_loss,
                 gender_labels=gender_labels_loss,
                 number_labels=number_labels_loss,
                 person_labels=person_labels_loss,
@@ -444,6 +471,7 @@ def run_epoch(
                 sample_weights=sample_weights_loss,
                 boundary_class_weights=boundary_class_weights,
                 coarse_class_weights=coarse_class_weights,
+                fine_class_weights=fine_class_weights,
                 lambda_boundary=lambda_boundary,
                 lambda_coarse=lambda_coarse,
                 lambda_fine=lambda_fine,
@@ -452,6 +480,7 @@ def run_epoch(
                 lambda_voice=lambda_voice,
                 lambda_morpho=lambda_morpho,
                 lambda_verb_ptr=lambda_verb_ptr,
+                lambda_compat=lambda_compat,
                 focal_gamma=focal_gamma,
             )
 
@@ -461,6 +490,8 @@ def run_epoch(
                 loss.backward()
 
         if train and (step % accum_steps == 0):
+            if max_grad_norm > 0.0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             optimizer.step()
             optimizer.zero_grad()
             if ema is not None:
@@ -475,52 +506,49 @@ def run_epoch(
             except Exception:
                 total_steps = "?"
             avg_loss = sum(losses) / max(1, len(losses))
+            compat_val = loss_dict.get("loss_compat", None)
+            compat_str = f" compat={compat_val.item():.4f}" if compat_val is not None else ""
             print(
                 f"[{mode}] step={step}/{total_steps} "
                 f"loss={loss_dict['loss'].item():.4f} "
                 f"avg_loss={avg_loss:.4f}"
+                f"{compat_str}"
             )
 
         # Predictions
         b_pred = outputs["boundary_logits"].argmax(dim=-1).detach().cpu().tolist()
         c_pred = outputs["coarse_logits"].argmax(dim=-1).detach().cpu().tolist()
-        svob_pred = outputs["svo_boundary_logits"].argmax(dim=-1).detach().cpu().tolist()
-
-        # Fine prédite avec masquage coarse -> fine
-        f_pred = masked_fine_predictions(
-            outputs["fine_logits"],
-            c_pred,
-            coarse_fine_mask,
-        )
-
-        # Vérité terrain alignée sur les spans scorés
-        if span_indices is not None:
-            si_cpu = span_indices.detach().cpu().to(dtype=torch.long)
-            b_true = boundary_labels.detach().cpu()[si_cpu].tolist()
-            c_true = coarse_labels.detach().cpu()[si_cpu].tolist()
-            f_true = fine_labels.detach().cpu()[si_cpu].tolist()
-            svob_true = svo_boundary_labels.detach().cpu()[si_cpu].tolist()
-            svo_true = svo_labels.detach().cpu()[si_cpu].tolist()
-            voice_true = voice_labels.detach().cpu()[si_cpu].tolist()
-            gender_true = gender_labels.detach().cpu()[si_cpu].tolist()
-            number_true = number_labels.detach().cpu()[si_cpu].tolist()
-            person_true = person_labels.detach().cpu()[si_cpu].tolist()
-        else:
-            b_true = boundary_labels.detach().cpu().tolist()
-            c_true = coarse_labels.detach().cpu().tolist()
-            f_true = fine_labels.detach().cpu().tolist()
-            svob_true = svo_boundary_labels.detach().cpu().tolist()
-            svo_true = svo_labels.detach().cpu().tolist()
-            voice_true = voice_labels.detach().cpu().tolist()
-            gender_true = gender_labels.detach().cpu().tolist()
-            number_true = number_labels.detach().cpu().tolist()
-            person_true = person_labels.detach().cpu().tolist()
-
-        svo_pred_raw = outputs["svo_logits"].argmax(dim=-1).detach().cpu().tolist()
+        f_pred = masked_fine_predictions(outputs["fine_logits"], c_pred, coarse_fine_mask)
+        svob_pred    = outputs["svo_boundary_logits"].argmax(dim=-1).detach().cpu().tolist()
+        role_pred_raw  = outputs["role_logits"].argmax(dim=-1).detach().cpu().tolist()
         voice_pred_raw = outputs["voice_logits"].argmax(dim=-1).detach().cpu().tolist()
         gender_pred_raw = outputs["gender_logits"].argmax(dim=-1).detach().cpu().tolist()
         number_pred_raw = outputs["number_logits"].argmax(dim=-1).detach().cpu().tolist()
         person_pred_raw = outputs["person_logits"].argmax(dim=-1).detach().cpu().tolist()
+
+        # Vérité terrain alignée sur les spans scorés
+        if span_indices is not None:
+            si_cpu = span_indices.detach().cpu().to(dtype=torch.long)
+            b_true    = boundary_labels.detach().cpu()[si_cpu].tolist()
+            c_true    = coarse_labels.detach().cpu()[si_cpu].tolist()
+            f_true    = fine_labels.detach().cpu()[si_cpu].tolist()
+            svob_true = svo_boundary_labels.detach().cpu()[si_cpu].tolist()
+            role_true = role_labels.detach().cpu()[si_cpu].tolist()
+            voice_true   = voice_labels.detach().cpu()[si_cpu].tolist()
+            gender_true  = gender_labels.detach().cpu()[si_cpu].tolist()
+            number_true  = number_labels.detach().cpu()[si_cpu].tolist()
+            person_true  = person_labels.detach().cpu()[si_cpu].tolist()
+        else:
+            b_true    = boundary_labels.detach().cpu().tolist()
+            c_true    = coarse_labels.detach().cpu().tolist()
+            f_true    = fine_labels.detach().cpu().tolist()
+            svob_true = svo_boundary_labels.detach().cpu().tolist()
+            role_true = role_labels.detach().cpu().tolist()
+            voice_true   = voice_labels.detach().cpu().tolist()
+            gender_true  = gender_labels.detach().cpu().tolist()
+            number_true  = number_labels.detach().cpu().tolist()
+            person_true  = person_labels.detach().cpu().tolist()
+
 
         # Accumulate boundary / coarse
         all_b_true.extend(b_true)
@@ -545,32 +573,30 @@ def run_epoch(
                 all_f_true_pos.append(ft)
                 all_f_pred_pos.append(fp)
 
-        # SVO metrics = silver spans uniquement (svo_label < NUM_SVO)
-
-        for svot, svop in zip(svo_true, svo_pred_raw):
-            if svot < NUM_SVO:
-                all_svo_true.append(svot)
-                all_svo_pred.append(svop)
+        # SVO role metrics = spans avec rôle annoté (role < ROLE_NONE_ID)
+        for rt, rp in zip(role_true, role_pred_raw):
+            if rt < ROLE_NONE_ID:
+                all_svo_true.append(rt)
+                all_svo_pred.append(rp)
         for vt, vp in zip(voice_true, voice_pred_raw):
             if vt < NUM_VOICE:
                 all_voice_true.append(vt)
                 all_voice_pred.append(vp)
-        # Morpho : sur spans SVO actifs uniquement
-        for svot, gt, gp, nt, np_, pt, pp in zip(
-            svo_true, gender_true, gender_pred_raw,
+        # Morpho : sur spans avec gender/number/person annotés
+        for rt, gt, gp, nt, np_, pt, pp in zip(
+            role_true, gender_true, gender_pred_raw,
             number_true, number_pred_raw,
             person_true, person_pred_raw
         ):
-            if svot < NUM_SVO:
-                if gt < NUM_GENDER:
-                    all_gender_true.append(gt)
-                    all_gender_pred.append(gp)
-                if nt < NUM_NUMBER:
-                    all_number_true.append(nt)
-                    all_number_pred.append(np_)
-                if pt < NUM_PERSON:
-                    all_person_true.append(pt)
-                    all_person_pred.append(pp)
+            if gt < NUM_GENDER:
+                all_gender_true.append(gt)
+                all_gender_pred.append(gp)
+            if nt < NUM_NUMBER:
+                all_number_true.append(nt)
+                all_number_pred.append(np_)
+            if pt < NUM_PERSON:
+                all_person_true.append(pt)
+                all_person_pred.append(pp)
 
         # ── Inline HN mining : collecter erreurs par candidat ────────────────
         if collect_hn:
@@ -642,62 +668,41 @@ def run_epoch(
         ),
         "svo_boundary_f1": safe_macro_f1_local(all_svob_true, all_svob_pred),
         "svo_macro_f1": safe_macro_f1_local(
-            all_svo_true,
-            all_svo_pred,
-            # N'évaluer que les labels réellement présents dans y_true :
-            # évite que les labels absents du val/test (support=0) tirent le macro vers 0.
-            labels=[l for l in range(NUM_SVO) if l in set(all_svo_true)]
+            all_svo_true, all_svo_pred,
+            labels=[l for l in range(NUM_ROLE) if l in set(all_svo_true)]
         ) if all_svo_true else 0.0,
-        "voice_macro_f1": safe_macro_f1_local(
-            all_voice_true,
-            all_voice_pred,
-        ) if all_voice_true else 0.0,
+        "voice_macro_f1": safe_macro_f1_local(all_voice_true, all_voice_pred) if all_voice_true else 0.0,
         "gender_macro_f1": safe_macro_f1_local(
-            all_gender_true,
-            all_gender_pred,
-            labels=list(range(NUM_GENDER - 1))  # excl. NONE
+            all_gender_true, all_gender_pred,
+            labels=list(range(NUM_GENDER))
         ) if all_gender_true else 0.0,
         "number_macro_f1": safe_macro_f1_local(
-            all_number_true,
-            all_number_pred,
-            labels=list(range(NUM_NUMBER - 1))  # excl. NONE
+            all_number_true, all_number_pred,
+            labels=list(range(NUM_NUMBER))
         ) if all_number_true else 0.0,
         "person_macro_f1": safe_macro_f1_local(
-            all_person_true,
-            all_person_pred,
-            labels=list(range(NUM_PERSON - 1))  # excl. NONE
+            all_person_true, all_person_pred,
+            labels=list(range(NUM_PERSON))
         ) if all_person_true else 0.0,
         "boundary_report": classification_report(
-            all_b_true,
-            all_b_pred,
-            digits=3,
-            zero_division=0
+            all_b_true, all_b_pred, digits=3, zero_division=0
         ) if all_b_true else "N/A",
         "coarse_report": classification_report(
-            all_c_true_pos,
-            all_c_pred_pos,
-            labels=list(range(len(COARSE_LABELS) - 1)),  # excl. NONE
-            target_names=COARSE_LABELS[:-1],
-            digits=3,
-            zero_division=0
+            all_c_true_pos, all_c_pred_pos,
+            labels=list(range(len(COARSE_LABELS) - 1)),
+            target_names=COARSE_LABELS[:-1], digits=3, zero_division=0
         ) if all_c_true_pos else "N/A",
         "fine_report": classification_report(
-            all_f_true_pos,
-            all_f_pred_pos,
+            all_f_true_pos, all_f_pred_pos,
             labels=list(range(len(FINE_LABELS))),
-            target_names=FINE_LABELS,
-            digits=3,
-            zero_division=0
+            target_names=FINE_LABELS, digits=3, zero_division=0
         ) if all_f_true_pos else "N/A",
         "svo_report": classification_report(
-            all_svo_true,
-            all_svo_pred,
-            labels=list(range(NUM_SVO)),
-            target_names=SVO_LABELS,
-            digits=3,
-            zero_division=0
+            all_svo_true, all_svo_pred,
+            labels=list(range(NUM_ROLE)),
+            target_names=ROLE_LABELS, digits=3, zero_division=0
         ) if all_svo_true else "N/A",
-        "hn_results_by_id": hn_results_by_id,  # None si collect_hn=False
+        "hn_results_by_id": hn_results_by_id,
     }
 
     return metrics
@@ -781,7 +786,8 @@ def main():
     parser.add_argument("--tokenizer-path", default=None)
     parser.add_argument("--max-length", type=int, default=128)
 
-    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--epochs", type=int, default=30,
+                        help="Nombre maximum d'epochs (défaut=30 ; l'early stopping arrêtera avant si patience atteinte)")
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--accum-steps", type=int, default=1)
@@ -800,7 +806,9 @@ def main():
                         help="Pondération de la loss morpho gender+number+person (défaut=0.3)")
     parser.add_argument("--lambda-verb-ptr", type=float, default=0.25,
                         help="Pondération de la loss verb-pointer arg→verb (défaut=0.5)")
-    parser.add_argument("--lambda-compat", type=float, default=0.2)
+    parser.add_argument("--lambda-compat", type=float, default=0.2,
+                        help="Pondération loss compat inter-têtes : (A) role→boundary pour participants eventlets, "
+                             "(B) alignement soft boundary↔coarse. Défaut=0.2")
     parser.add_argument("--focal-gamma", type=float, default=0.0,
                         help="Focal loss gamma pour boundary (0=CE, 2.0=focal)")
     parser.add_argument("--head-lr-multiplier", type=float, default=5.0,
@@ -811,6 +819,12 @@ def main():
                         help="Decay EMA (0.0=désactivé, 0.999=recommandé)")
     parser.add_argument("--warmup-epochs", type=int, default=1,
                         help="Nombre d'epochs de linear warmup LR")
+    parser.add_argument("--patience", type=int, default=5,
+                        help="Early stopping : nombre d'epochs sans amélioration avant arrêt (0=désactivé)")
+    parser.add_argument("--min-delta", type=float, default=1e-3,
+                        help="Early stopping : amélioration minimale du score pour réinitialiser le compteur (défaut=0.001)")
+    parser.add_argument("--max-grad-norm", type=float, default=1.0,
+                        help="Gradient clipping max norm (0.0=désactivé, 1.0=recommandé pour DeBERTa)")
     parser.add_argument("--label-smoothing", type=float, default=0.0,
                         help="Label smoothing pour coarse/fine CE")
 
@@ -973,6 +987,7 @@ def main():
 
     best_score = -1.0
     start_epoch = 1
+    epochs_no_improve = 0   # compteur early stopping
 
     # Boosts HN inline
     hn_boosts = {
@@ -1007,30 +1022,33 @@ def main():
         if not os.path.exists(args.resume):
             print(f"⚠️  Checkpoint '{args.resume}' introuvable — démarrage à froid (pas de reprise)")
             args.resume = None
-        print(f"⤴️ Reprise depuis checkpoint: {args.resume}")
-        ckpt = torch.load(args.resume, map_location=device)
-        model.load_state_dict(ckpt["model_state"])
-
-        if "optim_state" in ckpt and ckpt["optim_state"] is not None:
-            try:
-                optimizer.load_state_dict(ckpt["optim_state"])
-            except Exception as e:
-                print(f"⚠️ Impossible de recharger l'optimizer state: {e}")
-
-        if use_ema and "ema_state" in ckpt and ckpt["ema_state"] is not None:
-            ema.shadow = {k: v.clone() for k, v in ckpt["ema_state"].items()}
-            print("📐 EMA state rechargé depuis checkpoint")
-
-        if args.start_epoch is not None:
-            start_epoch = args.start_epoch
         else:
-            start_epoch = int(ckpt.get("epoch", 0)) + 1
+            print(f"⤴️ Reprise depuis checkpoint: {args.resume}")
+            ckpt = torch.load(args.resume, map_location=device)
+            model.load_state_dict(ckpt["model_state"])
 
-        best_score = ckpt.get("best_score", -1.0)
+            if "optim_state" in ckpt and ckpt["optim_state"] is not None:
+                try:
+                    optimizer.load_state_dict(ckpt["optim_state"])
+                except Exception as e:
+                    print(f"⚠️ Impossible de recharger l'optimizer state: {e}")
 
-        print(
-            f"✅ checkpoint rechargé | start_epoch={start_epoch} | best_score={best_score:.4f}"
-        )
+            if use_ema and "ema_state" in ckpt and ckpt["ema_state"] is not None:
+                ema.shadow = {k: v.clone() for k, v in ckpt["ema_state"].items()}
+                print("📐 EMA state rechargé depuis checkpoint")
+
+            if args.start_epoch is not None:
+                start_epoch = args.start_epoch
+            else:
+                start_epoch = int(ckpt.get("epoch", 0)) + 1
+
+            best_score = ckpt.get("best_score", -1.0)
+            epochs_no_improve = ckpt.get("epochs_no_improve", 0)
+
+            print(
+                f"✅ checkpoint rechargé | start_epoch={start_epoch} | best_score={best_score:.4f} | "
+                f"epochs_no_improve={epochs_no_improve}"
+            )
 
     for epoch in range(start_epoch, args.epochs + 1):
         # Log LR
@@ -1060,6 +1078,7 @@ def main():
             accum_steps=args.accum_steps,
             log_every=args.log_every,
             focal_gamma=args.focal_gamma,
+            max_grad_norm=args.max_grad_norm,
             ema=ema,
             collect_hn=use_inline_hn and (epoch % args.hn_every == 0),
         )
@@ -1103,6 +1122,7 @@ def main():
             accum_steps=args.accum_steps,
             log_every=args.log_every,
             focal_gamma=args.focal_gamma,
+            max_grad_norm=0.0,   # pas de clipping en eval
         )
 
         if use_ema:
@@ -1159,11 +1179,13 @@ def main():
             "model_state": model.state_dict(),
             "optim_state": optimizer.state_dict(),
             "best_score": best_score,
+            "epochs_no_improve": epochs_no_improve,
             "ema_state": ema.state_dict() if use_ema else None,
         }, "checkpoint_last_multitask.pt")
 
-        if score > best_score:
+        if score > best_score + args.min_delta:
             best_score = score
+            epochs_no_improve = 0
             # Sauvegarder les poids EMA si activé (meilleure version lissée)
             if use_ema:
                 save_state = ema.apply(model)
@@ -1178,6 +1200,20 @@ def main():
             if use_ema:
                 ema.restore(model, save_state)
             print("✅ nouveau best model sauvegardé")
+        else:
+            epochs_no_improve += 1
+            patience_msg = ""
+            if args.patience > 0:
+                patience_msg = f" [{epochs_no_improve}/{args.patience} sans amélioration]"
+            print(f"⏳ Pas d'amélioration du score{patience_msg}")
+
+        # Early stopping
+        if args.patience > 0 and epochs_no_improve >= args.patience:
+            print(
+                f"\n🛑 Early stopping déclenché : {epochs_no_improve} epochs sans amélioration "
+                f"(patience={args.patience}, min_delta={args.min_delta}). Arrêt à epoch {epoch}."
+            )
+            break
 
     print("\n✅ Fin training, évaluation test sur le best model")
 
