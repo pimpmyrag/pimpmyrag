@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
-Pré-annotation NER via Claude Batch API.
-Soumet toutes les requêtes en batch, poll le résultat, parse et écrit.
+Pré-annotation NER + SVO roles + morpho via Claude Batch API.
+
+Annote pour chaque phrase :
+  - Spans NER hint_* (corrigés)  avec gender/number/svo_role/gov_verb_start
+  - Spans verb_trigger (verbes d'action gouverneurs)
+  - Spans pronoms pron_subj/pron_obj avec gender/number/person
+    → signaux forts pour coréférence asynchrone ultérieure
 
 Usage:
   python3 scripts/preannotate_claude_batch.py \
@@ -19,7 +24,7 @@ from pathlib import Path
 
 import httpx
 
-# ─── Taxonomie et prompt (identique à la version Mistral) ───
+# ─── Taxonomie NER ───────────────────────────────────────────────────────────
 
 TAXONOMY = """## Taxonomie NER — 31 labels fins groupés en 8 catégories
 
@@ -31,7 +36,7 @@ TAXONOMY = """## Taxonomie NER — 31 labels fins groupés en 8 catégories
 
 ### LOC (Lieux)
 - **hint_gpe** : entité géopolitique — pays, ville, région ("France", "Paris", "Bretagne")
-- **hint_fac_name** : bâtiment, monument, installation nommée ("Tour Eiffel", "gare de Lyon", "aéroport Charles-de-Gaulle")
+- **hint_fac_name** : bâtiment, monument, installation nommée ("Tour Eiffel", "gare de Lyon")
 - **hint_loc_generic** : lieu générique non-GPE ("la frontière", "la côte", "le centre-ville")
 - **hint_infra** : infrastructure ("autoroute", "pont", "voie ferrée", "pipeline")
 
@@ -44,104 +49,205 @@ TAXONOMY = """## Taxonomie NER — 31 labels fins groupés en 8 catégories
 - **hint_time_duration** : durée ("trois jours", "depuis 2020", "pendant six mois")
 
 ### EVENT (Événements)
-- **hint_event_nominal** : événement décrit par un nom commun ("élection", "attentat", "crise", "manifestation")
-- **hint_event_named** : événement nommé ("Jeux olympiques de Paris 2024", "COP28", "guerre du Vietnam")
+- **hint_event_nominal** : événement décrit par un nom commun ("élection", "attentat", "crise")
+- **hint_event_named** : événement nommé ("Jeux olympiques de Paris 2024", "COP28")
 
 ### OBJECT (Objets)
 - **hint_weapon** : arme ("fusil", "missile", "couteau", "bombe")
 - **hint_vehicle** : véhicule ("avion", "voiture", "navire", "TGV")
-- **hint_substance** : substance, matière première ("pétrole", "uranium", "chlore", "eau")
+- **hint_substance** : substance, matière première ("pétrole", "uranium", "chlore")
 - **hint_food** : aliment, boisson ("blé", "vin", "fromage", "café")
 - **hint_tool** : outil, instrument, appareil ("radar", "téléphone", "scanner")
 - **hint_object_generic** : objet physique autre ("drapeau", "colis", "document")
 - **hint_object_name** : objet nommé / marque ("iPhone", "Rafale", "Falcon 9")
 
 ### VALUE (Valeurs)
-- **hint_measure** : mesure physique avec unité ("35 nœuds", "52 000 m³", "37°C", "120 dB", "15 km")
+- **hint_measure** : mesure physique avec unité ("35 nœuds", "52 000 m³", "37°C")
 - **hint_percentage** : pourcentage ("45 %", "un tiers")
-- **hint_count** : nombre de choses ou personnes ("trois personnes", "200 soldats", "six buts")
+- **hint_count** : nombre de choses ou personnes ("trois personnes", "200 soldats")
 - **hint_money** : montant monétaire ("15 millions d'euros", "2,5 milliards de dollars")
 - **hint_rate** : taux, ratio ("3,5 %", "1 pour 1000")
 
 ### ABSTRACT (Abstraits)
-- **hint_law** : loi, traité, texte juridique ("RGPD", "loi Climat", "article 49.3", "Constitution")
+- **hint_law** : loi, traité, texte juridique ("RGPD", "loi Climat", "article 49.3")
 - **hint_work_of_art** : œuvre d'art, livre, film ("Les Misérables", "La Joconde")
 - **hint_concept** : concept abstrait ("démocratie", "laïcité", "souveraineté")
 - **hint_disease** : maladie, pathologie ("Covid-19", "grippe aviaire", "cancer")
 - **hint_language** : langue ("français", "mandarin", "arabe")
 
-## Règles importantes
+## Règles NER importantes
 1. Les spans ne doivent PAS se chevaucher (mais l'imbrication est autorisée si types différents)
 2. "le président Macron" → annoter SÉPARÉMENT : "président" = hint_person_role, "Macron" = hint_person_name
-3. Les déterminants (le, la, les, un, une) ne font PAS partie du span sauf s'ils sont indissociables du nom
-4. Annoter TOUTES les entités de la phrase, pas seulement les labels rares
-5. Le champ "start" est l'index du premier caractère du span, "end" est l'index APRÈS le dernier caractère
+3. Les déterminants (le, la, les, un, une) ne font PAS partie du span sauf s'ils sont indissociables
+4. Annoter TOUTES les entités de la phrase
+5. "start" = index du premier caractère, "end" = index APRÈS le dernier caractère
 """
 
-EXAMPLES = """## Exemples corrects
+SVO_MORPHO_GUIDE = """
+## Annotation SVO et morphologie
 
-Phrase: "Les accords de Matignon ont mis fin à la crise en Nouvelle-Calédonie."
-Spans: [{"label": "hint_law", "start": 4, "end": 23, "text": "accords de Matignon"}, {"label": "hint_gpe", "start": 50, "end": 68, "text": "Nouvelle-Calédonie"}]
+### A. Verb triggers (label: "verb_trigger")
+Annote les verbes d'action qui gouvernent des participants NER.
+- Inclure l'auxiliaire si présent : "a déclaré", "ont été tués", "sera nommé"
+- Ne pas annoter les verbes copules purs ("est", "sont") sauf si sémantiquement forts
 
-Phrase: "L'oromo est la langue la plus parlée d'Éthiopie."
-Spans: [{"label": "hint_language", "start": 2, "end": 7, "text": "oromo"}, {"label": "hint_gpe", "start": 39, "end": 47, "text": "Éthiopie"}]
+Champs OBLIGATOIRES sur chaque verb_trigger :
+- "voice": "active" | "passive"
+  → passive = conjugaison avec être + participe passé ("a été arrêté", "ont été tués", "sera nommé")
+  → active = tous les autres cas
+- "negated": true  (omettre si false — ne pas écrire "negated": false)
+  → true si le verbe est nié : "n'a pas signé", "ne peut pas", "sans avoir déclaré"
+- "certainty": "certain" | "modal" | "denied"
+  → certain  : fait présenté comme réel ("a signé", "est parti")
+  → modal    : possibilité/obligation ("pourrait signer", "devrait partir", "peut-être")
+  → denied   : négation sémantique ("n'a pas signé", "refuse de") — combiner avec negated:true
 
-Phrase: "La loi Climat et Résilience de 2021 fixe des objectifs ambitieux de réduction des émissions."
-Spans: [{"label": "hint_law", "start": 3, "end": 27, "text": "loi Climat et Résilience"}, {"label": "hint_time_date", "start": 31, "end": 35, "text": "2021"}]
+### B. Rôle SVO sur les spans NER (champ optionnel "svo_role")
+Pour chaque span hint_* qui est argument d'un trigger, ajouter :
+- "svo_role": "SUBJECT" | "OBJECT" | "OBLIQUE" | "APPOS" | "NONE"
+- "gov_verb_start": int  ← position start du verb_trigger OR du hint_event_nominal gouverneur
 
-Phrase: "Plusieurs radars ont été neutralisés notamment à Saint-Pierre (59), Calais et Talmont-Saint-Hilaire."
-Spans: [{"label": "hint_tool", "start": 10, "end": 16, "text": "radars"}, {"label": "hint_gpe", "start": 49, "end": 61, "text": "Saint-Pierre"}, {"label": "hint_gpe", "start": 68, "end": 74, "text": "Calais"}, {"label": "hint_gpe", "start": 78, "end": 99, "text": "Talmont-Saint-Hilaire"}]
+Définitions :
+- SUBJECT : sujet grammatical ("Macron a signé" → Macron=SUBJECT)
+  ⚠️ En voix PASSIVE, le SUBJECT grammatical est le PATIENT sémantique
+  ⚠️ En voix PASSIVE, l'agent sémantique est en OBLIQUE introduit par "par"
+- OBJECT : objet direct ("a signé la loi" → loi=OBJECT)
+- OBLIQUE : complément indirect/circonstanciel ("à Paris"=OBLIQUE, "par la police"=OBLIQUE)
+- APPOS : apposition explicative ("Macron, le président" → "président"=APPOS de Macron)
+- NONE : entité sans lien syntaxique direct avec un verbe
 
-Phrase: "Nietzsche a proclamé la mort de Dieu dans Ainsi parlait Zarathoustra."
-Spans: [{"label": "hint_person_name", "start": 0, "end": 9, "text": "Nietzsche"}, {"label": "hint_work_of_art", "start": 42, "end": 68, "text": "Ainsi parlait Zarathoustra"}]
+Coordination : si plusieurs spans sont SUBJECT/OBJECT du même verbe, chacun a son propre
+gov_verb_start identique. Ex: "Macron et Scholz ont signé" → les deux = SUBJECT, gov_verb_start=15.
+
+Nominalisations : si un hint_event_nominal joue le rôle de trigger implicite (pas de verb_trigger),
+utiliser gov_verb_start pointant vers le start du hint_event_nominal.
+Ex: "L'arrestation de Dupont" → "Dupont" a gov_verb_start=2 (start de "arrestation"), svo_role=OBJECT.
+
+### C. Morphologie sur les spans NER (champs "gender", "number")
+Pour PER (hint_person_name, hint_person_role, hint_norp, hint_group_role),
+ORG (hint_org_name), EVENT (hint_event_nominal, hint_event_named) :
+- "gender": "M" | "F" | "N"  (N = neutre/indéterminé)
+- "number": "SG" | "PL"
+
+Signaux pour CORÉFÉRENCE ULTÉRIEURE. Ne pas annoter sur TIME/VALUE/LOC sauf cas évident.
+
+### D. Pronoms (labels "pron_subj", "pron_obj")
+- "pron_subj" : pronom sujet ("il", "elle", "ils", "elles", "on", "ce", "cela", "celui-ci")
+- "pron_obj"  : pronom objet clitique ("le", "la", "les", "lui", "leur", "y", "en")
+
+Champs OBLIGATOIRES sur chaque pronom :
+- "gender": "M" | "F" | "N"
+- "number": "SG" | "PL"
+- "person": "1" | "2" | "3"
+- "svo_role": "SUBJECT" | "OBJECT" | "OBLIQUE"
+- "gov_verb_start": int
+
+NE PAS résoudre l'antécédent — uniquement les traits morpho + lien syntaxique.
+
+### Exemples complets
+
+Phrase: "Macron a déclaré la guerre en Ukraine."
+Spans:
+[
+  {"label": "verb_trigger", "start": 7, "end": 18, "text": "a déclaré", "voice": "active", "certainty": "certain"},
+  {"label": "hint_person_name", "start": 0, "end": 6, "text": "Macron",
+   "gender": "M", "number": "SG", "svo_role": "SUBJECT", "gov_verb_start": 7},
+  {"label": "hint_event_nominal", "start": 19, "end": 28, "text": "la guerre",
+   "gender": "F", "number": "SG", "svo_role": "OBJECT", "gov_verb_start": 7},
+  {"label": "hint_gpe", "start": 32, "end": 39, "text": "Ukraine",
+   "svo_role": "OBLIQUE", "gov_verb_start": 7}
+]
+
+Phrase: "Dupont a été arrêté par la police. Il n'a pas résisté."
+Spans:
+[
+  {"label": "hint_person_name", "start": 0, "end": 6, "text": "Dupont",
+   "gender": "M", "number": "SG", "svo_role": "SUBJECT", "gov_verb_start": 7},
+  {"label": "verb_trigger", "start": 7, "end": 22, "text": "a été arrêté", "voice": "passive", "certainty": "certain"},
+  {"label": "hint_group_role", "start": 27, "end": 34, "text": "police",
+   "gender": "F", "number": "SG", "svo_role": "OBLIQUE", "gov_verb_start": 7},
+  {"label": "pron_subj", "start": 36, "end": 38, "text": "Il",
+   "gender": "M", "number": "SG", "person": "3", "svo_role": "SUBJECT", "gov_verb_start": 39},
+  {"label": "verb_trigger", "start": 39, "end": 51, "text": "n'a pas résisté", "voice": "active", "certainty": "denied", "negated": true}
+]
+
+Phrase: "Les soldats ont été tués. Ils étaient stationnés à Kaboul."
+Spans:
+[
+  {"label": "hint_group_role", "start": 4, "end": 11, "text": "soldats",
+   "gender": "M", "number": "PL", "svo_role": "SUBJECT", "gov_verb_start": 12},
+  {"label": "verb_trigger", "start": 12, "end": 24, "text": "ont été tués", "voice": "passive", "certainty": "certain"},
+  {"label": "pron_subj", "start": 26, "end": 29, "text": "Ils",
+   "gender": "M", "number": "PL", "person": "3", "svo_role": "SUBJECT", "gov_verb_start": 30},
+  {"label": "verb_trigger", "start": 30, "end": 43, "text": "étaient stationnés", "voice": "passive", "certainty": "certain"},
+  {"label": "hint_gpe", "start": 46, "end": 52, "text": "Kaboul",
+   "svo_role": "OBLIQUE", "gov_verb_start": 30}
+]
+
+Phrase: "L'arrestation de Dupont par les forces de l'ordre a provoqué des manifestations."
+Spans:
+[
+  {"label": "hint_event_nominal", "start": 2, "end": 13, "text": "arrestation",
+   "gender": "F", "number": "SG"},
+  {"label": "hint_person_name", "start": 17, "end": 23, "text": "Dupont",
+   "gender": "M", "number": "SG", "svo_role": "OBJECT", "gov_verb_start": 2},
+  {"label": "hint_group_role", "start": 28, "end": 46, "text": "forces de l'ordre",
+   "gender": "F", "number": "PL", "svo_role": "OBLIQUE", "gov_verb_start": 2},
+  {"label": "verb_trigger", "start": 47, "end": 57, "text": "a provoqué", "voice": "active", "certainty": "certain"},
+  {"label": "hint_event_nominal", "start": 62, "end": 76, "text": "manifestations",
+   "gender": "F", "number": "PL", "svo_role": "OBJECT", "gov_verb_start": 47}
+]
 """
 
-SYSTEM_PROMPT = f"""Tu es un expert en annotation NER (Named Entity Recognition) pour le français.
+EXAMPLES = """## Exemple avec coordination et modalité
+
+Phrase: "Macron et Scholz pourraient signer un accord à Berlin."
+Spans: [
+  {"label": "hint_person_name", "start": 0, "end": 6, "text": "Macron",
+   "gender": "M", "number": "SG", "svo_role": "SUBJECT", "gov_verb_start": 18},
+  {"label": "hint_person_name", "start": 10, "end": 16, "text": "Scholz",
+   "gender": "M", "number": "SG", "svo_role": "SUBJECT", "gov_verb_start": 18},
+  {"label": "verb_trigger", "start": 17, "end": 27, "text": "pourraient signer", "voice": "active", "certainty": "modal"},
+  {"label": "hint_event_nominal", "start": 33, "end": 39, "text": "accord",
+   "gender": "M", "number": "SG", "svo_role": "OBJECT", "gov_verb_start": 17},
+  {"label": "hint_gpe", "start": 42, "end": 48, "text": "Berlin",
+   "svo_role": "OBLIQUE", "gov_verb_start": 17}
+]
+"""
+
+SYSTEM_PROMPT = f"""Tu es un expert en annotation NER, syntaxe et morphologie pour le français.
 
 {TAXONOMY}
+
+{SVO_MORPHO_GUIDE}
 
 {EXAMPLES}
 
 ## Ta tâche
-Pour chaque phrase, tu reçois des pré-annotations (spans + labels) produites par un modèle NER automatique.
+Pour chaque phrase, tu reçois des pré-annotations NER automatiques.
 Tu dois :
-1. CORRIGER les labels erronés
-2. CORRIGER les frontières de spans (trop larges ou trop étroites)
-3. AJOUTER les entités manquées par le modèle
-4. SUPPRIMER les faux positifs évidents
+1. CORRIGER les labels NER erronés, frontières trop larges/étroites, faux positifs
+2. AJOUTER les entités manquées par le modèle
+3. AJOUTER les verb_trigger avec voice + certainty (+ negated si nié)
+4. AJOUTER svo_role + gov_verb_start sur chaque span NER argumentel
+   (gov_verb_start peut pointer vers un verb_trigger OU un hint_event_nominal)
+5. AJOUTER gender + number sur les spans PER/ORG/EVENT
+6. AJOUTER les pronoms pron_subj/pron_obj avec gender/number/person/svo_role/gov_verb_start
 
-Retourne UNIQUEMENT un JSON valide, un objet par phrase, dans un tableau JSON.
-Chaque objet a : {{"id": "...", "text": "...", "spans": [...]}}
-Chaque span a : {{"label": "...", "start": int, "end": int, "text": "..."}}
+Retourne UNIQUEMENT un tableau JSON valide.
+Chaque objet : {{"id": "...", "text": "...", "spans": [...]}}
+Chaque span a au minimum : {{"label": "...", "start": int, "end": int, "text": "..."}}
+verb_trigger a TOUJOURS : voice + certainty (+ negated:true si applicable).
+Les autres champs (gender, number, person, svo_role, gov_verb_start) uniquement si pertinents.
 
-IMPORTANT : "start" et "end" doivent correspondre EXACTEMENT à text[start:end] == span["text"].
+IMPORTANT : text[start:end] doit correspondre EXACTEMENT à span["text"].
 Ne retourne RIEN d'autre que le JSON.
 """
 
-def repair_offset(text: str, span_text: str, hint_start: int, hint_end: int,
-                  window: int = 60) -> tuple[int, int] | None:
-    """
-    Tente de retrouver la bonne position de span_text dans text.
-    1. Cherche dans une fenêtre autour de l'offset suggéré par Claude.
-    2. Si non trouvé, cherche dans tout le texte (première occurrence).
-    3. Retourne (start, end) corrigés, ou None si introuvable.
-    """
-    if not span_text:
-        return None
-    # Fenêtre locale
-    lo = max(0, hint_start - window)
-    hi = min(len(text), hint_end + window)
-    idx = text.find(span_text, lo, hi)
-    if idx != -1:
-        return idx, idx + len(span_text)
-    # Recherche globale
-    idx = text.find(span_text)
-    if idx != -1:
-        return idx, idx + len(span_text)
-    return None
 
+# ─── Labels valides ───────────────────────────────────────────────────────────
 
-VALID_LABELS = {
+VALID_NER_LABELS = {
     "hint_person_name", "hint_person_role", "hint_norp", "hint_group_role",
     "hint_org_name", "hint_gpe", "hint_fac_name", "hint_loc_generic",
     "hint_infra", "hint_weapon", "hint_vehicle", "hint_substance",
@@ -151,17 +257,62 @@ VALID_LABELS = {
     "hint_percentage", "hint_count", "hint_money", "hint_rate",
     "hint_law", "hint_work_of_art", "hint_concept", "hint_disease", "hint_language",
 }
+VALID_SVO_LABELS = {"verb_trigger", "pron_subj", "pron_obj"}
+VALID_LABELS = VALID_NER_LABELS | VALID_SVO_LABELS
+
+VALID_ROLES = {"SUBJECT", "OBJECT", "OBLIQUE", "APPOS", "NONE"}
+VALID_GENDER = {"M", "F", "N"}
+VALID_NUMBER = {"SG", "PL"}
+VALID_PERSON = {"1", "2", "3"}
+VALID_VOICE = {"active", "passive"}
+VALID_CERTAINTY = {"certain", "modal", "denied"}
+
+
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+def repair_offset(text: str, span_text: str, hint_start: int, hint_end: int,
+                  window: int = 60) -> tuple[int, int] | None:
+    if not span_text:
+        return None
+    lo = max(0, hint_start - window)
+    hi = min(len(text), hint_end + window)
+    idx = text.find(span_text, lo, hi)
+    if idx != -1:
+        return idx, idx + len(span_text)
+    idx = text.find(span_text)
+    if idx != -1:
+        return idx, idx + len(span_text)
+    return None
+
+
+def validate_span_extras(s: dict) -> dict:
+    """Filtre et valide les champs optionnels d'un span."""
+    clean = {k: s[k] for k in ("label", "start", "end", "text")}
+    # SVO
+    if s.get("svo_role") in VALID_ROLES:
+        clean["svo_role"] = s["svo_role"]
+    if isinstance(s.get("gov_verb_start"), int):
+        clean["gov_verb_start"] = s["gov_verb_start"]
+    # Morpho
+    if s.get("gender") in VALID_GENDER:
+        clean["gender"] = s["gender"]
+    if s.get("number") in VALID_NUMBER:
+        clean["number"] = s["number"]
+    if s.get("person") in VALID_PERSON:
+        clean["person"] = s["person"]
+    # Verb trigger fields
+    if s.get("voice") in VALID_VOICE:
+        clean["voice"] = s["voice"]
+    if s.get("certainty") in VALID_CERTAINTY:
+        clean["certainty"] = s["certainty"]
+    if s.get("negated") is True:
+        clean["negated"] = True
+    return clean
 
 
 def build_user_prompt(batch: list[dict]) -> str:
-    """
-    Construit le prompt utilisateur à partir des items.
-    Chaque item a un champ "spans" contenant les spans hint_* prédits par le modèle
-    (marqués _predicted=True) ainsi que les spans svo_*/pron_* (ignorés ici).
-    """
     parts = []
     for item in batch:
-        # Extraire uniquement les spans hint_* prédits par le modèle
         preds = [
             {"label": sp["label"], "start": sp["start"], "end": sp["end"], "text": sp["text"]}
             for sp in item.get("spans", [])
@@ -170,9 +321,9 @@ def build_user_prompt(batch: list[dict]) -> str:
         parts.append(
             f'ID: {item["id"]}\n'
             f'Phrase: "{item["text"]}"\n'
-            f'Pré-annotations: {json.dumps(preds, ensure_ascii=False)}'
+            f'Pré-annotations NER: {json.dumps(preds, ensure_ascii=False)}'
         )
-    return "Corrige les annotations suivantes :\n\n" + "\n\n".join(parts)
+    return "Corrige et enrichis les annotations suivantes :\n\n" + "\n\n".join(parts)
 
 
 def parse_response(response_text: str) -> list[dict]:
@@ -185,7 +336,6 @@ def parse_response(response_text: str) -> list[dict]:
     try:
         results = json.loads(text)
         if isinstance(results, dict):
-            # Peut être {"annotations": [...]} ou directement un record
             if "annotations" in results:
                 results = results["annotations"]
             else:
@@ -202,28 +352,25 @@ def parse_response(response_text: str) -> list[dict]:
         return []
 
 
-# ─── Étape 1 : Créer le fichier JSONL de requêtes pour le Batch API ───
+# ─── Étape 1 : Créer le fichier JSONL de requêtes ────────────────────────────
 
-def create_batch_requests(candidates: list[dict], batch_size: int, output_jsonl: str, args_model: str = "claude-sonnet-4-6"):
-    """Crée le fichier JSONL des requêtes batch Claude."""
+def create_batch_requests(candidates: list[dict], batch_size: int, output_jsonl: str,
+                          args_model: str = "claude-sonnet-4-6"):
     batches = []
     for i in range(0, len(candidates), batch_size):
-        batches.append(candidates[i : i + batch_size])
+        batches.append(candidates[i: i + batch_size])
 
     with open(output_jsonl, "w", encoding="utf-8") as f:
         for batch_idx, batch in enumerate(batches):
             user_prompt = build_user_prompt(batch)
-            # Format requis par Claude Batch API
             request = {
                 "custom_id": f"batch_{batch_idx}",
                 "params": {
                     "model": args_model,
-                    "max_tokens": 4096,
+                    "max_tokens": 8192,
                     "temperature": 0.1,
                     "system": [{"type": "text", "text": SYSTEM_PROMPT}],
-                    "messages": [
-                        {"role": "user", "content": user_prompt}
-                    ],
+                    "messages": [{"role": "user", "content": user_prompt}],
                 }
             }
             f.write(json.dumps(request, ensure_ascii=False) + "\n")
@@ -232,10 +379,9 @@ def create_batch_requests(candidates: list[dict], batch_size: int, output_jsonl:
     return batches
 
 
-# ─── Étape 2 : Soumettre le batch ───
+# ─── Étape 2 : Soumettre le batch ────────────────────────────────────────────
 
 def submit_batch(api_key: str, requests_jsonl: str) -> str:
-    """Soumet le batch à Claude et retourne le batch_id."""
     url = "https://api.anthropic.com/v1/messages/batches"
     headers = {
         "x-api-key": api_key,
@@ -243,39 +389,32 @@ def submit_batch(api_key: str, requests_jsonl: str) -> str:
         "content-type": "application/json",
         "anthropic-beta": "message-batches-2024-09-24",
     }
-
-    # Lire le fichier JSONL et construire les requests
-    requests = []
+    requests_list = []
     with open(requests_jsonl, "r", encoding="utf-8") as f:
         for line in f:
             if line.strip():
-                requests.append(json.loads(line))
+                requests_list.append(json.loads(line))
 
-    payload = {"requests": requests}
-
-    print(f"📤 Envoi de {len(requests)} requêtes au Batch API...")
+    print(f"📤 Envoi de {len(requests_list)} requêtes au Batch API...")
     with httpx.Client(timeout=120.0) as client:
-        resp = client.post(url, headers=headers, json=payload)
+        resp = client.post(url, headers=headers, json={"requests": requests_list})
         resp.raise_for_status()
         data = resp.json()
 
     batch_id = data["id"]
-    print(f"✅ Batch créé : {batch_id}")
-    print(f"   Status: {data.get('processing_status', 'unknown')}")
+    print(f"✅ Batch créé : {batch_id}  |  Status: {data.get('processing_status', 'unknown')}")
     return batch_id
 
 
-# ─── Étape 3 : Poll le status ───
+# ─── Étape 3 : Poll ──────────────────────────────────────────────────────────
 
 def poll_batch(api_key: str, batch_id: str, poll_interval: int = 30) -> dict:
-    """Poll le batch jusqu'à completion."""
     url = f"https://api.anthropic.com/v1/messages/batches/{batch_id}"
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
         "anthropic-beta": "message-batches-2024-09-24",
     }
-
     t_start = time.time()
     while True:
         with httpx.Client(timeout=60.0) as client:
@@ -286,36 +425,29 @@ def poll_batch(api_key: str, batch_id: str, poll_interval: int = 30) -> dict:
         status = data.get("processing_status", "unknown")
         counts = data.get("request_counts", {})
         elapsed = time.time() - t_start
-
         succeeded = counts.get("succeeded", 0)
         errored = counts.get("errored", 0)
         processing = counts.get("processing", 0)
         total = succeeded + errored + processing
 
-        print(f"  ⏳ [{elapsed:.0f}s] Status: {status} | "
-              f"✅ {succeeded} | ❌ {errored} | 🔄 {processing} / {total}")
-
+        print(f"  ⏳ [{elapsed:.0f}s] {status} | ✅ {succeeded} | ❌ {errored} | 🔄 {processing}/{total}")
         if status == "ended":
             print(f"\n🎉 Batch terminé en {elapsed:.0f}s")
             return data
-
         time.sleep(poll_interval)
 
 
-# ─── Étape 4 : Récupérer les résultats ───
+# ─── Étape 4 : Récupérer les résultats ───────────────────────────────────────
 
 def fetch_results(api_key: str, batch_id: str) -> list[dict]:
-    """Récupère les résultats du batch."""
     url = f"https://api.anthropic.com/v1/messages/batches/{batch_id}/results"
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
         "anthropic-beta": "message-batches-2024-09-24",
     }
-
     results = []
     with httpx.Client(timeout=120.0) as client:
-        # Stream les résultats (JSONL)
         with client.stream("GET", url, headers=headers) as resp:
             resp.raise_for_status()
             buffer = ""
@@ -329,22 +461,28 @@ def fetch_results(api_key: str, batch_id: str) -> list[dict]:
                             results.append(json.loads(line))
                         except json.JSONDecodeError:
                             pass
-
     print(f"📥 {len(results)} résultats récupérés")
     return results
 
 
-# ─── Étape 5 : Parser et écrire ───
+# ─── Étape 5 : Parser et écrire ──────────────────────────────────────────────
 
 def process_results(results: list[dict], batches: list[list[dict]], output: str):
     """
     Parse les résultats batch et écrit le JSONL final.
-    Les spans svo_*/pron_* de l'input sont PRÉSERVÉS dans la sortie,
-    seules les annotations hint_* sont remplacées par celles de Claude.
+    Spans retenus :
+      - hint_*  : corrigés par Claude + gender/number/svo_role/gov_verb_start si présents
+      - verb_trigger : nouveaux, annotés par Claude
+      - pron_subj/pron_obj : nouveaux, annotés par Claude avec morpho
+    Les anciens spans svo_*/pron_* du silver Stanza sont SUPPRIMÉS (remplacés par les annotations Claude).
     """
     batch_by_id = {f"batch_{i}": batch for i, batch in enumerate(batches)}
 
     label_stats = Counter()
+    role_stats = Counter()
+    morpho_stats = Counter()
+    voice_stats = Counter()
+    certainty_stats = Counter()
     n_processed = 0
     n_errors = 0
     n_fallback = 0
@@ -357,49 +495,57 @@ def process_results(results: list[dict], batches: list[list[dict]], output: str)
 
             if result_type == "succeeded":
                 message = result["result"]["message"]
-                content_blocks = message.get("content", [])
-                response_text = ""
-                for block in content_blocks:
-                    if block.get("type") == "text":
-                        response_text += block["text"]
-
+                response_text = "".join(
+                    b["text"] for b in message.get("content", []) if b.get("type") == "text"
+                )
                 parsed = parse_response(response_text)
                 result_by_id = {r["id"]: r for r in parsed if "id" in r}
 
                 for item in batch:
                     item_id = item["id"]
-                    # Spans non-NER (svo_*, pron_*) à conserver tels quels
-                    svo_spans = [
-                        sp for sp in item.get("spans", [])
-                        if not sp.get("label", "").startswith("hint_")
-                    ]
 
                     if item_id in result_by_id:
                         corrected = result_by_id[item_id]
-                        ner_spans = []
+                        spans_out = []
                         for s in corrected.get("spans", []):
-                            if all(k in s for k in ("label", "start", "end", "text")):
-                                if s["label"] in VALID_LABELS:
-                                    span_text = s["text"]
-                                    start, end = s["start"], s["end"]
-                                    if item["text"][start:end] == span_text:
-                                        ner_spans.append(s)
-                                        label_stats[s["label"]] += 1
-                                    else:
-                                        # Tentative de réparation
-                                        fixed = repair_offset(item["text"], span_text, start, end)
-                                        if fixed is not None:
-                                            ner_spans.append({**s, "start": fixed[0], "end": fixed[1]})
-                                            label_stats[s["label"]] += 1
-                                            label_stats["_repaired"] += 1
-                                        else:
-                                            label_stats["_dropped"] += 1
-                        record = {
-                            "id": item_id,
-                            "text": item["text"],
-                            "spans": svo_spans + ner_spans,
-                        }
+                            if not all(k in s for k in ("label", "start", "end", "text")):
+                                continue
+                            if s["label"] not in VALID_LABELS:
+                                label_stats["_unknown_label"] += 1
+                                continue
+
+                            span_text = s["text"]
+                            start, end = s["start"], s["end"]
+
+                            # Vérifier/réparer l'offset
+                            if item["text"][start:end] != span_text:
+                                fixed = repair_offset(item["text"], span_text, start, end)
+                                if fixed is not None:
+                                    start, end = fixed
+                                    label_stats["_repaired"] += 1
+                                else:
+                                    label_stats["_dropped"] += 1
+                                    continue
+
+                            clean = validate_span_extras({**s, "start": start, "end": end})
+                            spans_out.append(clean)
+                            label_stats[clean["label"]] += 1
+                            if "svo_role" in clean:
+                                role_stats[clean["svo_role"]] += 1
+                            if "gender" in clean:
+                                morpho_stats[f"gender_{clean['gender']}"] += 1
+                            if "number" in clean:
+                                morpho_stats[f"number_{clean['number']}"] += 1
+                            if "voice" in clean:
+                                voice_stats[clean["voice"]] += 1
+                            if "certainty" in clean:
+                                certainty_stats[clean["certainty"]] += 1
+                            if clean.get("negated"):
+                                certainty_stats["negated"] += 1
+
+                        record = {"id": item_id, "text": item["text"], "spans": spans_out}
                     else:
+                        # Fallback : garder les hints du silver, sans les svo_* bruités
                         record = _make_fallback(item)
                         n_fallback += 1
 
@@ -413,53 +559,69 @@ def process_results(results: list[dict], batches: list[list[dict]], output: str)
                     out.write(json.dumps(_make_fallback(item), ensure_ascii=False) + "\n")
                     n_processed += 1
 
-    print(f"\n{'='*60}")
-    print(f"✅ {n_processed} phrases traitées → {output}")
-    print(f"❌ {n_errors} batches en erreur")
-    print(f"⚠️  {n_fallback} phrases sans match ID (fallback)")
+    print(f"\n{'=' * 60}")
+    print(f"✅ {n_processed} phrases → {output}")
+    print(f"❌ {n_errors} batches en erreur  |  ⚠️  {n_fallback} fallbacks")
     if label_stats.get("_repaired"):
-        print(f"🔧 {label_stats['_repaired']} spans avec offset réparé automatiquement")
+        print(f"🔧 {label_stats['_repaired']} offsets réparés")
     if label_stats.get("_dropped"):
-        print(f"⚠️  {label_stats['_dropped']} spans irrécupérables supprimés (texte introuvable)")
-    print(f"\n📊 Distribution des labels annotés :")
+        print(f"⚠️  {label_stats['_dropped']} spans irrécupérables supprimés")
+
+    print(f"\n📊 Labels NER :")
     for label, count in label_stats.most_common():
-        if not label.startswith("_"):
-            print(f"  {label:<25} {count:>6}")
+        if not label.startswith("_") and label in VALID_NER_LABELS:
+            print(f"  {label:<28} {count:>6}")
+
+    print(f"\n🔗 Verb triggers : {label_stats.get('verb_trigger', 0)}")
+    print(f"👤 Pronoms : subj={label_stats.get('pron_subj', 0)}  obj={label_stats.get('pron_obj', 0)}")
+
+    print(f"\n🎭 Rôles SVO :")
+    for role, count in role_stats.most_common():
+        print(f"  {role:<12} {count:>6}")
+
+    print(f"\n🔊 Voix (verb_trigger) :")
+    for v, count in voice_stats.most_common():
+        print(f"  {v:<10} {count:>6}")
+
+    print(f"\n🔮 Modalité (verb_trigger) :")
+    for c, count in certainty_stats.most_common():
+        print(f"  {c:<10} {count:>6}")
+
+    print(f"\n🔤 Morphologie :")
+    for k, count in sorted(morpho_stats.items()):
+        print(f"  {k:<18} {count:>6}")
 
 
 def _make_fallback(item: dict) -> dict:
-    """Fallback : on garde les spans tels quels (hint_* prédits + svo_*)."""
+    """Fallback : garder uniquement les spans hint_* (pas les svo_* silver bruités)."""
     return {
         "id": item["id"],
         "text": item["text"],
-        "spans": item.get("spans", []),
+        "spans": [sp for sp in item.get("spans", []) if sp.get("label", "").startswith("hint_")],
         "_fallback": True,
     }
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True, help="JSONL candidates (train_wiki_svo_ner.jsonl)")
-    parser.add_argument("--output", required=True, help="JSONL sortie annotée par Claude")
+    parser.add_argument("--input", required=True)
+    parser.add_argument("--output", required=True)
     parser.add_argument("--api-key", default=None)
-    parser.add_argument("--batch-size", type=int, default=5, help="Phrases par requête")
+    parser.add_argument("--batch-size", type=int, default=5, help="Phrases par requête batch")
     parser.add_argument("--max-sentences", type=int, default=None)
-    parser.add_argument("--poll-interval", type=int, default=30, help="Intervalle de polling (s)")
+    parser.add_argument("--poll-interval", type=int, default=30)
     parser.add_argument("--model", default="claude-sonnet-4-6")
-    parser.add_argument("--batch-id", default=None, help="Reprendre un batch existant (skip submit)")
+    parser.add_argument("--batch-id", default=None, help="Reprendre un batch existant")
     parser.add_argument("--requests-file", default="data/_claude_batch_requests.jsonl")
     parser.add_argument("--results-file", default=None,
-                        help="Fichier de résultats JSONL déjà téléchargé (skip submit+poll+fetch)")
+                        help="Résultats JSONL déjà téléchargés (skip submit+poll+fetch)")
     args = parser.parse_args()
 
     api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY")
-    # La clé n'est nécessaire que si on doit soumettre/poller/fetcher le batch
-    need_api = not args.results_file
-    if need_api and not api_key:
+    if not args.results_file and not api_key:
         print("❌ Clé API manquante. --api-key ou ANTHROPIC_API_KEY")
         sys.exit(1)
 
-    # Charger les candidates
     candidates = []
     with open(args.input, "r", encoding="utf-8") as f:
         for line in f:
@@ -470,36 +632,29 @@ def main():
                 break
     print(f"📝 {len(candidates)} phrases chargées")
 
-    # Filtrer les déjà traités si output existe
     already_done = set()
     if os.path.exists(args.output):
         with open(args.output, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                    already_done.add(obj.get("id", ""))
-                except json.JSONDecodeError:
-                    continue
+                if line:
+                    try:
+                        already_done.add(json.loads(line).get("id", ""))
+                    except json.JSONDecodeError:
+                        pass
         if already_done:
-            print(f"🔄 {len(already_done)} phrases déjà traitées, on les skip")
+            print(f"🔄 {len(already_done)} déjà traitées, skip")
             candidates = [c for c in candidates if c["id"] not in already_done]
-            print(f"📝 {len(candidates)} phrases restantes")
+            print(f"📝 {len(candidates)} restantes")
 
     if not candidates:
         print("✅ Rien à traiter!")
         return
 
-    # Reconstruire les batches (toujours nécessaire pour process_results)
-    batches_list = []
-    for i in range(0, len(candidates), args.batch_size):
-        batches_list.append(candidates[i : i + args.batch_size])
+    batches_list = [candidates[i: i + args.batch_size] for i in range(0, len(candidates), args.batch_size)]
 
-    # ── Cas : résultats déjà téléchargés localement ──
     if args.results_file:
-        print(f"📂 Lecture des résultats locaux depuis {args.results_file}…")
+        print(f"📂 Résultats locaux depuis {args.results_file}…")
         results = []
         with open(args.results_file, "r", encoding="utf-8") as f:
             for line in f:
@@ -509,27 +664,19 @@ def main():
                         results.append(json.loads(line))
                     except json.JSONDecodeError:
                         pass
-        print(f"📥 {len(results)} résultats chargés depuis le fichier local")
+        print(f"📥 {len(results)} résultats chargés")
         process_results(results, batches_list, args.output)
         return
 
     if not args.batch_id:
-        # Créer le fichier de requêtes
         create_batch_requests(candidates, args.batch_size, args.requests_file, args.model)
-
-        # Étape 2 : Soumettre
         batch_id = submit_batch(api_key, args.requests_file)
     else:
         batch_id = args.batch_id
-        print(f"🔄 Reprise du batch {batch_id}")
+        print(f"🔄 Reprise batch {batch_id}")
 
-    # Étape 3 : Poll
     poll_batch(api_key, batch_id, args.poll_interval)
-
-    # Étape 4 : Récupérer
     results = fetch_results(api_key, batch_id)
-
-    # Étape 5 : Parser et écrire
     process_results(results, batches_list, args.output)
 
 
