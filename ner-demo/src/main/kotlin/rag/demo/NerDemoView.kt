@@ -48,13 +48,18 @@ class NerDemoView(
             "ABSTRACT" to ("#f1f5f9" to "#334155"),
             "NONE"     to ("#f3f4f6" to "#6b7280"),
         )
+        // Clés = displayKey v4 : synLabel (verb_trigger/pron_subj/pron_obj) ou role (SUBJECT…)
         val SVO_COLORS = mapOf(
-            "svo_verb"    to ("#e0f2fe" to "#0369a1"),
-            "svo_subject" to ("#dcfce7" to "#15803d"),
-            "svo_object"  to ("#fce7f3" to "#9d174d"),
-            "svo_iobj"    to ("#fff7ed" to "#c2410c"),
-            "pron_subj"   to ("#f0fdf4" to "#166534"),
-            "pron_obj"    to ("#fdf2f8" to "#7e22ce"),
+            "verb_trigger"   to ("#e0f2fe" to "#0369a1"),   // bleu — verbe déclencheur
+            "SUBJECT"        to ("#dcfce7" to "#15803d"),   // vert — sujet
+            "OBJECT"         to ("#fce7f3" to "#9d174d"),   // rose — objet direct
+            "OBLIQUE"        to ("#fff7ed" to "#c2410c"),   // orange — obl/iobj
+            "OBLIQUE_AGENT"  to ("#fdf4ff" to "#7e22ce"),   // violet — agent passif "par X"
+            "OBLIQUE_CAUSE"  to ("#fef9c3" to "#854d0e"),   // jaune — cause "en raison de"
+            "APPOS"          to ("#f8fafc" to "#475569"),   // gris — apposition
+            "pron_subj"      to ("#f0fdf4" to "#166534"),   // vert foncé — pronom sujet
+            "pron_obj"       to ("#fdf2f8" to "#7e22ce"),   // violet clair — pronom objet
+            "NONE"           to ("#f3f4f6" to "#6b7280"),   // gris neutre
         )
         val COMPACT_LABEL = mapOf(
             "hint_person_name"    to "pers",
@@ -92,14 +97,41 @@ class NerDemoView(
         )
         val ALL_COARSE = COARSE_COLORS.keys.filter { it != "NONE" }
         private val SVO_EMOJI = mapOf(
-            "svo_verb" to "🔵", "svo_subject" to "🟢", "svo_object" to "🔴",
-            "svo_iobj" to "🟠", "pron_subj" to "🟢", "pron_obj" to "🔴",
+            "verb_trigger"   to "🔵",
+            "SUBJECT"        to "🟢",
+            "OBJECT"         to "🔴",
+            "OBLIQUE"        to "🟠",
+            "OBLIQUE_AGENT"  to "💡",
+            "OBLIQUE_CAUSE"  to "⚡",
+            "APPOS"          to "🏷️",
+            "pron_subj"      to "🟢",
+            "pron_obj"       to "🔴",
+            "NONE"           to "⚪",
         )
-        /** Couleurs des rôles syntaxiques UD (cohérentes avec SVO_COLORS). */
+        /** Libellé compact (badge) par displayKey v4. */
+        private val SVO_LABEL = mapOf(
+            "verb_trigger"   to "verb",
+            "SUBJECT"        to "subj",
+            "OBJECT"         to "obj",
+            "OBLIQUE"        to "obl",
+            "OBLIQUE_AGENT"  to "obl:agt",
+            "OBLIQUE_CAUSE"  to "obl:cause",
+            "APPOS"          to "appos",
+            "pron_subj"      to "pron:subj",
+            "pron_obj"       to "pron:obj",
+            "NONE"           to "none",
+        )
+        /** Couleurs des rôles syntaxiques UD v4 (nsubj / obj / obl / obl:agent / obl:cause / appos). */
         val SYNTACTIC_ROLE_COLORS = mapOf(
-            "nsubj" to ("#dcfce7" to "#15803d"),
-            "obj"   to ("#fce7f3" to "#9d174d"),
-            "iobj"  to ("#fff7ed" to "#c2410c"),
+            "nsubj"     to ("#dcfce7" to "#15803d"),  // sujet
+            "obj"       to ("#fce7f3" to "#9d174d"),  // objet direct
+            "iobj"      to ("#fff7ed" to "#c2410c"),  // objet indirect (legacy)
+            "obl"       to ("#fff7ed" to "#c2410c"),  // oblique / complément prép.
+            "obl:agent" to ("#fdf4ff" to "#7e22ce"),  // agent passif "par X"
+            "obl:cause" to ("#fef9c3" to "#854d0e"),  // cause "en raison de"
+            "attr"      to ("#f0fdf4" to "#166534"),  // attribut copule (legacy)
+            "appos"     to ("#f8fafc" to "#475569"),  // apposition
+            "nmod"      to ("#fff1f2" to "#be123c"),  // modifieur nominal (legacy)
         )
         private val executor = Executors.newCachedThreadPool { r ->
             Thread(r, "ner-stream").also { it.isDaemon = true }
@@ -174,6 +206,7 @@ class NerDemoView(
 
     // ── Results ───────────────────────────────────────────────────────────────
     private val textFlow    = Div().also { it.setId("ner-textflow") }
+    private val eventletsPanel = buildEventletsPanel()
     private val progressBar = ProgressBar().apply { isIndeterminate = true; isVisible = false }
     private val detailPanel = buildDetailPanel()
 
@@ -325,6 +358,8 @@ class NerDemoView(
         add(body)
         setFlexGrow(1.0, body)
 
+        // Afficher le placeholder eventlets dès le démarrage
+        updateEventletsPanel()
 
         // ── Alt+J : toggle LLM Judge panel ───────────────────────────────────
         UI.getCurrent().page.executeJs(
@@ -576,12 +611,15 @@ class NerDemoView(
         textFlow.style["word-break"] = "break-word"
 
         val inner = Div(buildLegend(), textFlow)
-        inner.style["padding"] = "28px 36px"
+        inner.style["padding"] = "28px 36px 0 36px"
         inner.style["box-sizing"] = "border-box"
         inner.style["overflow-y"] = "auto"
-        inner.style["height"] = "100%"
+        inner.style["flex"] = "1 1 0"
+        inner.style["min-height"] = "0"
+        inner.style["display"] = "flex"
+        inner.style["flex-direction"] = "column"
 
-        val pane = Div(inner)
+        val pane = Div(inner, eventletsPanel)
         pane.style["display"] = "flex"
         pane.style["flex-direction"] = "column"
         pane.style["overflow"] = "hidden"
@@ -607,6 +645,28 @@ class NerDemoView(
         div.style["flex-shrink"] = "0"
         div.add(placeholder(i18n.detailPlaceholder))
         return div
+    }
+
+    // ── Eventlets panel ───────────────────────────────────────────────────────
+    private fun buildEventletsPanel(): Div {
+        val panel = Div()
+        panel.style["border-top"]    = "2px solid #e2e8f0"
+        panel.style["background"]    = "#fafbfc"
+        panel.style["padding"]       = "20px 36px"
+        panel.style["font-family"]   = "Inter, system-ui, sans-serif"
+        panel.style["display"]       = "block"   // affiché par défaut
+        panel.style["flex-shrink"]   = "0"       // ne se laisse pas écraser par inner
+        panel.style["max-height"]    = "280px"   // hauteur max réservée
+        panel.style["overflow-y"]    = "auto"    // scroll interne si beaucoup d'eventlets
+        panel.setId("ner-eventlets-panel")
+
+        val title = Div(H3("🔵 Eventlets"))
+        title.style["margin"] = "0 0 16px 0"
+        title.style["font-size"] = "1.1em"
+        title.style["color"] = "#1e293b"
+        panel.add(title)
+
+        return panel
     }
 
     // ── Params accordion ──────────────────────────────────────────────────────
@@ -750,11 +810,13 @@ class NerDemoView(
         div.style["margin-bottom"] = "20px"
         div.style["padding-bottom"] = "14px"
         div.style["border-bottom"] = "1px solid #f1f5f9"
+        // Chips NER coarse (fond plein)
         COARSE_COLORS.entries.filter { it.key != "NONE" }.forEach { (c, cols) ->
             div.add(legendChip(c, cols.first, cols.second, false))
         }
-        SVO_COLORS.entries.forEach { (role, cols) ->
-            val short = role.replace("svo_", "").replace("pron_", "pron:")
+        // Chips SVO par displayKey v4 (tiret)
+        SVO_COLORS.entries.filter { it.key != "NONE" }.forEach { (key, cols) ->
+            val short = SVO_LABEL[key] ?: key.lowercase()
             div.add(legendChip(short, cols.first, cols.second, true))
         }
         return div
@@ -803,6 +865,8 @@ class NerDemoView(
         textFlow.removeAll()
         detailPanel.removeAll()
         detailPanel.add(placeholder(i18n.detailPlaceholder))
+        eventletsPanel.removeAll()
+        eventletsPanel.style["display"] = "none"
         progressBar.isVisible = true
 
         // Pré-remplir le flux texte en respectant les séparateurs d'origine
@@ -837,6 +901,8 @@ class NerDemoView(
                         }
                         // Mise à jour incrémentale : lastResults grandit batch par batch
                         lastResults = lastResults + batchResults
+                        // Mise à jour du panneau eventlets
+                        updateEventletsPanel()
                     }
                 }
             } catch (e: Exception) {
@@ -900,8 +966,12 @@ class NerDemoView(
         // ── Couche SVO ─────────────────────────────────────────────────────────
         val svoLayer: List<SpanInfo> = if (cbShowSvo.value) {
             result.svoSpans.map { svo ->
-                val (bg, fg) = SVO_COLORS[svo.role] ?: ("#e5e7eb" to "#374151")
-                val lbl = svo.role.replace("svo_", "").replace("pron_", "pron:")
+                // displayKey v4 : role en priorité quand il est renseigné (SUBJECT/OBJECT/OBLIQUE/…),
+                // sinon synLabel (verb_trigger pour les verbes, pron_subj/pron_obj pour les pronoms).
+                // En v4 tous les spans ont synLabel=verb_trigger → ne PAS se baser sur synLabel seul.
+                val key = if (svo.role != "NONE") svo.role else svo.synLabel
+                val (bg, fg) = SVO_COLORS[key] ?: ("#e5e7eb" to "#374151")
+                val lbl = SVO_LABEL[key] ?: key.lowercase()
                 // entity = svo.entity : le span SVO porte déjà l'entité NER fusionnée
                 // par reconcile() → le panneau détail peut afficher NER + SVO d'un seul clic.
                 SpanInfo(svo.charStart, svo.charEnd, svo.text, bg, fg, lbl, isNer = false,
@@ -989,7 +1059,8 @@ class NerDemoView(
         // Labels : affichés uniquement à la dernière fraction du span
         if (isNerLast && ner != null) {
             seg.add(buildLabelBadge(ner.label.uppercase(), ner.fg, filled = true))
-            // Badge rôle syntaxique (nsubj / obj / iobj) — si la tête SVO a reconcilié ce span
+            // Badge rôle syntaxique (nsubj / obj / obl / obl:agent / obl:cause / appos)
+            // si la tête SVO a reconcilié ce span (inline forward pass)
             val syntRole = ner.entity?.metadata?.get("syntacticRole") as? String
             if (syntRole != null) {
                 val (_, roleFg) = SYNTACTIC_ROLE_COLORS[syntRole] ?: ("#f3f4f6" to "#6b7280")
@@ -1000,6 +1071,168 @@ class NerDemoView(
 
         seg.addClickListener { onClick() }
         return seg
+    }
+
+    // ── Eventlets rendering ───────────────────────────────────────────────────
+    private fun updateEventletsPanel() {
+        eventletsPanel.removeAll()
+
+        val allEventlets = lastResults.flatMap { it.eventlets }
+        if (allEventlets.isEmpty()) {
+            // Garder le panneau visible avec un message d'attente
+            val empty = Span(if (lastResults.isEmpty()) "Lancez une analyse pour voir les eventlets." else "Aucun eventlet détecté.")
+            empty.style["color"] = "#94a3b8"
+            empty.style["font-size"] = "0.9em"
+            val title = H3("🔵 Eventlets")
+            title.style["margin"] = "0 0 10px 0"
+            title.style["font-size"] = "1.1em"
+            title.style["color"] = "#1e293b"
+            eventletsPanel.add(title, empty)
+            eventletsPanel.style["display"] = "block"
+            return
+        }
+
+        eventletsPanel.style["display"] = "block"
+
+        val title = H3("🔵 Eventlets (${allEventlets.size})")
+        title.style["margin"] = "0 0 16px 0"
+        title.style["font-size"] = "1.1em"
+        title.style["color"] = "#1e293b"
+        eventletsPanel.add(title)
+
+        lastResults.forEachIndexed { idx, result ->
+            if (result.eventlets.isEmpty()) return@forEachIndexed
+
+            val sentenceDiv = Div()
+            sentenceDiv.style["margin-bottom"] = "24px"
+
+            val sentHeader = Div(Span("📝 Phrase ${idx + 1}: ").also {
+                it.style["font-weight"] = "700"
+                it.style["color"] = "#64748b"
+            }, Span(result.text.take(100) + if (result.text.length > 100) "..." else "").also {
+                it.style["color"] = "#94a3b8"
+                it.style["font-size"] = "0.9em"
+            })
+            sentHeader.style["margin-bottom"] = "12px"
+            sentenceDiv.add(sentHeader)
+
+            result.eventlets.forEachIndexed { evtIdx, evt ->
+                val card = buildEventletCard(evt, evtIdx + 1)
+                sentenceDiv.add(card)
+            }
+
+            eventletsPanel.add(sentenceDiv)
+        }
+    }
+
+    private fun buildEventletCard(evt: rag.connectors.ner.onnx.Eventlet, num: Int): Div {
+        val card = Div()
+        card.style["background"] = "#ffffff"
+        card.style["border"] = "1px solid #e2e8f0"
+        card.style["border-left"] = "4px solid #3b82f6"
+        card.style["border-radius"] = "8px"
+        card.style["padding"] = "16px"
+        card.style["margin-bottom"] = "12px"
+        card.style["font-size"] = "0.9em"
+
+        // Verb header
+        val verbRow = Div()
+        verbRow.style["margin-bottom"] = "12px"
+        val verbLabel = Span("🔵 Eventlet #$num: ")
+        verbLabel.style["font-weight"] = "700"
+        verbLabel.style["color"] = "#64748b"
+        verbLabel.style["font-size"] = "0.85em"
+        val verbText = Span(evt.verb.text)
+        verbText.style["font-weight"] = "700"
+        verbText.style["color"] = "#1e40af"
+        verbText.style["font-size"] = "1.1em"
+        verbRow.add(verbLabel, verbText)
+
+        val metaRow = Div()
+        metaRow.style["font-size"] = "0.8em"
+        metaRow.style["color"] = "#94a3b8"
+        metaRow.style["margin-bottom"] = "12px"
+        metaRow.add(Span("Voice: ${evt.voice} | Negated: ${evt.negated}"))
+
+        card.add(verbRow, metaRow)
+
+        // Slots
+        evt.subject?.let { slot ->
+            card.add(buildSlotDiv("🟢 Sujet", slot))
+        }
+
+        evt.obj?.let { slot ->
+            card.add(buildSlotDiv("🔴 Objet", slot))
+        }
+
+        evt.iobjs.forEach { slot ->
+            card.add(buildSlotDiv("🟠 Oblique", slot))
+        }
+
+        evt.tcomps.forEach { slot ->
+            card.add(buildSlotDiv("⚡ Cause/Temps", slot))
+        }
+
+        evt.lcomps.forEach { slot ->
+            card.add(buildSlotDiv("📍 Lieu", slot))
+        }
+
+        evt.causes.forEach { slot ->
+            card.add(buildSlotDiv("💡 Agent passif", slot))
+        }
+
+        evt.appositions.forEach { slot ->
+            card.add(buildSlotDiv("🏷️ Apposition", slot))
+        }
+
+        if (evt.hasUnresolvedMentions) {
+            val warning = Div(Span("⚠️ Contient des pronoms non résolus → coref async requise"))
+            warning.style["color"] = "#f59e0b"
+            warning.style["font-size"] = "0.85em"
+            warning.style["margin-top"] = "8px"
+            warning.style["font-style"] = "italic"
+            card.add(warning)
+        }
+
+        return card
+    }
+
+    private fun buildSlotDiv(label: String, slot: rag.connectors.ner.onnx.EventletSlot): Div {
+        val div = Div()
+        div.style["margin-bottom"] = "8px"
+        div.style["padding-left"] = "12px"
+
+        val labelSpan = Span("$label: ")
+        labelSpan.style["font-weight"] = "600"
+        labelSpan.style["color"] = "#475569"
+
+        val svoText = Span(slot.svoSpan.text)
+        svoText.style["color"] = "#1e293b"
+        svoText.style["font-weight"] = "500"
+
+        val arrow = Span(" → ")
+        arrow.style["color"] = "#cbd5e1"
+
+        val entity = slot.nerEntity
+        val entityText = if (entity != null) {
+            val text = "${entity.type} \"${entity.text}\""
+            Span(text).also {
+                it.style["color"] = if (slot.resolved) "#059669" else "#f59e0b"
+                it.style["font-weight"] = "500"
+            }
+        } else {
+            Span("(pas d'entité NER)").also {
+                it.style["color"] = "#94a3b8"
+                it.style["font-style"] = "italic"
+            }
+        }
+
+        val conf = Span(" (conf=${String.format("%.2f", slot.confidence)})")
+        conf.style["color"] = "#94a3b8"
+        conf.style["font-size"] = "0.85em"
+
+        div.add(labelSpan, svoText, arrow, entityText, conf)
+        return div
     }
 
     private fun buildLabelBadge(text: String, fg: String, filled: Boolean): Span {
@@ -1081,6 +1314,18 @@ class NerDemoView(
                 badge.style["margin-top"]  = "4px"
                 detailPanel.add(badge)
             }
+            // Badge certainty sur les entités liées à un verb_trigger modal/denied
+            val certaintyVal = ent.metadata["certainty"] as? String
+            if (certaintyVal != null && certaintyVal != "certain") {
+                val certaintyColor = if (certaintyVal == "denied") "#dc2626" else "#d97706"
+                val certBadge = Span(if (certaintyVal == "denied") "🚫 nié" else "💭 modal")
+                certBadge.style["font-size"]   = "0.72em"
+                certBadge.style["color"]       = certaintyColor
+                certBadge.style["font-weight"] = "600"
+                certBadge.style["display"]     = "block"
+                certBadge.style["margin-top"]  = "2px"
+                detailPanel.add(certBadge)
+            }
             if (ent.metadata["nested"] == true) {
                 val parentText   = ent.metadata["parentText"]   as? String ?: "?"
                 val parentFine   = ent.metadata["parentFine"]   as? String ?: "?"
@@ -1118,7 +1363,8 @@ class NerDemoView(
                     roleTitle.style["padding"] = "2px 8px"; roleTitle.style["border-radius"] = "4px"
                     roleTitle.style["display"] = "inline-block"; roleTitle.style["margin-top"] = "10px"
                     detailPanel.add(roleTitle)
-                    addRow(detailPanel, "svo_role",  ent.metadata["svoRole"] as? String ?: "—")
+                    val svoRole = ent.metadata["svoRole"] as? String
+                    if (svoRole != null) addRow(detailPanel, "svo_role",  svoRole)
                     addRow(detailPanel, "p_role",    fmt(ent.metadata["svoRoleProb"]))
                     addRow(detailPanel, "p_svo_bnd", fmt(ent.metadata["svoBoundaryScore"]))
                 }
@@ -1136,17 +1382,33 @@ class NerDemoView(
 
         } else if (info.svo != null) {
             // ── Section SVO pur (verbe, pronom, argument sans entité NER) ───────
-            val svo = info.svo; val emoji = SVO_EMOJI[svo.role] ?: "⚪"
-            detailPanel.add(sectionTitle("$emoji ${svo.role}"), detailDivider())
+            val svo = info.svo
+            // displayKey v4 : role en priorité (SUBJECT/OBJECT/…), sinon synLabel pour verbes/pronoms.
+            val key = if (svo.role != "NONE") svo.role else svo.synLabel
+            val emoji = SVO_EMOJI[key] ?: "⚪"
+            val displayRole = SVO_LABEL[key] ?: key.lowercase()
+            detailPanel.add(sectionTitle("$emoji ${displayRole.uppercase()}"), detailDivider())
             addRow(detailPanel, i18n.rowText,   svo.text)
+            addRow(detailPanel, "syn_label",    svo.synLabel)
             addRow(detailPanel, i18n.rowRole,   svo.role)
             addRow(detailPanel, i18n.rowVoice,  svo.voice)
+            if (svo.synLabel == "verb_trigger" && svo.certainty != "certain") {
+                addRow(detailPanel, "certainty", svo.certainty)
+            }
             addRow(detailPanel, i18n.rowChars,  "[${svo.charStart}:${svo.charEnd}]")
             if (svo.fromNer) addRow(detailPanel, i18n.rowSource, i18n.syntheticNer)
             svo.nerOverride?.let { addRow(detailPanel, "🔗 override", "$it (${fmt(svo.nerOverrideScore)})") }
             detailPanel.add(sectionHeader(i18n.scoresSection))
-            addRow(detailPanel, "p_boundary", "%.3f".format(svo.svoBoundaryProb))
-            addRow(detailPanel, "p_role",     "%.3f".format(svo.roleProb))
+            // p_confidence = score "unifié" : svoBoundaryProb pour verbes, roleProb pour args (v4)
+            addRow(detailPanel, "p_confidence", "%.3f".format(svo.svoConfidence))
+            if (svo.role == "NONE") {
+                // Verbe : p_svo_bnd = confiance du verb-detector
+                addRow(detailPanel, "p_svo_bnd", "%.3f".format(svo.svoBoundaryProb))
+            } else {
+                // Argument NP : p_svo_bnd est toujours ~0 en v4 (normal), p_role est le vrai score
+                addRow(detailPanel, "p_role",     "%.3f".format(svo.roleProb))
+                addRow(detailPanel, "p_svo_bnd",  "%.3f".format(svo.svoBoundaryProb))
+            }
             addRow(detailPanel, "voice conf", "%.3f".format(svo.voiceProb))
             svo.gender?.let { addRow(detailPanel, i18n.rowGender, it) }
             svo.number?.let { addRow(detailPanel, i18n.rowNumber, it) }
@@ -1155,13 +1417,16 @@ class NerDemoView(
 
     /**
      * Section SVO annexée en bas du panneau NER (cas merged).
-     * Affiche les métriques de la tête SVO : boundary, rôle, voice.
+     * Affiche les métriques de la tête SVO : boundary, rôle, voice, certainty.
      * Le rôle syntaxique est mis en avant visuellement (header coloré).
      */
     private fun appendSvoSection(svo: EnrichedSvoSpan) {
-        val emoji  = SVO_EMOJI[svo.role] ?: "⚪"
-        val (svoBg, svoFg) = SVO_COLORS[svo.role] ?: ("#e5e7eb" to "#374151")
-        val hdr = Span("$emoji SVO — ${svo.role}")
+        // displayKey v4 : role en priorité (SUBJECT/OBJECT/…), sinon synLabel pour verbes/pronoms.
+        val key = if (svo.role != "NONE") svo.role else svo.synLabel
+        val emoji  = SVO_EMOJI[key] ?: "⚪"
+        val label  = SVO_LABEL[key] ?: key.lowercase()
+        val (svoBg, svoFg) = SVO_COLORS[key] ?: ("#e5e7eb" to "#374151")
+        val hdr = Span("$emoji SVO — ${label.uppercase()}")
         hdr.style["font-size"]     = "0.80em"
         hdr.style["font-weight"]   = "700"
         hdr.style["color"]         = svoFg
@@ -1171,12 +1436,21 @@ class NerDemoView(
         hdr.style["display"]       = "inline-block"
         hdr.style["margin-top"]    = "10px"
         detailPanel.add(hdr)
+        addRow(detailPanel, "syn_label",  svo.synLabel)
+        addRow(detailPanel, "role",       svo.role)
         addRow(detailPanel, "p_svo_bnd", "%.3f".format(svo.svoBoundaryProb))
         addRow(detailPanel, "p_role",    "%.3f".format(svo.roleProb))
         addRow(detailPanel, "voice",     "${svo.voice} (${"%.2f".format(svo.voiceProb)})")
+        if (svo.synLabel == "verb_trigger" && svo.certainty != "certain") {
+            addRow(detailPanel, "certainty", svo.certainty)
+        }
         svo.nerOverride?.let { addRow(detailPanel, "🔗 override", "$it (${fmt(svo.nerOverrideScore)})") }
         svo.gender?.let { addRow(detailPanel, i18n.rowGender, it) }
         svo.number?.let { addRow(detailPanel, i18n.rowNumber, it) }
+        svo.person?.let { addRow(detailPanel, "person", it) }
+        // Verb pointer : affiche le texte du verbe gouverneur si résolu, sinon la position brute
+        val verbRef = svo.govVerbText?.let { "«$it»" } ?: svo.govVerbCharStart?.let { "@$it" }
+        verbRef?.let { addRow(detailPanel, "→ trigger", it) }
         if (svo.fromNer) addRow(detailPanel, i18n.rowSource, i18n.syntheticNer)
     }
 
@@ -1299,11 +1573,16 @@ class NerDemoView(
                     "number"         to e.metadata["number"],
                 )},
                 "svo"  to r.svoSpans.map { s -> mapOf(
-                    "text" to s.text, "role" to s.role,
+                    "text" to s.text, "syn_label" to s.synLabel, "role" to s.role,
                     "char_start" to s.charStart, "char_end" to s.charEnd,
-                    "voice" to s.voice, "gender" to s.gender, "number" to s.number,
-                    "p_boundary" to s.svoBoundaryProb, "p_role" to s.roleProb,
+                    "voice" to s.voice, "certainty" to s.certainty,
+                    "gender" to s.gender, "number" to s.number, "person" to s.person,
+                    // p_confidence = score unifié v4 : svoBoundaryProb pour verbes (role=NONE),
+                    //   roleProb pour args (role != NONE). p_svo_bnd est toujours ~0 pour les NP args.
+                    "p_confidence" to s.svoConfidence,
+                    "p_svo_bnd" to s.svoBoundaryProb, "p_role" to s.roleProb,
                     "ner_override" to s.nerOverride, "from_ner" to s.fromNer,
+                    "gov_verb" to (s.govVerbText ?: s.govVerbCharStart?.let { "@$it" }),
                 )},
             )
         }

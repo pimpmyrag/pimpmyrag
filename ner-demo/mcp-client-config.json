@@ -9,12 +9,25 @@
     }
   },
 
+  "_svo_v4_architecture": {
+    "_note": "FEATURE PREVIEW — deux signaux indépendants (v4)",
+    "svo_boundary_head": "Détecte les VERBES déclencheurs. svoBoundaryProb élevé sur verbes, ~0 sur NP. role=NONE sur isActualVerb.",
+    "role_head": "Classifie le RÔLE argumental des NP arguments. roleProb ~0.99 si sûr. Indépendant du boundary head.",
+    "roles_v4": ["NONE (verbe)", "SUBJECT", "OBJECT", "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE", "APPOS", "pron_subj", "pron_obj"],
+    "p_confidence": "Score unifié = svoBoundaryProb pour verbes, roleProb pour args NP",
+    "eventlets": "Événements élémentaires groupés par verbe gouverneur : verb + subject + obj + iobjs + causes + appositions"
+  },
+
   "_tools_available": {
     "getConfig": "Lire tauBoundary / tauNone / tauCoarse / tauSvoBoundary courants",
-    "setThreshold": "Modifier un seuil (name + value) — effet immédiat",
-    "analyzeText": "Inférence NER+SVO avec scores bruts (pBoundary, pCoarse, pFine…)",
+    "setThreshold": "Modifier un seuil (name + value) — effet immédiat. tauSvoBoundary contrôle les verbes détectés (v4).",
+    "setCoarseScore": "Seuil de score par famille NER coarse (PER/LOC/ORG/…)",
+    "analyzeText": "Inférence NER+SVO v4 avec scores bruts. Retourne entities, svoSpans (rôles v4), eventlets (preview structuré).",
     "scanThreshold": "Balayer une plage de valeurs pour un seuil sur un texte-test",
-    "analyzeBatch": "Stats agrégées sur un corpus (max 30 textes)"
+    "analyzeBatch": "Stats agrégées sur un corpus (max 30 textes) avec distribution des rôles SVO v4",
+    "applyAndAnalyze": "Appliquer une config complète + ré-analyser en un appel",
+    "probePerformance": "Mesurer les performances d'inférence (latence single + throughput batch)",
+    "evaluateSvoPreview": "Protocole d'évaluation qualitative SVO v4 dédié : argumentSpans (role/p_confidence/govVerbText), verbSpans, eventlets structurés"
   },
 
   "_example_calibration_prompt": [
@@ -24,6 +37,16 @@
     "4. Call scanThreshold(text, 'tauBoundary', 0.40, 0.85, 0.05) to see the recall/precision tradeoff curve.",
     "5. Pick the 'elbow' value and apply it with setThreshold('tauBoundary', <value>).",
     "6. Re-run analyzeText to verify the result."
+  ],
+
+  "_example_svo_v4_prompt": [
+    "1. Call evaluateSvoPreview('Le rapporteur a présenté les résultats à la commission hier.') to evaluate SVO v4.",
+    "2. Check 'verbSpans': p_confidence = svoBoundaryProb → should be high (≥ 0.70) for true verbs.",
+    "3. Check 'argumentSpans': p_confidence = roleProb → should be high (≥ 0.85) for solid NP args.",
+    "4. Check 'eventlets': each eventlet should group the verb with its correct subject/obj/obliques.",
+    "5. If too many false verb spans → raise tauSvoBoundary (default 0.50): setThreshold('tauSvoBoundary', 0.65).",
+    "6. If argument slots are missing entities → check entityMatchNote (NER may not have detected the span).",
+    "7. govVerbText shows the governing verb for each NP argument — verify it points to the correct verb.",
+    "8. resolved=false on a slot means it's an unresolved pronoun (awaiting coreference resolution)."
   ]
 }
-

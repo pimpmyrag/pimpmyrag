@@ -3,6 +3,8 @@ package rag.demo
 import org.springframework.ai.tool.annotation.Tool
 import org.springframework.ai.tool.annotation.ToolParam
 import org.springframework.stereotype.Component
+import rag.connectors.ner.onnx.Eventlet
+import rag.connectors.ner.onnx.EventletSlot
 import kotlin.math.roundToInt
 
 /**
@@ -175,45 +177,81 @@ import kotlin.math.roundToInt
  *     nested=true, parentText, parentFine, parentCoarse, parentStart, parentEnd
  *
  * ═══════════════════════════════════════════════════════════════════════
- * FEATURE PREVIEW — TÊTES SVO (syntaxe + morphologie)
+ * FEATURE PREVIEW — TÊTES SVO v4 (syntaxe + morphologie + eventlets)
  * ═══════════════════════════════════════════════════════════════════════
  *
- * Le modèle embarque trois têtes supplémentaires évaluées sur le MÊME forward pass NER,
+ * Le modèle embarque plusieurs têtes supplémentaires évaluées sur le MÊME forward pass NER,
  * sans surcoût d'inférence. Elles sont ADDITIONNELLES et NON DESTRUCTIVES :
  * elles n'affectent pas les entités NER, elles les enrichissent.
  *
- * TÊTE SVO — rôle syntaxique argumental :
- *   Pour chaque span candidat, la tête SVO prédit:
- *     • svo_boundary  → "ce span est-il un argument SVO?" (prob pSvoBoundary)
- *     • svo_role      → svo_subject | svo_object | svo_iobj | svo_verb
- *                       pron_subj | pron_obj  (pronoms)
- *   Réconciliation NER↔SVO :
- *     Phase 1 (inline) : si une entité NER passe aussi le seuil SVO sur le MÊME span k,
- *       elle reçoit svoRole / syntacticRole en metadata (nsubj | obj | iobj).
- *     Phase 2 (snap positionnel) : un span SVO brut sans entité NER est snapé sur
- *       la meilleure entité voisine par recouvrement ≥ 60%.
+ * ARCHITECTURE V4 — DEUX SIGNAUX INDÉPENDANTS :
+ *   Contrairement à v3 (un seul head boundary + role), v4 sépare les deux détecteurs :
+ *
+ *   • svo_boundary_head → "ce span est-il un VERBE déclencheur ?" (prob svoBoundaryProb)
+ *       Élevé uniquement sur les vrais verbes. ~0 sur les NP/pronoms.
+ *       isActualVerb = svoBoundaryProb ≥ tauSvoBoundary AND synLabel == "verb_trigger"
+ *
+ *   • role_head → "quel RÔLE argumental pour ce span NP ?" (prob roleProb)
+ *       Élevé (~0.99) sur les vrais arguments (SUBJECT, OBJECT, OBLIQUE…).
+ *       Forcé à NONE sur les isActualVerb pour éviter la confusion.
+ *
+ *   synLabel (label positif brut du span) :
+ *     verb_trigger — tous les spans d'intérêt v4 portent ce label
+ *     pron_subj    — pronom sujet (peut avoir un rôle SUBJECT)
+ *     pron_obj     — pronom objet (peut avoir un rôle OBJECT)
+ *
+ *   role (rôle argumental v4) :
+ *     NONE           — verbe déclencheur (isActualVerb) — pas un argument
+ *     SUBJECT        — agent (actif) ou patient (passif)
+ *     OBJECT         — objet direct
+ *     OBLIQUE        — complément prépositionnel  (ex: "à Paris", "par train")
+ *     OBLIQUE_AGENT  — agent passif explicite     (ex: "par le président")
+ *     OBLIQUE_CAUSE  — cause / but               (ex: "pour raisons économiques")
+ *     APPOS          — apposition NE→rôle         (ex: "Macron, président")
+ *
+ *   svoConfidence (score unifié, utilisé pour NMS et affichage) :
+ *     • Pour les verbes  (role == NONE) → svoBoundaryProb
+ *     • Pour les args NP (role != NONE) → roleProb
+ *
+ *   govVerbCharStart / govVerbText — pointeur vers le verbe gouverneur, lu sur les NP args.
+ *   certainty — modalité du span : certain | modal | denied
+ *
+ * EVENTLETS — événements élémentaires structurés :
+ *   Après extraction SVO, les spans sont regroupés par govVerbCharStart en Eventlets :
+ *     verb         : le verbe déclencheur (SvoSpan)
+ *     voice        : ACTIVE | PASSIVE
+ *     negated      : true si négation détectée
+ *     subject      : slot SUBJECT (agent actif ou patient passif)
+ *     obj          : slot OBJECT
+ *     iobjs        : liste de slots OBLIQUE / OBLIQUE_AGENT
+ *     causes       : OBLIQUE_CAUSE
+ *     appositions  : APPOS
+ *   Chaque EventletSlot porte : svoSpan (texte + offsets), nerEntity (entité NER
+ *   fusionnée, peut être null), confidence, resolved (false = pronom sans antécédent).
  *
  * TÊTE SVO-ANCHORED (promotion d'entités borderline) :
- *   Si la tête SVO détecte un argument non-pronominal (svo_subject/object/iobj)
- *   avec pBoundary ∈ [tauSvoAnchoredBoundary, tauBoundary[, l'entité est promue
- *   avec des seuils NER assouplis (×0.85 fine, ×0.60 score). Taguée svoAnchored=true.
- *   → Utile pour récupérer des entités "borderline" que NER n'aurait pas gardées seul.
+ *   Si la tête SVO confère un rôle non-pronominal avec pBoundary ∈
+ *   [tauSvoAnchoredBoundary, tauBoundary[, l'entité est promue avec des seuils NER
+ *   assouplis (×0.85 fine, ×0.60 score). Taguée svoAnchored=true.
  *
  * TÊTES MORPHO — genre / nombre :
- *   Lus sur TOUTES les entités NER (indépendamment du SVO boundary) :
- *     gender : Masc | Fem  (absent si indéterminé)
- *     number : Sing | Plur (absent si indéterminé)
+ *   gender : Masc | Fem  (absent si indéterminé)
+ *   number : Sing | Plur (absent si indéterminé)
  *
- * COMMENT ÉVALUER LES SVO EN PREVIEW :
- *   1. analyzeText(texte) → observer le champ "svoSpans" :
- *        - svoRole     : le rôle argumental de chaque span
- *        - entityText  : l'entité NER fusionnée (si reconcile() a matchée)
- *        - p_svo_bnd   : confiance de la tête SVO boundary
- *        - p_role      : confiance du label de rôle
- *   2. Les entités affichent maintenant syntacticRole (nsubj|obj|iobj), gender, number.
- *   3. tauSvoBoundary (défaut 0.50) : lever pour réduire le bruit SVO.
+ * COMMENT ÉVALUER LES SVO V4 EN PREVIEW :
+ *   1. analyzeText(texte) → observer "svoSpans" :
+ *        - role         : NONE (verbe) ou SUBJECT / OBJECT / OBLIQUE / ...
+ *        - synLabel     : verb_trigger | pron_subj | pron_obj
+ *        - p_confidence : score unifié (svoBoundaryProb pour verbes, roleProb pour args)
+ *        - p_svo_bnd    : confiance de la tête svo_boundary (pertinent pour verbes)
+ *        - p_role       : confiance du label de rôle (pertinent pour args)
+ *        - certainty    : certain | modal | denied
+ *        - govVerbText  : verbe gouverneur du NP arg (null pour les verbes eux-mêmes)
+ *   2. Observer "eventlets" : événements structurés avec slots sujet/objet/obliques.
+ *   3. evaluateSvoPreview(texte) → protocole d'évaluation qualitative dédié.
+ *   4. tauSvoBoundary (défaut 0.50) : lever pour réduire les verbes détectés.
  *      tauSvoAnchoredBoundary (défaut 0.40) : lever pour moins de promotions borderline.
- *   4. La calibration NER (tauBoundary, etc.) est INDÉPENDANTE des seuils SVO.
+ *   5. La calibration NER (tauBoundary, etc.) est INDÉPENDANTE des seuils SVO.
  */
 @Component
 class NerMcpTools(private val nerService: NerService) {
@@ -404,27 +442,44 @@ class NerMcpTools(private val nerService: NerService) {
           svoRole        — raw SVO label: svo_subject | svo_object | svo_iobj | pron_subj | pron_obj
           svoRoleProb    — confidence of the SVO role label
           svoBoundaryScore — confidence of the SVO boundary head on this span
-          gender         — "Masc" | "Fem" if detected (morphology head)
-          number         — "Sing" | "Plur" if detected (morphology head)
+          gender         — "Masc" | "Fem" if detected (morphologie head)
+          number         — "Sing" | "Plur" if detected (morphologie head)
           svoAnchored    — true if entity was promoted by SVO confidence (pBoundary < tauBoundary
                            but ≥ tauSvoAnchoredBoundary). These have reduced NER confidence.
 
-        SVO SPAN FIELDS (reconciled — includes entity association):
+        SVO SPAN FIELDS — ARCHITECTURE V4 (two independent heads):
           text           — surface form of the SVO span
-          role           — svo_verb | svo_subject | svo_object | svo_iobj | pron_subj | pron_obj
-          p_svo_bnd      — SVO boundary confidence
-          p_role         — role label confidence
+          synLabel       — verb_trigger | pron_subj | pron_obj  (raw head label)
+          role           — NONE (verb trigger) | SUBJECT | OBJECT | OBLIQUE | OBLIQUE_AGENT |
+                           OBLIQUE_CAUSE | APPOS | pron_subj | pron_obj
+                           NONE = isActualVerb (svo_boundary_head fired AND synLabel=verb_trigger)
+          p_confidence   — unified confidence: svoBoundaryProb for verbs, roleProb for NP args
+          p_svo_bnd      — raw svo_boundary_head probability (high on verbs, ~0 on NP args)
+          p_role         — raw role_head probability (high on NP args ~0.99, noisy on verbs)
+          certainty      — certain | modal | denied  (modality head)
           voice          — ACTIVE | PASSIVE (with confidence)
+          govVerbText    — governing verb text for NP argument spans (null for verbs themselves)
+          govVerbCharStart — char offset of the governing verb (null for verb spans)
           entityText     — text of the merged NER entity (null if no entity matched)
           entityFine     — fine label of the matched entity (null if no entity matched)
           entityCoarse   — coarse family of the matched entity
           chars          — character offsets [start:end]
 
-        [SVO CALIBRATION GUIDE]
-          If too many SVO spans appear → raise tauSvoBoundary (default 0.50).
-          If too many svoAnchored entities appear → raise tauSvoAnchoredBoundary (default 0.40).
-          If NER entities miss their role → lower tauSvoBoundary slightly.
+        EVENTLET FIELDS (structured events grouped by governing verb):
+          verb           — {text, chars, voice, p_confidence}
+          subject        — {text, nerEntity, confidence, resolved} or null
+          obj            — object slot or null
+          iobjs          — list of OBLIQUE / OBLIQUE_AGENT slots
+          causes         — list of OBLIQUE_CAUSE slots
+          appositions    — list of APPOS slots
+          negated        — true if negation was detected
+
+        [SVO CALIBRATION GUIDE — V4]
+          If too many verb spans → raise tauSvoBoundary (default 0.50).
+          If argument coverage too low → lower tauSvoRoleForced (= 0 by default).
+          If too many svoAnchored entities → raise tauSvoAnchoredBoundary (default 0.40).
           NER calibration (tauBoundary etc.) is fully independent.
+          Use evaluateSvoPreview() for a dedicated qualitative evaluation protocol.
     """)
     fun analyzeText(
         @ToolParam(description = "The text to analyze (ideally one natural sentence or short paragraph)")
@@ -434,10 +489,9 @@ class NerMcpTools(private val nerService: NerService) {
         val result = nerService.analyseSingle(text)
         val inferenceMs = System.currentTimeMillis() - t0
 
-        // Résumé SVO pré-formaté pour guider le LLM judge
-        val svoArgSpans = result.svoSpans.filter {
-            it.role in setOf("svo_subject", "svo_object", "svo_iobj", "pron_subj", "pron_obj")
-        }
+        // Résumé SVO pré-formaté — v4 : args ont role != NONE, verbes ont role == NONE
+        val v4ArgRoles = setOf("SUBJECT", "OBJECT", "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE", "APPOS", "pron_subj", "pron_obj")
+        val svoArgSpans = result.svoSpans.filter { it.role in v4ArgRoles }
         val svoSummaryLines = if (result.svoSpans.isEmpty()) {
             listOf("Aucun span SVO détecté avec les seuils actuels (tauSvoBoundary=${nerService.config.tauSvoBoundary}).")
         } else {
@@ -445,18 +499,22 @@ class NerMcpTools(private val nerService: NerService) {
                 val entityPart = if (s.entity != null)
                     "→ entité NER : \"${s.entity!!.text}\" (${s.entity!!.type})"
                 else "→ aucune entité NER matchée"
-                "• [${s.role}] \"${s.text}\"  p_bnd=%.3f  p_role=%.3f  voix=${s.voice}  $entityPart".format(
-                    s.svoBoundaryProb, s.roleProb)
+                val roleDisplay = if (s.role == "NONE") "VERB/${s.synLabel}" else s.role
+                "• [$roleDisplay] \"${s.text}\"  p_conf=%.3f  p_bnd=%.3f  p_role=%.3f  voix=${s.voice}  cert=${s.certainty}  $entityPart".format(
+                    s.svoConfidence, s.svoBoundaryProb, s.roleProb)
             }
         }
 
         return mapOf(
             "⚠_SVO_PREVIEW_A_EVALUER" to mapOf(
                 "instruction" to "Commenter OBLIGATOIREMENT chaque entrée de svoSpansSummary ci-dessous. " +
+                    "V4 : role=NONE = verbe trigger (p_svo_bnd fiable), role!=NONE = argument NP (p_role fiable). " +
                     "Évaluer si les rôles sont corrects pour la phrase analysée. " +
                     "Indiquer les associations entité NER↔rôle SVO. Signaler tout rôle suspect.",
                 "svoCount"         to result.svoSpans.size,
                 "svoArgCount"      to svoArgSpans.size,
+                "svoVerbCount"     to result.svoSpans.count { it.role == "NONE" },
+                "eventletCount"    to result.eventlets.size,
                 "svoSpansSummary"  to svoSummaryLines,
                 "nerEntitiesWithRole" to result.entities
                     .filter { it.metadata["syntacticRole"] != null }
@@ -466,6 +524,7 @@ class NerMcpTools(private val nerService: NerService) {
             "inferenceMs"    to inferenceMs,
             "entityCount"    to result.entities.size,
             "svoCount"       to result.svoSpans.size,
+            "eventletCount"  to result.eventlets.size,
             "entities" to result.entities.map { e ->
                 buildMap {
                     put("text",      e.text)
@@ -494,12 +553,17 @@ class NerMcpTools(private val nerService: NerService) {
             },
             "svoSpans" to result.svoSpans.map { s ->
                 buildMap {
-                    put("text",        s.text)
-                    put("role",        s.role)
-                    put("p_svo_bnd",   "%.3f".format(s.svoBoundaryProb))
-                    put("p_role",      "%.3f".format(s.roleProb))
-                    put("voice",       "${s.voice} (%.2f)".format(s.voiceProb))
-                    put("chars",       "[${s.charStart}:${s.charEnd}]")
+                    put("text",          s.text)
+                    put("synLabel",      s.synLabel)
+                    put("role",          s.role)
+                    put("p_confidence",  "%.3f".format(s.svoConfidence))
+                    put("p_svo_bnd",     "%.3f".format(s.svoBoundaryProb))
+                    put("p_role",        "%.3f".format(s.roleProb))
+                    put("certainty",     s.certainty)
+                    put("voice",         "${s.voice} (%.2f)".format(s.voiceProb))
+                    put("chars",         "[${s.charStart}:${s.charEnd}]")
+                    s.govVerbText?.let { put("govVerbText", it) }
+                    s.govVerbCharStart?.let { put("govVerbCharStart", it) }
                     // Entité NER fusionnée par reconcile() (null si aucun match)
                     s.entity?.let {
                         put("entityText",   it.text)
@@ -513,6 +577,7 @@ class NerMcpTools(private val nerService: NerService) {
                     s.number?.let { put("number", it) }
                 }
             },
+            "eventlets" to result.eventlets.map { serializeEventlet(it) },
         )
     }
 
@@ -650,7 +715,7 @@ class NerMcpTools(private val nerService: NerService) {
                 }
                 r.svoSpans.forEach { s ->
                     svoRoleCounts[s.role] = (svoRoleCounts[s.role] ?: 0) + 1
-                    val isArg = s.role in setOf("svo_subject","svo_object","svo_iobj","pron_subj","pron_obj")
+                    val isArg = s.role in setOf("SUBJECT","OBJECT","OBLIQUE","OBLIQUE_AGENT","OBLIQUE_CAUSE","APPOS","pron_subj","pron_obj")
                     if (isArg) { svoTotal++; if (s.entity != null) svoWithEntity++ }
                 }
             }
@@ -901,31 +966,55 @@ class NerMcpTools(private val nerService: NerService) {
         return result
     }
 
-    // ── 9. Évaluation dédiée SVO preview ─────────────────────────────────────
+    // ── 9. Évaluation dédiée SVO preview v4 + eventlets ──────────────────────
 
     @Tool(description = """
-        [SVO PREVIEW — ÉVALUATION DÉDIÉE]
-        Lance l'inférence sur un texte et retourne UNIQUEMENT les informations SVO
+        [SVO PREVIEW v4 — ÉVALUATION DÉDIÉE + EVENTLETS]
+        Lance l'inférence sur un texte et retourne les informations SVO/eventlets
         pour une évaluation qualitative ciblée par le LLM judge.
 
-        ══════════════════════════════════════════════════════
-        PROTOCOLE D'ÉVALUATION OBLIGATOIRE POUR LE LLM JUDGE
-        ══════════════════════════════════════════════════════
-        Pour chaque span dans "argumentSpans" :
-          1. Lire le texte du span et son rôle (subject / object / iobj)
-          2. Vérifier que le rôle est cohérent avec la phrase source (field "inputText")
-          3. Vérifier l'association entité NER : entityText + entityFine corrects ?
-          4. Évaluer la confiance : p_svo_bnd ≥ 0.70 → fiable, < 0.55 → suspect
-          5. Si voix PASSIVE → vérifier que le sujet grammatical est bien l'agent passif
-        Pour "verbSpans" :
-          - Vérifier que le verbe détecté est bien le verbe principal (ou un verbe auxiliaire)
-        Conclure par : nb rôles corrects / nb total, cas problématiques identifiés,
-        recommandation de réglage seuil si nécessaire.
-        ══════════════════════════════════════════════════════
+        ════════════════════════════════════════════════════════════════════
+        PROTOCOLE D'ÉVALUATION OBLIGATOIRE POUR LE LLM — LIRE EN ENTIER
+        ════════════════════════════════════════════════════════════════════
+        ARCHITECTURE V4 : deux signaux indépendants.
+          • Verbes (role=NONE) : p_confidence = svoBoundaryProb (tête verb-detector)
+          • Args NP (role!=NONE) : p_confidence = roleProb (tête role-classifier, ~0.99 si confiant)
 
-        Rappel : tauSvoBoundary (défaut 0.50) contrôle le seuil de détection SVO.
-        tauSvoAnchoredBoundary (défaut 0.40) contrôle la promotion d'entités borderline.
-        Ces seuils sont INDÉPENDANTS de la calibration NER.
+        ÉTAPE 1 — VÉRIFIER LES SPANS ARGUMENTAUX ("argumentSpans") :
+          Pour chaque span :
+          1. Rôle (SUBJECT/OBJECT/OBLIQUE/OBLIQUE_AGENT/OBLIQUE_CAUSE/APPOS) cohérent ?
+          2. Entité NER associée (entityCoarse/entityFine) correcte ?
+             → SUBJECT :  doit être PER/ORG/EVENT — JAMAIS LOC ni TIME.
+             → OBJECT  :  PER/ORG/LOC/EVENT/OBJECT acceptables.
+             → OBLIQUE :  LOC/TIME/PER/ORG tous valides.
+          3. p_confidence ≥ 0.85 → ✅ fiable | 0.60–0.85 → ⚠ incertain | < 0.60 → ❌ suspect
+          4. govVerbText : le verbe gouverneur est-il bien le verbe principal ?
+
+        ÉTAPE 2 — ÉVALUER LES EVENTLETS ("eventlets") — OBLIGATOIRE MÊME EN PREVIEW :
+        ┌─────────────────────────────────────────────────────────────────────────────┐
+        │ Pour CHAQUE eventlet dans la liste "eventlets", évaluer EXPLICITEMENT :     │
+        │   a) VERB      — le bon verbe principal est-il détecté ? voice correcte ?   │
+        │   b) SUBJECT   — slot rempli ? Entité correcte ? null si sujet absent ?     │
+        │                  Règle : LOC/TIME ne peuvent PAS être SUBJECT.              │
+        │   c) OBJECT    — slot rempli si objet grammatical présent ? Entité ok ?     │
+        │   d) iobjs     — chaque oblique listé est-il pertinent ?                    │
+        │                  Aucun doublon avec obj ? (un span ≠ obj ET iobj).          │
+        │   e) negated   — valeur cohérente avec la phrase ?                          │
+        │   f) Slots manquants → indiquer ce qui devrait être là mais ne l'est pas.  │
+        │                                                                             │
+        │ NOTATION PAR EVENTLET (obligatoire) :                                       │
+        │   ✅ correct  — verb/subject/object/obliques tous justes                    │
+        │   ⚠ partiel  — 1-2 slots manquants ou coarse incorrect                    │
+        │   ❌ incorrect — sujet/objet inversé, LOC en SUBJECT, doublon obj/iobj      │
+        └─────────────────────────────────────────────────────────────────────────────┘
+
+        ÉTAPE 3 — BILAN GLOBAL :
+          • X/N eventlets corrects (noter la fraction).
+          • Cas problématiques identifiés (rôles erronés, slots manquants, doublons).
+          • Recommandation de réglage si nécessaire :
+              trop de verbes → augmenter tauSvoBoundary (défaut 0.50)
+              arguments manquants → réduire tauSvoAnchoredBoundary (défaut 0.40)
+        ════════════════════════════════════════════════════════════════════
     """)
     fun evaluateSvoPreview(
         @ToolParam(description = "Le texte à analyser (une phrase ou un court paragraphe)")
@@ -933,9 +1022,9 @@ class NerMcpTools(private val nerService: NerService) {
     ): Map<String, Any> {
         val result = nerService.analyseSingle(text)
 
-        val argRoles = setOf("svo_subject", "svo_object", "svo_iobj", "pron_subj", "pron_obj")
-        val argSpans  = result.svoSpans.filter { it.role in argRoles }
-        val verbSpans = result.svoSpans.filter { it.role == "svo_verb" }
+        val v4ArgRoles = setOf("SUBJECT", "OBJECT", "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE", "APPOS", "pron_subj", "pron_obj")
+        val argSpans  = result.svoSpans.filter { it.role in v4ArgRoles }
+        val verbSpans = result.svoSpans.filter { it.role == "NONE" }
 
         return mapOf(
             "inputText"    to text,
@@ -943,14 +1032,54 @@ class NerMcpTools(private val nerService: NerService) {
                 "tauSvoBoundary"         to nerService.config.tauSvoBoundary,
                 "tauSvoAnchoredBoundary" to nerService.config.tauSvoAnchoredBoundary,
             ),
+            // ── Bloc instruction LLM — eventlets ──────────────────────────────────
+            // Pré-rempli avec une checklist par eventlet pour guider le LLM judge.
+            "⚠_EVENTLETS_A_EVALUER" to buildMap<String, Any?> {
+                put("instruction",
+                    "ÉVALUER OBLIGATOIREMENT chaque eventlet ci-dessous (même en preview). " +
+                    "Pour chaque eventlet : noter ✅/⚠/❌, commenter verb/subject/obj/iobjs, " +
+                    "signaler tout doublon obj==iobj, LOC/TIME en SUBJECT, ou slot manquant. " +
+                    "Conclure par X/N eventlets corrects.")
+                put("eventletCount", result.eventlets.size)
+                if (result.eventlets.isEmpty()) {
+                    put("note",
+                        "Aucun eventlet détecté — vérifier que tauSvoBoundary n'est pas trop élevé " +
+                        "(actuel: ${nerService.config.tauSvoBoundary}). Un verbe avec p_svo_bnd < tauSvoBoundary " +
+                        "ne génère aucun eventlet même si des arguments sont présents.")
+                } else {
+                    put("checklistParEventlet", result.eventlets.mapIndexed { idx, ev ->
+                        buildMap<String, Any?> {
+                            put("eventlet_#", idx + 1)
+                            put("verb",    "${ev.verb.text}  voice=${ev.verb.voice}  p=${"%.3f".format(ev.verb.svoBoundaryProb)}  certainty=${ev.verb.certainty}")
+                            put("subject", ev.subject?.let { s -> "${s.svoSpan.text}  conf=${"%.3f".format(s.confidence)}  entity=${s.nerEntity?.text ?: "—"}  coarse=${s.nerEntity?.metadata?.get("coarse") ?: "—"}" }
+                                          ?: "⚠ null — un sujet était-il attendu ?")
+                            put("obj",     ev.obj?.let     { s -> "${s.svoSpan.text}  conf=${"%.3f".format(s.confidence)}  entity=${s.nerEntity?.text ?: "—"}" }
+                                          ?: "null — un objet direct était-il attendu ?")
+                            put("iobjs",   ev.iobjs.map { s -> "${s.svoSpan.text} (${s.svoSpan.role})" }.ifEmpty { listOf("(aucun)") })
+                            put("negated", ev.negated)
+                            put("à_vérifier", listOf(
+                                "verb  : verbe principal de la phrase ? voice ACTIVE/PASSIVE cohérente ?",
+                                "subject : PER/ORG/EVENT attendu — LOC/TIME INTERDIT en SUBJECT",
+                                "obj   : objet direct grammatical ? null si absent de la phrase ?",
+                                "iobjs : aucun doublon avec obj ? chaque oblique (lieu/temps/bénéficiaire) correct ?",
+                                "notation finale : ✅ correct | ⚠ partiel (slots manquants) | ❌ incorrect (rôle faux)"
+                            ))
+                        }
+                    })
+                }
+            },
             "argumentSpans" to argSpans.map { s ->
                 buildMap {
-                    put("text",       s.text)
-                    put("role",       s.role)
-                    put("p_svo_bnd",  "%.3f".format(s.svoBoundaryProb))
-                    put("p_role",     "%.3f".format(s.roleProb))
-                    put("voice",      "${s.voice} (%.2f)".format(s.voiceProb))
-                    put("chars",      "[${s.charStart}:${s.charEnd}]")
+                    put("text",        s.text)
+                    put("synLabel",    s.synLabel)
+                    put("role",        s.role)
+                    put("p_confidence","%.3f".format(s.svoConfidence))
+                    put("p_svo_bnd",   "%.3f".format(s.svoBoundaryProb))
+                    put("p_role",      "%.3f".format(s.roleProb))
+                    put("certainty",   s.certainty)
+                    put("voice",       "${s.voice} (%.2f)".format(s.voiceProb))
+                    put("chars",       "[${s.charStart}:${s.charEnd}]")
+                    s.govVerbText?.let { put("govVerbText", it) }
                     if (s.entity != null) {
                         put("entityText",   s.entity!!.text)
                         put("entityFine",   s.entity!!.type)
@@ -963,21 +1092,23 @@ class NerMcpTools(private val nerService: NerService) {
                     s.gender?.let { put("gender", it) }
                     s.number?.let { put("number", it) }
                     put("confidence", when {
-                        s.svoBoundaryProb >= 0.70f -> "✅ fiable"
-                        s.svoBoundaryProb >= 0.55f -> "⚠ incertain"
-                        else -> "❌ suspect (p_svo_bnd faible)"
+                        s.svoConfidence >= 0.85f -> "✅ fiable"
+                        s.svoConfidence >= 0.60f -> "⚠ incertain"
+                        else -> "❌ suspect (p_confidence faible)"
                     })
                 }
             },
             "verbSpans" to verbSpans.map { s ->
                 mapOf(
-                    "text"      to s.text,
-                    "p_svo_bnd" to "%.3f".format(s.svoBoundaryProb),
-                    "p_role"    to "%.3f".format(s.roleProb),
-                    "voice"     to "${s.voice} (%.2f)".format(s.voiceProb),
-                    "chars"     to "[${s.charStart}:${s.charEnd}]",
+                    "text"         to s.text,
+                    "p_confidence" to "%.3f".format(s.svoConfidence),
+                    "p_svo_bnd"    to "%.3f".format(s.svoBoundaryProb),
+                    "certainty"    to s.certainty,
+                    "voice"        to "${s.voice} (%.2f)".format(s.voiceProb),
+                    "chars"        to "[${s.charStart}:${s.charEnd}]",
                 )
             },
+            "eventlets" to result.eventlets.map { serializeEventlet(it) },
             "nerEntitiesWithRole" to result.entities
                 .filter { it.metadata["syntacticRole"] != null }
                 .map { e ->
@@ -991,10 +1122,11 @@ class NerMcpTools(private val nerService: NerService) {
                     )
                 },
             "summary" to mapOf(
-                "totalSvoSpans" to result.svoSpans.size,
-                "argumentCount" to argSpans.size,
-                "verbCount"     to verbSpans.size,
-                "withEntityMatch" to argSpans.count { it.entity != null },
+                "totalSvoSpans"     to result.svoSpans.size,
+                "verbCount"         to verbSpans.size,
+                "argumentCount"     to argSpans.size,
+                "eventletCount"     to result.eventlets.size,
+                "withEntityMatch"   to argSpans.count { it.entity != null },
                 "withoutEntityMatch" to argSpans.count { it.entity == null },
             ),
         )
@@ -1007,6 +1139,36 @@ class NerMcpTools(private val nerService: NerService) {
         is Double -> "%.4f".format(v)
         null      -> "—"
         else      -> v.toString()
+    }
+
+    private fun serializeSlot(slot: EventletSlot): Map<String, Any?> = buildMap {
+        put("text",         slot.svoSpan.text)
+        put("chars",        "[${slot.svoSpan.charStart}:${slot.svoSpan.charEnd}]")
+        put("role",         slot.svoSpan.role)
+        put("confidence",   "%.3f".format(slot.confidence))
+        put("resolved",     slot.resolved)
+        slot.nerEntity?.let {
+            put("entityText",   it.text)
+            put("entityFine",   it.type)
+            put("entityCoarse", it.metadata["coarse"] ?: "NONE")
+        }
+    }
+
+    private fun serializeEventlet(ev: Eventlet): Map<String, Any?> = buildMap {
+        put("verb", mapOf(
+            "text"         to ev.verb.text,
+            "chars"        to "[${ev.verb.charStart}:${ev.verb.charEnd}]",
+            "p_confidence" to "%.3f".format(ev.verb.svoBoundaryProb),
+            "certainty"    to ev.verb.certainty,
+        ))
+        put("voice",       ev.voice)
+        put("negated",     ev.negated)
+        put("subject",     ev.subject?.let { serializeSlot(it) })
+        put("obj",         ev.obj?.let { serializeSlot(it) })
+        put("iobjs",       ev.iobjs.map { serializeSlot(it) })
+        put("causes",      ev.causes.map { serializeSlot(it) })
+        put("appositions", ev.appositions.map { serializeSlot(it) })
+        put("hasUnresolved", ev.hasUnresolvedMentions)
     }
 }
 

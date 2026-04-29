@@ -69,7 +69,9 @@ class OnnxSpanMultiTaskWrapper(nn.Module):
         self.gender_head       = inner.gender_head
         self.number_head       = inner.number_head
         self.person_head       = inner.person_head
-        self.verb_ptr_head     = inner.verb_ptr_head
+        # Verb pointer: bilinéaire query/key
+        self.verb_ptr_query    = inner.verb_ptr_query
+        self.verb_ptr_key      = inner.verb_ptr_key
 
         self.max_width_bucket = inner.max_width_bucket
 
@@ -109,8 +111,23 @@ class OnnxSpanMultiTaskWrapper(nn.Module):
             span_reps = torch.stack(reps)  # [N, span_input_dim]
             span_h = self.span_mlp(span_reps)
 
-        # Verb pointer : [N, L] — logits pour chaque position de séquence
-        verb_ptr_logits = self.verb_ptr_head(span_h)  # [N, L]
+        # Verb pointer : [N, L] — logits bilinéaires span_query · token_key
+        # ptr_queries : [N, 64]
+        # ptr_keys    : [B, L, 64]  →  gather par batch index → [N, L, 64]
+        # verb_ptr_logits : [N, L]
+        ptr_queries = self.verb_ptr_query(span_h)          # [N, 64]
+        ptr_keys    = self.verb_ptr_key(hidden)            # [B, L, 64]
+
+        if span_h.size(0) > 0:
+            # Gather les keys du bon batch pour chaque span
+            gathered_keys = ptr_keys[span_batch_ids]       # [N, L, 64]
+            # Produit matriciel bilinéaire : gathered_keys @ ptr_queries^T
+            verb_ptr_logits = torch.bmm(
+                gathered_keys,                             # [N, L, 64]
+                ptr_queries.unsqueeze(-1)                  # [N, 64, 1]
+            ).squeeze(-1)                                  # [N, L]
+        else:
+            verb_ptr_logits = torch.zeros((0, L), device=hidden.device)
 
         return (
             self.boundary_head(span_h),      # [N, 2]

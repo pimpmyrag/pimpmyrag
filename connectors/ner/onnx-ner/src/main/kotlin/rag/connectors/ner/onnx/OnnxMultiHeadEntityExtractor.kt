@@ -38,29 +38,28 @@ private val FINE_LABELS = listOf(
 private val COARSE_NONE_IDX = COARSE_LABELS.indexOf("NONE")
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Labels SVO / Voice / Morpho — ordre identique à labels.py
+// Labels SVO / Voice / Morpho v4 — ordre identique à labels.py
 // ─────────────────────────────────────────────────────────────────────────────
 
-private val SVO_LABELS = listOf(
-    "svo_verb",    // 0  verbe principal (+ aux)
-    "svo_subject", // 1  sujet grammatical (NP)
-    "svo_object",  // 2  objet direct
-    "svo_iobj",    // 3  objet indirect / oblique prép.
-    "svo_tcomp",   // 4  CC de temps
-    "svo_lcomp",   // 5  CC de lieu
-    "svo_cause",   // 6  proposition / GN causal
-    "attr",        // 7  attribut du sujet (copule)
-    "nom_event",   // 8  NOUN déverbal avec argument
-    "ent_appos",   // 9  apposition NE → rôle/titre
-    "pron_subj",   // 10 pronom sujet
-    "pron_obj",    // 11 pronom objet
-    "pron_dem",    // 12 pronom démonstratif
-    "neg",         // 13 marqueur de négation
+private val SYN_LABELS = listOf(
+    "verb_trigger", // 0  verbe (gold Claude v4)
+    "pron_subj",    // 1  pronom sujet
+    "pron_obj",     // 2  pronom objet
 )
-private val VOICE_LABELS  = listOf("ACTIVE", "PASSIVE")
-private val GENDER_LABELS = listOf("Masc", "Fem", "NONE")
-private val NUMBER_LABELS = listOf("Sing", "Plur", "NONE")
-private val PERSON_LABELS = listOf("1", "2", "3", "NONE")
+private val ROLE_LABELS = listOf(
+    "SUBJECT",       // 0  sujet
+    "OBJECT",        // 1  objet direct
+    "OBLIQUE",       // 2  oblique/complément prépositionnel
+    "OBLIQUE_AGENT", // 3  agent passif introduit par "par"
+    "OBLIQUE_CAUSE", // 4  cause introduite par "à cause de" / "en raison de"
+    "APPOS",         // 5  apposition
+    "NONE",          // 6
+)
+private val VOICE_LABELS     = listOf("active", "passive")
+private val CERTAINTY_LABELS = listOf("certain", "modal", "denied")
+private val GENDER_LABELS    = listOf("M", "F", "N")
+private val NUMBER_LABELS    = listOf("SG", "PL")
+private val PERSON_LABELS    = listOf("1", "2", "3")
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Taxonomie sémantique des labels fine
@@ -202,40 +201,49 @@ private const val DEFAULT_FINE_THRESHOLD = 0.80f
 // Data classes internes
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Un span syntaxique SVO brut après scoring. */
+/** Un span syntaxique SVO brut après scoring (v4 gold). */
 private data class RawSvoResult(
     val candidate: SpanCandidate,
     val svoBoundaryProb: Float,
-    val role: String,
+    val synLabel: String,           // verb_trigger | pron_subj | pron_obj
+    val synProb: Float,
+    val role: String,                // SUBJECT | OBJECT | OBLIQUE | OBLIQUE_AGENT | OBLIQUE_CAUSE | APPOS | NONE
     val roleProb: Float,
-    val voice: String,
+    val voice: String,               // active | passive
     val voiceProb: Float,
+    val certainty: String,           // certain | modal | denied
+    val certaintyProb: Float,
     val gender: String?,
     val number: String?,
-    val person: String?,           // personne grammaticale (pron_subj / pron_obj / pron_dem)
-    val govVerbCharStart: Int?,    // charStart du verbe gouverneur (verb pointer, null si non prédit)
+    val person: String?,             // personne grammaticale (pron_subj / pron_obj)
+    val govVerbCharStart: Int?,      // charStart du verbe gouverneur (verb pointer, null si non prédit)
 )
 
 /**
- * Span syntaxique SVO (verbe, sujet, objet, oblique ou pronom) détecté par le modèle.
+ * Span syntaxique SVO (verbe, sujet, objet, oblique ou pronom) détecté par le modèle v4.
  *
- * [role] : svo_verb | svo_subject | svo_object | svo_iobj | svo_tcomp | svo_lcomp |
- *          svo_cause | attr | nom_event | ent_appos | pron_subj | pron_obj | pron_dem | neg
- * [voice] : ACTIVE | PASSIVE (surtout pertinent pour svo_verb)
- * [gender] / [number] : Masc/Fem/NONE et Sing/Plur/NONE (morphologie coréf)
- * [person] : 1/2/3/NONE — personne grammaticale (pronoms uniquement)
- * [govVerbCharStart] : charStart du verbe gouverneur prédit par le verb pointer (null pour svo_verb)
+ * [synLabel]  : verb_trigger | pron_subj | pron_obj
+ * [role]      : SUBJECT | OBJECT | OBLIQUE | OBLIQUE_AGENT | OBLIQUE_CAUSE | APPOS | NONE
+ * [voice]     : active | passive (surtout pertinent pour verb_trigger)
+ * [certainty] : certain | modal | denied (verb_trigger uniquement)
+ * [gender] / [number] : M/F/N et SG/PL (morphologie coréf)
+ * [person]    : 1/2/3 — personne grammaticale (pronoms uniquement)
+ * [govVerbCharStart] : charStart du verbe gouverneur prédit par le verb pointer (null pour verb_trigger)
  * [govVerbText]      : texte du verbe gouverneur résolu après NMS (null si non résolu)
  */
 data class SvoSpan(
     val text: String,
     val charStart: Int,
     val charEnd: Int,
+    val synLabel: String,
+    val synProb: Float,
     val role: String,
     val roleProb: Float,
     val svoBoundaryProb: Float,
     val voice: String,
     val voiceProb: Float,
+    val certainty: String,
+    val certaintyProb: Float,
     val gender: String?,
     val number: String?,
     val person: String?,           // personne grammaticale (pron_subj / pron_obj / pron_dem)
@@ -267,9 +275,9 @@ data class ExtractionResult(
     /** Reconstruit les triplets (sujet, verbe, objet) de façon greedy.
      *  Priorité au verb pointer (govVerbCharStart) quand disponible, sinon heuristique positionnelle. */
     fun svoTriplets(): List<SvoTriplet> {
-        val verbs    = svoSpans.filter { it.role == "svo_verb" }
-        val subjects = svoSpans.filter { it.role in listOf("svo_subject", "pron_subj") }
-        val objects  = svoSpans.filter { it.role in listOf("svo_object", "svo_iobj", "pron_obj", "attr") }
+        val verbs    = svoSpans.filter { it.synLabel == "verb_trigger" }
+        val subjects = svoSpans.filter { it.role in listOf("SUBJECT") || it.synLabel == "pron_subj" }
+        val objects  = svoSpans.filter { it.role in listOf("OBJECT") || it.synLabel == "pron_obj" }
         return verbs.map { v ->
             // Si l'argument a un govVerbCharStart qui pointe sur ce verbe → liaison directe
             val subj = subjects
@@ -285,32 +293,29 @@ data class ExtractionResult(
     /**
      * Réconciliation nsubj / obj / iobj pour chaque entité NER.
      *
-     * Pour chaque entité, cherche le SvoSpan argumental (svo_subject, svo_object,
-     * svo_iobj, pron_subj, pron_obj) qui maximise le taux de recouvrement avec l'entité.
+     * Pour chaque entité, cherche le SvoSpan argumental (role SUBJECT/OBJECT/OBLIQUE
+     * ou synLabel pron_subj/pron_obj) qui maximise le taux de recouvrement avec l'entité.
      * Le rôle SVO est normalisé en rôle syntaxique universel :
-     *   svo_subject / pron_subj → "nsubj"
-     *   svo_object  / pron_obj  → "obj"
-     *   svo_iobj                → "iobj"
+     *   role SUBJECT / synLabel pron_subj → "nsubj"
+     *   role OBJECT  / synLabel pron_obj  → "obj"
+     *   role OBLIQUE*                     → "iobj" / "obl"
      *
      * Ce croisement est complémentaire de l'enrichissement inline (métadonnée "svoRole"
      * stockée dans l'entité quand la tête SVO a tiré sur le même candidat span) :
      * il peut réconcilier des entités dont les bornes diffèrent légèrement du SvoSpan.
      */
     fun reconcileSvoRoles(): List<EntityWithRole> {
-        val argumentRoles = setOf(
-            "svo_subject", "svo_object", "svo_iobj",
-            "pron_subj", "pron_obj",
-            "attr", "nom_event", "ent_appos",
-        )
+        val argumentRoles = setOf("SUBJECT", "OBJECT", "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE", "APPOS")
+        val argumentSynLabels = setOf("pron_subj", "pron_obj")
 
-        fun toSyntactic(role: String): String? = when (role) {
-            "svo_subject", "pron_subj" -> "nsubj"
-            "svo_object",  "pron_obj"  -> "obj"
-            "svo_iobj"                 -> "iobj"
-            "attr"                     -> "attr"
-            "ent_appos"                -> "appos"
-            "nom_event"                -> "nmod"
-            else                       -> null
+        fun toSyntactic(svo: SvoSpan): String? = when {
+            svo.role == "SUBJECT" || svo.synLabel == "pron_subj" -> "nsubj"
+            svo.role == "OBJECT"  || svo.synLabel == "pron_obj"  -> "obj"
+            svo.role == "OBLIQUE" -> "obl"
+            svo.role == "OBLIQUE_AGENT" -> "obl:agent"
+            svo.role == "OBLIQUE_CAUSE" -> "obl:cause"
+            svo.role == "APPOS" -> "appos"
+            else -> null
         }
 
         return entities.map { entity ->
@@ -323,7 +328,7 @@ data class ExtractionResult(
 
             // Score = roleProb × overlapRatio → favorise les spans précis ET confiants
             val best = svoSpans
-                .filter { it.role in argumentRoles }
+                .filter { it.role in argumentRoles || it.synLabel in argumentSynLabels }
                 .mapNotNull { svo ->
                     val overlap = minOf(svo.charEnd, eEnd) - maxOf(svo.charStart, eStart)
                     if (overlap <= 0) null
@@ -336,7 +341,7 @@ data class ExtractionResult(
 
             EntityWithRole(
                 entity        = entity,
-                syntacticRole = best?.let { toSyntactic(it.first.role) },
+                syntacticRole = best?.let { toSyntactic(it.first) },
                 svoSpan       = best?.first,
                 overlapRatio  = best?.second ?: 0f,
             )
@@ -357,57 +362,116 @@ data class ExtractionResult(
      * dans le graph avec resolved=false jusqu'à la passe de coref (rejouable).
      */
     fun eventlets(): List<Eventlet> {
+        // ── Labels v4 gold ────────────────────────────────────────────────────
+        // Verbes : synLabel == "verb_trigger"  (role est NONE sur les verb spans)
+        // Args nominaux : role in {SUBJECT, OBJECT, OBLIQUE, OBLIQUE_AGENT, OBLIQUE_CAUSE, APPOS}
+        // Args pronominaux : synLabel in {pron_subj, pron_obj}
         val SLOT_ROLES = setOf(
-            "svo_subject", "svo_object", "svo_iobj",
-            "svo_tcomp", "svo_lcomp", "svo_cause",
-            "pron_subj", "pron_obj", "attr", "ent_appos",
+            "SUBJECT", "OBJECT", "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE", "APPOS",
+            "pron_subj", "pron_obj",
         )
-        val PRON_ROLES = setOf("pron_subj", "pron_obj", "pron_dem")
+        val PRON_ROLES = setOf("pron_subj", "pron_obj")
 
-        val verbSpans = svoSpans.filter { it.role == "svo_verb" }.sortedBy { it.charStart }
-        val negSpans  = svoSpans.filter { it.role == "neg" }
+        // v4 : les verbes sont identifiés par synLabel == "verb_trigger" ET role == "NONE".
+        // Après normalisation dans NerService, les vrais verbes ont role=NONE ;
+        // les arguments NP ont aussi synLabel=verb_trigger (artefact v4) mais role != NONE.
+        // Sans ce filtre sur role, les args NP apparaissent comme des verbes dans les eventlets.
+        val verbSpans = svoSpans.filter { it.synLabel == "verb_trigger" && it.role == "NONE" }.sortedBy { it.charStart }
+        // v4 : pas de label "neg" → pas de négation détectée pour l'instant
+        val negSpans: List<SvoSpan> = emptyList()
 
-        // Construire un EventletSlot en matchant l'entité NER la plus overlapping
+        // Construire un EventletSlot en matchant l'entité NER la plus longue parmi celles
+        // qui overlappent le span SVO. Quand des entités sont imbriquées (ex : "2026" dans
+        // "sommet mondial Earth Summit 2026"), on préfère la plus longue — elle est plus
+        // informative et correspond généralement mieux à la tête sémantique du groupe nominal.
         fun mkSlot(svo: SvoSpan): EventletSlot {
             val svoLen = (svo.charEnd - svo.charStart).coerceAtLeast(1)
-            val bestNer = entities.mapNotNull { e ->
+            val candidates = entities.mapNotNull { e ->
                 val overlap = minOf(svo.charEnd, e.span.end) - maxOf(svo.charStart, e.span.start)
                 if (overlap > 0) Pair(e, overlap.toFloat() / svoLen) else null
-            }.maxByOrNull { it.second }
+            }
+            // Parmi les entités en overlap, prendre la plus longue (span la plus étendue).
+            // Si plusieurs ont la même longueur, tiebreak sur le score NER.
+            val bestNer = candidates.maxWithOrNull(
+                compareBy(
+                    { it.first.span.end - it.first.span.start },          // 1. plus longue
+                    { (it.first.metadata["score"] as? Float) ?: 0f },     // 2. score NER le plus élevé
+                )
+            )
 
-            val isPron    = svo.role in PRON_ROLES
+            val isPron    = svo.synLabel in PRON_ROLES
             val ratio     = bestNer?.second ?: 0f
             return EventletSlot(
                 svoSpan      = svo,
                 nerEntity    = bestNer?.first,
                 overlapRatio = ratio,
-                // confidence = roleProb × overlap si NER présent ; roleProb seul si pronom attendu
                 confidence   = svo.roleProb * if (bestNer != null) ratio else 1f,
-                // non résolu uniquement si c'est un pronom sans entité NER overlapping
                 resolved     = bestNer != null || !isPron,
             )
         }
 
-        // Grouper spans argumentaux par govVerbCharStart
-        val byVerbPtr: Map<Int?, List<SvoSpan>> = svoSpans
-            .filter { it.role in SLOT_ROLES }
-            .groupBy { it.govVerbCharStart }
+        // Résolution du verbe gouverneur pour un argument SVO.
+        fun resolveVerb(svo: SvoSpan): SvoSpan? {
+            if (verbSpans.isEmpty()) return null
+            val ptr = svo.govVerbCharStart
+            if (ptr != null) {
+                val containing = verbSpans.firstOrNull { v -> ptr >= v.charStart && ptr < v.charEnd }
+                if (containing != null) return containing
+                return verbSpans.minByOrNull { abs(ptr - it.charStart) }
+            }
+            val svoCenter = (svo.charStart + svo.charEnd) / 2
+            return verbSpans.minByOrNull { v -> abs(svoCenter - (v.charStart + v.charEnd) / 2) }
+        }
+
+        // Grouper les spans argumentaux par verbe résolu
+        val argSpans = svoSpans.filter { it.role in SLOT_ROLES || it.synLabel in PRON_ROLES }
+        val byVerb: Map<Int, List<SvoSpan>> = argSpans
+            .groupBy { resolveVerb(it)?.charStart ?: -1 }
+            .filterKeys { it >= 0 }
+
+        // NMS intra-rôle : parmi des spans qui se chevauchent pour le même rôle,
+        // garder seulement le plus confiant (roleProb). Évite d'avoir 3× le même arg
+        // quand "Fondation Horizon", "Fondation" et "Horizon" sont tous OBLIQUE.
+        // NMS sur les SvoSpans : supprime les spans qui se chevauchent (garde le plus confiant).
+        fun nmsSpans(spans: List<SvoSpan>): List<SvoSpan> {
+            val kept = mutableListOf<SvoSpan>()
+            for (cand in spans.sortedByDescending { it.roleProb }) {
+                val overlaps = kept.any { k ->
+                    minOf(cand.charEnd, k.charEnd) - maxOf(cand.charStart, k.charStart) > 0
+                }
+                if (!overlaps) kept += cand
+            }
+            return kept
+        }
+
+        // Dédupe par entité NER : si deux slots résolvent la même entité NER (même charStart+charEnd),
+        // on garde celui avec la meilleure confidence. Évite les doublons quand des spans adjacents
+        // ("trois" + "suspects") se retrouvent tous les deux mappés sur la même entité NER
+        // ("trois suspects") après mkSlot — nmsSpans ne les capturait pas car non-chevauchants.
+        fun dedupeByNer(slots: List<EventletSlot>): List<EventletSlot> {
+            data class NerKey(val start: Int, val end: Int)
+            val seen = mutableMapOf<NerKey, EventletSlot>()
+            for (slot in slots) {
+                val nerEntity = slot.nerEntity
+                if (nerEntity != null) {
+                    val key = NerKey(nerEntity.span.start, nerEntity.span.end)
+                    val prev = seen[key]
+                    if (prev == null || slot.confidence > prev.confidence) seen[key] = slot
+                } else {
+                    // Pas d'entité NER : on garde le slot tel quel (pas de dédupe possible)
+                    // On l'insère avec une clé unique basée sur la position SVO
+                    val key = NerKey(slot.svoSpan.charStart, slot.svoSpan.charEnd)
+                    val prev = seen[key]
+                    if (prev == null || slot.confidence > prev.confidence) seen[key] = slot
+                }
+            }
+            // Préserver l'ordre original (tri par charStart)
+            return seen.values.sortedBy { it.svoSpan.charStart }
+        }
 
         return verbSpans.map { verb ->
-            // 1) Spans directement pointés vers ce verbe par le verb pointer
-            val pointed = byVerbPtr[verb.charStart] ?: emptyList()
+            val all = byVerb[verb.charStart] ?: emptyList()
 
-            // 2) Spans orphans (govVerbCharStart == null, silver sans pointer) :
-            //    rattacher au verbe le plus proche positionnellement
-            val orphans = (byVerbPtr[null] ?: emptyList()).filter { svo ->
-                verbSpans.minByOrNull {
-                    minOf(abs(svo.charStart - it.charEnd), abs(svo.charEnd - it.charStart))
-                }?.charStart == verb.charStart
-            }
-
-            val all = pointed + orphans
-
-            // 3) Négation : span neg dans ±50 chars autour du verbe
             val negated = negSpans.any { neg ->
                 neg.charStart in (verb.charStart - 50)..(verb.charEnd + 20)
             }
@@ -416,15 +480,20 @@ data class ExtractionResult(
                 verb        = verb,
                 voice       = verb.voice,
                 negated     = negated,
-                subject     = all.filter { it.role in setOf("svo_subject", "pron_subj") }
+                // v4 : utiliser uniquement le champ `role` (role_head) pour discriminer subject/obj.
+                // Le synLabel (verb_trigger/pron_subj/pron_obj) est le type syntaxique détecté par la
+                // syn_head, qui peut classifier des NP nominaux comme "pron_obj" ou "pron_subj" par
+                // confusion — en particulier avec tauSvoRoleForced actif (spans forcés).
+                // La role_head est le signal fiable en v4 : SUBJECT/OBJECT/OBLIQUE/… toujours assigné.
+                subject     = all.filter { it.role == "SUBJECT" }
                                  .maxByOrNull { it.roleProb }?.let { mkSlot(it) },
-                obj         = all.filter { it.role in setOf("svo_object", "pron_obj", "attr") }
+                obj         = all.filter { it.role == "OBJECT" }
                                  .maxByOrNull { it.roleProb }?.let { mkSlot(it) },
-                iobjs       = all.filter { it.role == "svo_iobj"   }.map { mkSlot(it) },
-                tcomps      = all.filter { it.role == "svo_tcomp"  }.map { mkSlot(it) },
-                lcomps      = all.filter { it.role == "svo_lcomp"  }.map { mkSlot(it) },
-                causes      = all.filter { it.role == "svo_cause"  }.map { mkSlot(it) },
-                appositions = all.filter { it.role == "ent_appos"  }.map { mkSlot(it) },
+                iobjs       = dedupeByNer(nmsSpans(all.filter { it.role in setOf("OBLIQUE", "OBLIQUE_AGENT") }).map { mkSlot(it) }),
+                tcomps      = emptyList(),
+                lcomps      = emptyList(),
+                causes      = dedupeByNer(nmsSpans(all.filter { it.role == "OBLIQUE_CAUSE" }).map { mkSlot(it) }),
+                appositions = nmsSpans(all.filter { it.role == "APPOS" }).map { mkSlot(it) },
             )
         }
     }
@@ -447,7 +516,7 @@ data class SvoTriplet(
  * [nerEntity]   : l'entité NER qui overlap le mieux ce span (null si pronom non résolu
  *                 ou si aucune entité NER ne couvre ce span)
  * [overlapRatio]: fraction du span SVO couverte par l'entité NER (0..1)
- * [confidence]  : roleProb × overlapRatio (si NER présent) ou roleProb seul (si pronom)
+ * [confidence]  : roleProb × overlap si NER présent ; roleProb seul si pronom attendu
  * [resolved]    : true si l'entité NER est connue OU si ce n'est pas un pronom ;
  *                 false pour un pronom sans antécédent → à résoudre par coref async
  */
@@ -689,7 +758,7 @@ class OnnxMultiHeadEntityExtractor(
     /** Buffer dédié au chargement de la ligne fine depuis le FloatBuffer flat.
      *  Distinct de tlBufFine/tlBufFineMask pour éviter l'aliasing dans bestCoarseFine. */
     private val tlBufFineRow  = ThreadLocal.withInitial { FloatArray(FINE_LABELS.size)  }
-    private val tlBufSvo      = ThreadLocal.withInitial { FloatArray(SVO_LABELS.size)    }
+    private val tlBufSyn      = ThreadLocal.withInitial { FloatArray(SYN_LABELS.size)    }
     private val tlBufVoice    = ThreadLocal.withInitial { FloatArray(VOICE_LABELS.size)  }
     private val tlBufGender   = ThreadLocal.withInitial { FloatArray(GENDER_LABELS.size) }
     private val tlBufNumber   = ThreadLocal.withInitial { FloatArray(NUMBER_LABELS.size) }
@@ -792,11 +861,13 @@ class OnnxMultiHeadEntityExtractor(
             val coarseFlat:   FloatBuffer,  // [N * nCoarse]
             val fineFlat:     FloatBuffer,  // [N * nFine]
             val svoBndFlat:   FloatBuffer?, // [N * 2]
-            val svoFlat:      FloatBuffer?, // [N * nSvo]
-            val voiceFlat:    FloatBuffer?, // [N * nVoice]
-            val genderFlat:   FloatBuffer?, // [N * nGender]
-            val numberFlat:   FloatBuffer?, // [N * nNumber]
-            val personFlat:   FloatBuffer?, // [N * nPerson]
+            val synFlat:      FloatBuffer?, // [N * 3] verb_trigger/pron_subj/pron_obj
+            val roleFlat:     FloatBuffer?, // [N * 7] SUBJECT/OBJECT/OBLIQUE...
+            val voiceFlat:    FloatBuffer?, // [N * 2]
+            val certaintyFlat: FloatBuffer?, // [N * 3] certain/modal/denied
+            val genderFlat:   FloatBuffer?, // [N * 3]
+            val numberFlat:   FloatBuffer?, // [N * 2]
+            val personFlat:   FloatBuffer?, // [N * 3]
             val verbPtrFlat:  FloatBuffer?, // [N * seqLen] — verb pointer logits
         )
 
@@ -874,8 +945,10 @@ class OnnxMultiHeadEntityExtractor(
                     coarseFlat   = (result["coarse_logits"]  .get() as OnnxTensor).floatBuffer,
                     fineFlat     = (result["fine_logits"]    .get() as OnnxTensor).floatBuffer,
                     svoBndFlat   = flatBuf("svo_boundary_logits"),
-                    svoFlat      = flatBuf("svo_logits"),
+                    synFlat      = flatBuf("syn_logits"),
+                    roleFlat     = flatBuf("role_logits"),
                     voiceFlat    = flatBuf("voice_logits"),
+                    certaintyFlat= flatBuf("certainty_logits"),
                     genderFlat   = flatBuf("gender_logits"),
                     numberFlat   = flatBuf("number_logits"),
                     personFlat   = flatBuf("person_logits"),
@@ -892,8 +965,10 @@ class OnnxMultiHeadEntityExtractor(
 
             val nCoarse  = COARSE_LABELS.size
             val nFine    = FINE_LABELS.size
-            val nSvo     = SVO_LABELS.size
+            val nSyn     = SYN_LABELS.size
+            val nRole    = ROLE_LABELS.size
             val nVoice   = VOICE_LABELS.size
+            val nCertainty = CERTAINTY_LABELS.size
             val nGender  = GENDER_LABELS.size
             val nNumber  = NUMBER_LABELS.size
             val nPerson  = PERSON_LABELS.size
@@ -955,17 +1030,19 @@ class OnnxMultiHeadEntityExtractor(
                             // est géré dans le bloc SVO standalone ci-dessous, qui lit les logits
                             // SVO aux BONNES bornes token (span SVO ≠ span NER pour le même texte).
                             val svoBndLocal = onnxOut.svoBndFlat
-                            if (svoBndLocal != null && onnxOut.svoFlat != null) {
+                            if (svoBndLocal != null && onnxOut.roleFlat != null) {
                                 val pSvo = softmaxProbFlat(svoBndLocal, k * 2, 2, 1)
                                 if (pSvo >= effTauSvoBoundary) {
-                                    val p = tlBufSvo.get()
-                                    loadRow(onnxOut.svoFlat, k * nSvo, p); softmaxInto(p, p)
+                                    // Lire le rôle directement
+                                    val pRole = FloatArray(nRole)
+                                    loadRow(onnxOut.roleFlat, k * nRole, pRole); softmaxInto(pRole, pRole)
                                     var ri = 0
-                                    for (j in 1 until nSvo) if (p[j] > p[ri]) ri = j
-                                    val name = SVO_LABELS.getOrElse(ri) { "svo_verb" }
-                                    if (name != "svo_verb") {
-                                        nerSvoRole     = name
-                                        nerSvoRoleProb = p[ri]
+                                    for (j in 1 until nRole) if (pRole[j] > pRole[ri]) ri = j
+                                    val roleName = ROLE_LABELS.getOrElse(ri) { "NONE" }
+                                    // Ignorer NONE et les rôles non argumentaux — on veut les vrais arguments
+                                    if (roleName !in setOf("NONE") && pRole[ri] > 0.3f) {
+                                        nerSvoRole     = roleName
+                                        nerSvoRoleProb = pRole[ri]
                                         nerSvoBndScore = pSvo
                                     }
                                 }
@@ -1010,53 +1087,89 @@ class OnnxMultiHeadEntityExtractor(
                     //   sur l'entité NER voisine — ce qui évite le problème de décalage de bornes
                     //   token entre le span NER et le span SVO pour le même mot.
                     val aboveSvoBnd = pSvoB >= effTauSvoBoundary
-                    val trySvoForced = !aboveSvoBnd && effTauSvoRoleForced > 0f
+                    // Chemin forcé : SVO boundary faible MAIS roleProb ≥ tauSvoRoleForced.
+                    // Pré-condition : le span doit aussi passer le NER boundary (pBoundary ≥ tauBoundary).
+                    // Sans cette garde, des spans verbe avec pBoundary ~0 mais roleProb élevé
+                    // par confusion du modèle fuitent comme arguments → bruit pur.
+                    val trySvoForced = !aboveSvoBnd && effTauSvoRoleForced > 0f && pBoundary >= effTauBoundary
                     if (aboveSvoBnd || trySvoForced) {
+                        val synLabel: String
+                        val synProb: Float
+                        if (onnxOut.synFlat != null) {
+                            val p = FloatArray(nSyn)
+                            loadRow(onnxOut.synFlat, k * nSyn, p); softmaxInto(p, p)
+                            var si = 0; for (j in 1 until nSyn) if (p[j] > p[si]) si = j
+                            synLabel = SYN_LABELS.getOrElse(si) { "verb_trigger" }; synProb = p[si]
+                        } else { synLabel = "verb_trigger"; synProb = 0f }
+
+                        // Architecture v4 — arbitrage synLabel vs svo_boundary :
+                        // • synLabel == "verb_trigger" AND aboveSvoBnd → vrai verbe, role=NONE forcé
+                        //   (le role_head est confus sur les verbes, prédit OBJECT/SUBJECT par erreur)
+                        // • synLabel == "pron_subj" | "pron_obj" → pronom, même si p_svob est élevé
+                        //   (svo_boundary peut faussement tirer sur des relatifs/"qui" etc.)
+                        //   → On lit role depuis role_head et on applique le seuil forcé.
+                        // • Chemin forcé classique (aboveSvoBnd=false) → role depuis role_head.
+                        val isActualVerb = aboveSvoBnd && synLabel == "verb_trigger"
                         val roleName: String
                         val roleProb: Float
-                        if (onnxOut.svoFlat != null) {
-                            val p = tlBufSvo.get()
-                            loadRow(onnxOut.svoFlat, k * nSvo, p); softmaxInto(p, p)
-                            var ri = 0; for (j in 1 until nSvo) if (p[j] > p[ri]) ri = j
-                            roleName = SVO_LABELS.getOrElse(ri) { "svo_verb" }; roleProb = p[ri]
-                        } else { roleName = "svo_verb"; roleProb = 0f }
+                        if (isActualVerb) {
+                            // Vrai verbe → rôle vaut NONE par définition
+                            roleName = "NONE"; roleProb = 0f
+                        } else if (onnxOut.roleFlat != null) {
+                            val p = FloatArray(nRole)
+                            loadRow(onnxOut.roleFlat, k * nRole, p); softmaxInto(p, p)
+                            var ri = 0; for (j in 1 until nRole) if (p[j] > p[ri]) ri = j
+                            roleName = ROLE_LABELS.getOrElse(ri) { "NONE" }; roleProb = p[ri]
+                        } else { roleName = "NONE"; roleProb = 0f }
 
-                        // En mode forcé : vérifier le seuil roleProb strict avant d'émettre
-                        if (trySvoForced && roleProb < effTauSvoRoleForced) {
-                            // roleProb insuffisant → on n'émet pas ce span forcé (trop de bruit)
+                        // Guard : pronoms et args forcés doivent passer le seuil roleProb.
+                        // isActualVerb est exempté (il émet toujours avec role=NONE).
+                        if (!isActualVerb && (roleProb < effTauSvoRoleForced || roleName == "NONE")) {
+                            // roleProb insuffisant ou role=NONE → on n'émet pas ce span
                         } else {
 
                         val voiceName: String
                         val voiceProb: Float
                         if (onnxOut.voiceFlat != null) {
-                            val p = tlBufVoice.get()
+                            val p = FloatArray(nVoice)
                             loadRow(onnxOut.voiceFlat, k * nVoice, p); softmaxInto(p, p)
                             var vi = 0; for (j in 1 until nVoice) if (p[j] > p[vi]) vi = j
-                            voiceName = VOICE_LABELS.getOrElse(vi) { "ACTIVE" }; voiceProb = p[vi]
-                        } else { voiceName = "ACTIVE"; voiceProb = 0f }
+                            voiceName = VOICE_LABELS.getOrElse(vi) { "active" }; voiceProb = p[vi]
+                        } else { voiceName = "active"; voiceProb = 0f }
+
+                        val certaintyName: String
+                        val certaintyProb: Float
+                        if (onnxOut.certaintyFlat != null) {
+                            val p = FloatArray(nCertainty)
+                            loadRow(onnxOut.certaintyFlat, k * nCertainty, p); softmaxInto(p, p)
+                            var ci = 0; for (j in 1 until nCertainty) if (p[j] > p[ci]) ci = j
+                            certaintyName = CERTAINTY_LABELS.getOrElse(ci) { "certain" }; certaintyProb = p[ci]
+                        } else { certaintyName = "certain"; certaintyProb = 0f }
 
                         val gender: String? = onnxOut.genderFlat?.let {
-                            val p = tlBufGender.get()
+                            val p = FloatArray(nGender)
                             loadRow(it, k * nGender, p); softmaxInto(p, p)
                             var gi = 0; for (j in 1 until nGender) if (p[j] > p[gi]) gi = j
-                            GENDER_LABELS.getOrElse(gi) { "NONE" }.takeUnless { s -> s == "NONE" }
+                            GENDER_LABELS.getOrElse(gi) { "N" }.takeUnless { s -> s == "N" }
                         }
                         val number: String? = onnxOut.numberFlat?.let {
-                            val p = tlBufNumber.get()
+                            val p = FloatArray(nNumber)
                             loadRow(it, k * nNumber, p); softmaxInto(p, p)
                             var ni = 0; for (j in 1 until nNumber) if (p[j] > p[ni]) ni = j
-                            NUMBER_LABELS.getOrElse(ni) { "NONE" }.takeUnless { s -> s == "NONE" }
+                            NUMBER_LABELS.getOrElse(ni) { "SG" }
                         }
                         val person: String? = onnxOut.personFlat?.let {
-                            val p = tlBufPerson.get()
+                            val p = FloatArray(nPerson)
                             loadRow(it, k * nPerson, p); softmaxInto(p, p)
                             var pi = 0; for (j in 1 until nPerson) if (p[j] > p[pi]) pi = j
-                            PERSON_LABELS.getOrElse(pi) { "NONE" }.takeUnless { s -> s == "NONE" }
+                            PERSON_LABELS.getOrElse(pi) { "3" }
                         }
                         // ── Verb pointer : tok argmax → charStart du verbe gouverneur ──
-                        // Supervisé uniquement sur les arguments (pas sur svo_verb lui-même).
-                        // Si non disponible ou rôle = verb → null.
-                        val govVerbCharStart: Int? = if (roleName != "svo_verb" && onnxOut.verbPtrFlat != null) {
+                        // Supervisé sur tous les arguments, qu'ils soient pron_subj/pron_obj OU NP args.
+                        // En v4, les args NP ont synLabel=verb_trigger (artefact) mais ne sont PAS des
+                        // vrais verbes (isActualVerb=false) → on lit quand même le verb pointer.
+                        // Seuls les vrais verbes (isActualVerb=true) n'ont pas de verbe gouverneur.
+                        val govVerbCharStart: Int? = if (!isActualVerb && onnxOut.verbPtrFlat != null) {
                             val buf    = onnxOut.verbPtrFlat
                             val offset = k * nSeqLen
                             var bestTok = 0; var bestVal = buf.get(offset)
@@ -1071,10 +1184,14 @@ class OnnxMultiHeadEntityExtractor(
                         svoByLocal[cand.exampleIdx] += RawSvoResult(
                             candidate        = cand,
                             svoBoundaryProb  = pSvoB,
+                            synLabel         = synLabel,
+                            synProb          = synProb,
                             role             = roleName,
                             roleProb         = roleProb,
                             voice            = voiceName,
                             voiceProb        = voiceProb,
+                            certainty        = certaintyName,
+                            certaintyProb    = certaintyProb,
                             gender           = gender,
                             number           = number,
                             person           = person,
@@ -1082,17 +1199,13 @@ class OnnxMultiHeadEntityExtractor(
                         )
 
                         // ── SVO-anchored NER ──────────────────────────────────────────
-                        // Si le span porte un rôle argumental (core args + adjuncts tyypés) ET
-                        // que NER boundary n'a pas tiré au seuil normal mais dépasse le seuil
-                        // abaissé → on score quand même la tête NER pour obtenir un type.
-                        // Ces entités sont taguées svoAnchored=true (confiance NER réduite).
-                        //   Core args  : svo_subject / svo_object / svo_iobj
-                        //   Adjuncts   : svo_tcomp (→ TIME), svo_lcomp (→ LOC), svo_cause
-                        //   Nominaux   : attr, nom_event, ent_appos
+                        // Si le span porte un rôle argumental (v4 labels) ET que NER boundary
+                        // n'a pas tiré au seuil normal mais dépasse le seuil abaissé → on score
+                        // quand même la tête NER. Ces entités sont taguées svoAnchored=true.
+                        // Note v4 : les roles pronominaux (pron_subj/pron_obj) sont portés par
+                        // synLabel, pas roleName → on exclut NONE et verbes (role forcé NONE ci-dessus).
                         val isNonPronounArg = roleName in setOf(
-                            "svo_subject", "svo_object", "svo_iobj",
-                            "attr", "nom_event", "ent_appos",
-                            "svo_tcomp", "svo_lcomp", "svo_cause",
+                            "SUBJECT", "OBJECT", "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE", "APPOS",
                         )
                         if (isNonPronounArg
                             && pBoundary >= effTauSvoAnchored
@@ -1153,7 +1266,7 @@ class OnnxMultiHeadEntityExtractor(
                     .let { spans ->
                         // Résolution verb pointer : charStart → texte du verbe gouverneur
                         val verbByCharStart = spans
-                            .filter { it.role == "svo_verb" }
+                            .filter { it.synLabel == "verb_trigger" }
                             .associateBy { it.charStart }
                         spans.map { s ->
                             val govText = s.govVerbCharStart?.let { verbByCharStart[it]?.text }
@@ -1197,6 +1310,35 @@ class OnnxMultiHeadEntityExtractor(
      *
      * tokStart/tokEnd INCLUSIFS, alignés sur build_multitask_dataset.py Python.
      */
+
+    /**
+     * Équivalent de Python str.isalnum() pour un caractère unique :
+     * inclut les lettres, les chiffres décimaux ET les autres nombres Unicode
+     * (catégorie No — exposants ², ³, ¹, ⁰, ⁴…⁹, fractions ½, ¼…).
+     * En Java/Kotlin, Char.isLetterOrDigit() omet la catégorie No, ce qui
+     * entraîne un mismatch avec Python pour les bornes de span.
+     */
+    private fun Char.isWordEndChar(): Boolean =
+        isLetterOrDigit() ||
+        category == CharCategory.OTHER_NUMBER ||   // ², ³, ¹, ½, ¼… (No)
+        category == CharCategory.LETTER_NUMBER     // Ⅰ, Ⅱ… numéraux romains (Nl)
+
+    /**
+     * Ponctuations de fin de phrase/syntagme qu'il est sûr de stripper en queue de span.
+     * Exclut délibérément les symboles d'unités %, °, €, $, £, ‰ etc.
+     * Python (code d'entraînement) ne trimme jamais — il génère des candidats à la
+     * granularité du token. Ce whitelist mimique ce comportement au niveau mot :
+     * seule la ponctuation grammaticale terminale est retirée.
+     */
+    private val PHRASE_FINAL_PUNCT = setOf(
+        '.', ',', ';', ':', '!', '?',
+        ')', ']', '}',
+        '"', '\u201C', '\u201D',   // guillemets anglais
+        '\u2019',                  // apostrophe droite / guillemet fermant
+        '\u00BB', '\u00AB',        // guillemets français » «
+        '\u2014', '\u2013',        // tirets em/en
+    )
+
     private fun buildCandidates(examples: List<EncodedExample>): List<SpanCandidate> {
         val result = mutableListOf<SpanCandidate>()
 
@@ -1257,8 +1399,12 @@ class OnnxMultiHeadEntityExtractor(
                     var charEnd = words[ei].charEnd
                     var spanTxt = text.substring(charStart, charEnd).trim()
 
-                    // Trimmer la ponctuation finale ET reculer tokEnd en conséquence
-                    while (spanTxt.isNotEmpty() && !spanTxt.last().isLetterOrDigit()) {
+                    // Trimmer la ponctuation grammaticale finale (. , ; ! ? etc.) ET reculer
+                    // tokEnd en conséquence. On utilise PHRASE_FINAL_PUNCT (whitelist) et
+                    // NON pas !isLetterOrDigit() ni !isWordEndChar() pour ne PAS stripper
+                    // les symboles d'unités : %, °, €, $ restent dans le span.
+                    // Python (entraînement) n'a pas de trim — il génère des candidats par token.
+                    while (spanTxt.isNotEmpty() && spanTxt.last() in PHRASE_FINAL_PUNCT) {
                         spanTxt = spanTxt.dropLast(1).trimEnd()
                         val newCharEnd = charStart + spanTxt.length
                         // Reculer tokEnd si le token courant est ponctuation-only
@@ -1269,7 +1415,7 @@ class OnnxMultiHeadEntityExtractor(
                             } else {
                                 // fallback : inspecter la string du token
                                 val tok = tokens.getOrNull(tokEnd)?.trimStart('▁')?.trim() ?: break
-                                if (tok.isNotEmpty() && tok.all { !it.isLetterOrDigit() }) tokEnd--
+                                if (tok.isNotEmpty() && tok.all { it in PHRASE_FINAL_PUNCT }) tokEnd--
                                 else break
                             }
                         }
@@ -1277,9 +1423,9 @@ class OnnxMultiHeadEntityExtractor(
                     }
 
                     if (spanTxt.length < 2) continue
-                    if (spanTxt.all { !it.isLetterOrDigit() }) continue
-                    if (charStart > 0 && text[charStart - 1].isLetterOrDigit()) continue
-                    if (charEnd < text.length && text[charEnd].isLetterOrDigit()) continue
+                    if (spanTxt.all { !it.isWordEndChar() }) continue
+                    if (charStart > 0 && text[charStart - 1].isWordEndChar()) continue
+                    if (charEnd < text.length && text[charEnd].isWordEndChar()) continue
 
                     result += SpanCandidate(exIdx, tokStart, tokEnd, charStart, charEnd, spanTxt)
                 }
@@ -1454,10 +1600,18 @@ class OnnxMultiHeadEntityExtractor(
             put("pFine",     r.span.pFine)
             put("score",     r.span.score)
             // ── Rôle SVO inline (même candidat span, même forward pass) ──────────
-            // svoRole        : rôle SVO brut complet (14 labels)
-            // syntacticRole  : normalisation UD ("nsubj", "obj", "iobj", "attr", "appos", "nmod", "obl:*")
+            // svoRole        : rôle SVO v4 (SUBJECT, OBJECT, OBLIQUE, OBLIQUE_AGENT, OBLIQUE_CAUSE, APPOS)
+            // syntacticRole  : normalisation UD ("nsubj", "obj", "obl", "obl:agent", "obl:cause", "appos")
             if (r.span.svoRole != null) {
                 val syntactic = when (r.span.svoRole) {
+                    // Nouveaux labels v4
+                    "SUBJECT"        -> "nsubj"
+                    "OBJECT"         -> "obj"
+                    "OBLIQUE"        -> "obl"
+                    "OBLIQUE_AGENT"  -> "obl:agent"
+                    "OBLIQUE_CAUSE"  -> "obl:cause"
+                    "APPOS"          -> "appos"
+                    // Compat anciens labels (si modèle ancien)
                     "svo_subject", "pron_subj" -> "nsubj"
                     "svo_object",  "pron_obj"  -> "obj"
                     "svo_iobj"                 -> "iobj"
@@ -1582,11 +1736,15 @@ class OnnxMultiHeadEntityExtractor(
         text             = r.candidate.spanText,
         charStart        = r.candidate.charStart,
         charEnd          = r.candidate.charEnd,
+        synLabel         = r.synLabel,
+        synProb          = r.synProb,
         role             = r.role,
         roleProb         = r.roleProb,
         svoBoundaryProb  = r.svoBoundaryProb,
         voice            = r.voice,
         voiceProb        = r.voiceProb,
+        certainty        = r.certainty,
+        certaintyProb    = r.certaintyProb,
         gender           = r.gender,
         number           = r.number,
         person           = r.person,
