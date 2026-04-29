@@ -13,11 +13,15 @@ from labels import (
     FINE2ID, FINE_NONE_ID,
     fine_label_to_coarse_id,
     COARSE_NONE_ID,
-    SVO2ID, SVO_NONE_ID, ALL_SVO_LABELS,
+    SYN2ID, SYN_NONE_ID, ALL_SYN_LABELS,
+    ROLE2ID, ROLE_NONE_ID,
     VOICE2ID, VOICE_NONE_ID,
+    CERTAINTY2ID, CERTAINTY_NONE_ID,
     GENDER2ID, GENDER_NONE_ID,
     NUMBER2ID, NUMBER_NONE_ID,
     PERSON2ID, PERSON_NONE_ID,
+    # compat aliases
+    SVO2ID, SVO_NONE_ID, ALL_SVO_LABELS,
 )
 
 def load_jsonl(path: str):
@@ -93,81 +97,136 @@ def build_gold_candidates(row, tokenizer):
             continue
         tok_start, tok_end = tok_span
 
-        # ── Spans SVO/pron (silver Stanza) ──────────────────────────────────
-        if label in ALL_SVO_LABELS:
-            svo_id   = SVO2ID[label]
-            voice_str = sp.get("voice")
-            voice_id  = VOICE2ID.get(voice_str, VOICE_NONE_ID) if voice_str else VOICE_NONE_ID
-            if label != "svo_verb":
-                voice_id = VOICE_NONE_ID
+        # ── Spans syntaxiques v4 : verb_trigger, pron_subj, pron_obj ────────
+        if label in ALL_SYN_LABELS:
+            syn_id = SYN2ID[label]
 
-            # Pointer verb : tok_start du verbe gouverneur (-1 pour svo_verb lui-même)
+            # Voice + certainty sur verb_trigger
+            voice_id     = VOICE_NONE_ID
+            certainty_id = CERTAINTY_NONE_ID
+            if label == "verb_trigger":
+                voice_str = sp.get("voice", "")
+                voice_id  = VOICE2ID.get(voice_str, VOICE_NONE_ID)
+                cert_str  = sp.get("certainty", "")
+                certainty_id = CERTAINTY2ID.get(cert_str, CERTAINTY_NONE_ID)
+
+            # Rôle SVO du pronom + gov_verb_tok_start
+            role_id          = ROLE2ID.get(sp.get("svo_role", "NONE"), ROLE_NONE_ID)
             gov_verb_tok_start = -1
-            if label != "svo_verb":
-                vcs = sp.get("verb_char_start")
-                vce = sp.get("verb_char_end")
-                if vcs is not None and vce is not None:
-                    v_tok = char_span_to_token_span(offsets, vcs, vce)
-                    if v_tok is not None:
-                        gov_verb_tok_start = v_tok[0]  # tok_start du verbe
+            gvs = sp.get("gov_verb_start")
+            if gvs is not None:
+                v_tok = char_span_to_token_span(offsets, gvs, gvs + 1)
+                if v_tok is not None:
+                    gov_verb_tok_start = v_tok[0]
 
             cand = {
-                "char_start":         start,
-                "char_end":           end,
-                "tok_start":          tok_start,
-                "tok_end":            tok_end,
-                "boundary_label":     0,
-                "svo_boundary_label": 1,
-                "coarse_label_id":    COARSE_NONE_ID,
-                "fine_label_id":      FINE_NONE_ID,
-                "svo_label_id":       svo_id,
-                "voice_label_id":     voice_id,
-                "gender_label_id":    GENDER2ID.get(sp.get("gender"), GENDER_NONE_ID),
-                "number_label_id":    NUMBER2ID.get(sp.get("number"), NUMBER_NONE_ID),
-                "person_label_id":    PERSON2ID.get(
-                    sp.get("pron_person") or sp.get("person"),
-                    PERSON_NONE_ID
-                ),
-                "gov_verb_tok_start": gov_verb_tok_start,   # -1 = non supervisé                "neg_type":           "svo_gold",
-                "sample_weight":      1.0,
-                "text":               sp.get("text", text[start:end]),
+                "char_start":          start,
+                "char_end":            end,
+                "tok_start":           tok_start,
+                "tok_end":             tok_end,
+                "boundary_label":      0,            # pas un span NER
+                "svo_boundary_label":  1,            # span syntaxique
+                "coarse_label_id":     COARSE_NONE_ID,
+                "fine_label_id":       FINE_NONE_ID,
+                "syn_label_id":        syn_id,
+                "role_label_id":       role_id,
+                "voice_label_id":      voice_id,
+                "certainty_label_id":  certainty_id,
+                "gender_label_id":     GENDER2ID.get(sp.get("gender"), GENDER_NONE_ID),
+                "number_label_id":     NUMBER2ID.get(sp.get("number"), NUMBER_NONE_ID),
+                "person_label_id":     PERSON2ID.get(sp.get("person"), PERSON_NONE_ID),
+                "gov_verb_tok_start":  gov_verb_tok_start,
+                "mod_of_tok_start":    -1,
+                "neg_type":            "syn_gold",
+                "sample_weight":       1.0,
+                "text":                sp.get("text", text[start:end]),
             }
             gold_candidates.append(cand)
             gold_token_spans.append((tok_start, tok_end))
             gold_char_spans.add((start, end))
             continue
 
-        # ── Spans NER classiques ─────────────────────────────────────────────
+        # ── Spans NER classiques (hint_*) — portent maintenant svo_role ─────
         if label not in FINE2ID:
-            raise ValueError(f"Label inconnu: {label}")
+            # Ignorer les labels inconnus (anciens labels Stanza si mélange de données)
+            continue
 
         fine_id   = FINE2ID[label]
         coarse_id = fine_label_to_coarse_id(label)
 
+        # Rôle SVO annoté sur ce span NER
+        role_id = ROLE2ID.get(sp.get("svo_role", "NONE"), ROLE_NONE_ID)
+
+        # Pointeur vers le verbe gouverneur
+        gov_verb_tok_start = -1
+        gvs = sp.get("gov_verb_start")
+        if gvs is not None:
+            v_tok = char_span_to_token_span(offsets, gvs, gvs + 1)
+            if v_tok is not None:
+                gov_verb_tok_start = v_tok[0]
+
+        # Pointeur vers le span dont ce span est modificateur nominal
+        mod_of_tok_start = -1
+        mos = sp.get("mod_of_start")
+        if mos is not None:
+            m_tok = char_span_to_token_span(offsets, mos, mos + 1)
+            if m_tok is not None:
+                mod_of_tok_start = m_tok[0]
+
         cand = {
-            "char_start":         start,
-            "char_end":           end,
-            "tok_start":          tok_start,
-            "tok_end":            tok_end,
-            "boundary_label":     1,
-            "svo_boundary_label": 0,
-            "coarse_label_id":    coarse_id,
-            "fine_label_id":      fine_id,
-            "svo_label_id":       SVO_NONE_ID,
-            "voice_label_id":     VOICE_NONE_ID,
-            "gender_label_id":    GENDER_NONE_ID,
-            "number_label_id":    NUMBER_NONE_ID,
-            "person_label_id":    PERSON_NONE_ID,
-            "gov_verb_tok_start": -1,
-            "neg_type":           "gold",
-            "sample_weight":      1.0,
-            "text":               sp.get("text", text[start:end]),
+            "char_start":          start,
+            "char_end":            end,
+            "tok_start":           tok_start,
+            "tok_end":             tok_end,
+            "boundary_label":      1,            # span NER
+            "svo_boundary_label":  0,
+            "coarse_label_id":     coarse_id,
+            "fine_label_id":       fine_id,
+            "syn_label_id":        SYN_NONE_ID,
+            "role_label_id":       role_id,
+            "voice_label_id":      VOICE_NONE_ID,
+            "certainty_label_id":  CERTAINTY_NONE_ID,
+            "gender_label_id":     GENDER2ID.get(sp.get("gender"), GENDER_NONE_ID),
+            "number_label_id":     NUMBER2ID.get(sp.get("number"), NUMBER_NONE_ID),
+            "person_label_id":     PERSON_NONE_ID,   # person sur pronoms seulement
+            "gov_verb_tok_start":  gov_verb_tok_start,
+            "mod_of_tok_start":    mod_of_tok_start,
+            "neg_type":            "gold",
+            "sample_weight":       1.0,
+            "text":                sp.get("text", text[start:end]),
         }
         gold_candidates.append(cand)
         gold_token_spans.append((tok_start, tok_end))
         gold_char_spans.add((start, end))
 
     return text, input_ids, offsets, gold_candidates, gold_token_spans, gold_char_spans
+
+def _make_negative(neg_type: str, char_start: int, char_end: int,
+                   tok_start: int, tok_end: int, weight: float = 1.0) -> dict:
+    """Crée un candidat négatif avec tous les champs v4 à NONE/sentinel."""
+    return {
+        "char_start":          char_start,
+        "char_end":            char_end,
+        "tok_start":           tok_start,
+        "tok_end":             tok_end,
+        "boundary_label":      0,
+        "svo_boundary_label":  0,
+        "coarse_label_id":     COARSE_NONE_ID,
+        "fine_label_id":       FINE_NONE_ID,
+        "syn_label_id":        SYN_NONE_ID,
+        "role_label_id":       ROLE_NONE_ID,
+        "voice_label_id":      VOICE_NONE_ID,
+        "certainty_label_id":  CERTAINTY_NONE_ID,
+        "gender_label_id":     GENDER_NONE_ID,
+        "number_label_id":     NUMBER_NONE_ID,
+        "person_label_id":     PERSON_NONE_ID,
+        "gov_verb_tok_start":  -1,
+        "mod_of_tok_start":    -1,
+        "neg_type":            neg_type,
+        "sample_weight":       weight,
+        "text":                None,
+    }
+
 
 def generate_hard_negatives(offsets, gold_candidates, gold_char_spans, max_per_gold=6):
     """
@@ -210,25 +269,7 @@ def generate_hard_negatives(offsets, gold_candidates, gold_char_spans, max_per_g
             if key in seen:
                 continue
             seen.add(key)
-            out.append({
-                "char_start": cstart,
-                "char_end": cend,
-                "tok_start": nl,
-                "tok_end": nr,
-                "boundary_label": 0,
-                "svo_boundary_label": 0,
-                "coarse_label_id": COARSE_NONE_ID,
-                "fine_label_id": FINE_NONE_ID,
-                "svo_label_id": SVO_NONE_ID,
-                "voice_label_id": VOICE_NONE_ID,
-                "gender_label_id": GENDER_NONE_ID,
-                "number_label_id": NUMBER_NONE_ID,
-                "person_label_id": PERSON_NONE_ID,
-                "gov_verb_tok_start": -1,
-                "neg_type": "hard_neg",
-                "sample_weight": 1.0,
-                "text": None,
-            })
+            out.append(_make_negative("hard_neg", cstart, cend, nl, nr))
             kept += 1
             if kept >= max_per_gold:
                 break
@@ -271,25 +312,7 @@ def generate_soft_negatives(offsets, gold_token_spans, gold_char_spans, num_soft
             continue
 
         seen.add(key)
-        out.append({
-            "char_start": cstart,
-            "char_end": cend,
-            "tok_start": l,
-            "tok_end": r,
-            "boundary_label": 0,
-            "svo_boundary_label": 0,
-            "coarse_label_id": COARSE_NONE_ID,
-            "fine_label_id": FINE_NONE_ID,
-            "svo_label_id": SVO_NONE_ID,
-            "voice_label_id": VOICE_NONE_ID,
-            "gender_label_id": GENDER_NONE_ID,
-            "number_label_id": NUMBER_NONE_ID,
-            "person_label_id": PERSON_NONE_ID,
-            "gov_verb_tok_start": -1,
-            "neg_type": "soft_neg",
-            "sample_weight": 0.35,
-            "text": None,
-        })
+        out.append(_make_negative("soft_neg", cstart, cend, l, r, weight=0.35))
 
     return out
 
@@ -340,25 +363,7 @@ def generate_englobant_negatives(offsets, gold_candidates, gold_char_spans, max_
             if key in seen:
                 continue
             seen.add(key)
-            out.append({
-                "char_start": cstart,
-                "char_end": cend,
-                "tok_start": nl,
-                "tok_end": nr,
-                "boundary_label": 0,
-                "svo_boundary_label": 0,
-                "coarse_label_id": COARSE_NONE_ID,
-                "fine_label_id": FINE_NONE_ID,
-                "svo_label_id": SVO_NONE_ID,
-                "voice_label_id": VOICE_NONE_ID,
-                "gender_label_id": GENDER_NONE_ID,
-                "number_label_id": NUMBER_NONE_ID,
-                "person_label_id": PERSON_NONE_ID,
-                "gov_verb_tok_start": -1,
-                "neg_type": "englobant_neg",
-                "sample_weight": 1.5,
-                "text": None,
-            })
+            out.append(_make_negative("englobant_neg", cstart, cend, nl, nr, weight=1.5))
             kept += 1
             if kept >= max_per_gold:
                 break
@@ -395,26 +400,8 @@ def generate_multi_entity_negatives(gold_candidates, gold_char_spans, max_negati
         if key in seen or key in gold_char_spans:
             continue
         seen.add(key)
-
-        out.append({
-            "char_start": cstart,
-            "char_end": cend,
-            "tok_start": nl,
-            "tok_end": nr,
-            "boundary_label": 0,
-            "svo_boundary_label": 0,
-            "coarse_label_id": COARSE_NONE_ID,
-            "fine_label_id": FINE_NONE_ID,
-            "svo_label_id": SVO_NONE_ID,
-            "voice_label_id": VOICE_NONE_ID,
-            "gender_label_id": GENDER_NONE_ID,
-            "number_label_id": NUMBER_NONE_ID,
-            "person_label_id": PERSON_NONE_ID,
-            "gov_verb_tok_start": -1,
-            "neg_type": "multi_entity_neg",
-            "sample_weight": 2.0,
-            "text": None,
-        })
+        seen.add(key)
+        out.append(_make_negative("multi_entity_neg", cstart, cend, nl, nr, weight=2.0))
 
         if len(out) >= max_negatives:
             break

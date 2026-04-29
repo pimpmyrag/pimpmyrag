@@ -19,6 +19,25 @@ else
     fi
 fi
 
+# ── Vérification version PyTorch (CVE-2025-32434) ────────
+# transformers récent bloque torch.load() si torch < 2.6
+TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "0.0")
+TORCH_MAJOR=$(echo "$TORCH_VERSION" | cut -d. -f1)
+TORCH_MINOR=$(echo "$TORCH_VERSION" | cut -d. -f2 | cut -d+ -f1 | cut -da -f1)
+if [ "$TORCH_MAJOR" -lt 2 ] || { [ "$TORCH_MAJOR" -eq 2 ] && [ "$TORCH_MINOR" -lt 6 ]; }; then
+    echo "⚠️  PyTorch $TORCH_VERSION détecté — upgrade vers >=2.6 requis (CVE-2025-32434)"
+    # Détecte la version CUDA pour choisir le bon wheel
+    CUDA_VER=$(python3 -c "import torch; v=torch.version.cuda; print(v.replace('.','') if v else '121')" 2>/dev/null || echo "121")
+    # Normalise : "12.4" → "124", déjà "121" → "121"
+    CUDA_SHORT=$(echo "$CUDA_VER" | sed 's/\.//')
+    echo "   → pip install torch>=2.6.0 --index-url https://download.pytorch.org/whl/cu${CUDA_SHORT}"
+    pip install -q "torch>=2.6.0" --index-url "https://download.pytorch.org/whl/cu${CUDA_SHORT}" \
+        || pip install -q "torch>=2.6.0"  # fallback CPU si wheel CUDA indispo
+    echo "✅ PyTorch $(python3 -c 'import torch; print(torch.__version__)')"
+else
+    echo "✅ PyTorch $TORCH_VERSION >= 2.6 — OK"
+fi
+
 # ── Détection device & batch size ────────────────────────
 if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     DEVICE="cuda"
@@ -91,26 +110,24 @@ mkdir -p logs
 log_file="logs/adaptive.log"
 echo "🚀 Démarrage training adaptatif — $(date)" | tee $log_file
 
-# ── Fusion silver (auto-détection des sources disponibles) ───────────────────
-# Dataset v3 = source principale (NER gold/silver + spans UD/SVO Stanza, re-splitté stratifié)
-# Format : chemin:weight  (weight=1.0 = poids normal, <1.0 = silver de moindre qualité)
-SILVER_SOURCES="$DATA/train_v3.jsonl:1.0"
-[ -f "$DATA/train_svo_silver.jsonl" ] && SILVER_SOURCES="$SILVER_SOURCES $DATA/train_svo_silver.jsonl:1.0"
-[ -f "$DATA/train_svo_de.jsonl"     ] && SILVER_SOURCES="$SILVER_SOURCES $DATA/train_svo_de.jsonl:0.8"
-[ -f "$DATA/train_svo_en.jsonl"     ] && SILVER_SOURCES="$SILVER_SOURCES $DATA/train_svo_en.jsonl:0.8"
-# Ajouter d'autres sources ici au fur et à mesure
+# ── Sources gold v4 Claude ────────────────────────────────────────────────────
+# train_v4_split.jsonl = gold Claude annoté (NER + verb_trigger + rôles SVO + morpho)
+# val/test = split stratifié depuis le même corpus gold
+TRAIN_SILVER="$DATA/train_v4_split.jsonl"
+VAL_SILVER="$DATA/val_v4_split.jsonl"
+TEST_SILVER="$DATA/test_v4_split.jsonl"
 
-echo "📦 Fusion silver train (base: train_v3.jsonl)..." | tee -a $log_file
-python3 merge_silver.py --sources $SILVER_SOURCES --out $DATA/train_svo_silver_merged.jsonl | tee -a $log_file
-TRAIN_SILVER="$DATA/train_svo_silver_merged.jsonl"
-
-# Val/test : silver Stanza si disponible (contient SVO), sinon fallback sur v3 (NER seul)
-VAL_SILVER="$DATA/val_v3.jsonl"
-TEST_SILVER="$DATA/test_v3.jsonl"
-[ -f "$DATA/val_svo_silver.jsonl"  ] && VAL_SILVER="$DATA/val_svo_silver.jsonl"
-[ -f "$DATA/test_svo_silver.jsonl" ] && TEST_SILVER="$DATA/test_svo_silver.jsonl"
-echo "📊 Val  source : $VAL_SILVER"  | tee -a $log_file
-echo "📊 Test source : $TEST_SILVER" | tee -a $log_file
+# Vérification présence des fichiers gold
+for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do
+    if [ ! -f "$f" ]; then
+        echo "❌ Fichier gold manquant : $f"
+        echo "   → Upload via : scp <local_path> root@<RUNPOD_IP>:<workspace>/data/"
+        exit 1
+    fi
+done
+echo "📦 Source gold v4 : $TRAIN_SILVER ($(wc -l < "$TRAIN_SILVER") phrases)" | tee -a $log_file
+echo "📊 Val  source    : $VAL_SILVER  ($(wc -l < "$VAL_SILVER") phrases)"    | tee -a $log_file
+echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"    | tee -a $log_file
 
 rebuild_dataset() {
     local level=$1
@@ -188,11 +205,13 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --model-name $MODEL \
         --epochs $current_epoch \
         --start-epoch $current_epoch \
+        --patience 0 \
         --batch-size $BS \
         --accum-steps $ACCUM \
         --lr 5e-6 \
         --head-lr-multiplier 4.0 \
         --warmup-epochs 0 \
+        --max-grad-norm 1.0 \
         --lambda-boundary   $L_BOUNDARY \
         --lambda-coarse     $L_COARSE \
         --lambda-fine       $L_FINE \
@@ -201,6 +220,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lambda-voice      $L_VOICE_NOW \
         --lambda-morpho     $L_MORPHO_NOW \
         --lambda-verb-ptr   $L_VPTR_NOW \
+        --lambda-compat     0.2 \
         --focal-gamma 0.5 \
         --device $DEVICE \
         --layer-lr-decay 0.9 \

@@ -5,9 +5,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModel
-from labels import NUM_FINE, NUM_SVO, NUM_VOICE, NUM_GENDER, NUM_NUMBER, NUM_PERSON, build_coarse_to_fine_mask
-
-
+from labels import (
+    NUM_FINE, NUM_SYN, NUM_ROLE, NUM_VOICE, NUM_CERTAINTY,
+    NUM_GENDER, NUM_NUMBER, NUM_PERSON,
+    SYN_NONE_ID, ROLE_NONE_ID, VOICE_NONE_ID, CERTAINTY_NONE_ID,
+    COARSE_NONE_ID,
+    build_coarse_to_fine_mask,
+    # compat
+    NUM_SVO,
+)
 from labels import FINE_LABELS
 
 
@@ -41,31 +47,27 @@ class SpanMultiTaskModel(nn.Module):
         )
 
         # Heads NER
-        self.boundary_head = nn.Linear(span_hidden_dim, 2)
-        self.coarse_head = nn.Linear(span_hidden_dim, num_coarse)
-        self.fine_head = nn.Linear(span_hidden_dim, NUM_FINE)
+        self.boundary_head     = nn.Linear(span_hidden_dim, 2)
+        self.coarse_head       = nn.Linear(span_hidden_dim, num_coarse)
+        self.fine_head         = nn.Linear(span_hidden_dim, NUM_FINE)
 
-        # Head SVO : svo_verb / svo_subject / svo_object / svo_iobj / pron_subj / pron_obj
-        self.svo_head = nn.Linear(span_hidden_dim, NUM_SVO)
-        # Head svo_boundary : détecte les spans verbe/pronom (indépendant du boundary NER)
-        self.svo_boundary_head = nn.Linear(span_hidden_dim, 2)
-        # Head voice : ACTIVE / PASSIVE  (prédite sur les svo_verb uniquement)
-        self.voice_head = nn.Linear(span_hidden_dim, NUM_VOICE)
-        # Têtes morpho : gender + number + person (prédits sur les spans SVO actifs)
-        self.gender_head = nn.Linear(span_hidden_dim, NUM_GENDER)  # Masc, Fem, NONE
-        self.number_head = nn.Linear(span_hidden_dim, NUM_NUMBER)  # Sing, Plur, NONE
-        self.person_head = nn.Linear(span_hidden_dim, NUM_PERSON)  # 1, 2, 3, NONE
+        # Heads syntaxiques v4
+        self.svo_boundary_head = nn.Linear(span_hidden_dim, 2)        # détecte verb_trigger/pron
+        self.syn_head          = nn.Linear(span_hidden_dim, NUM_SYN)  # verb_trigger/pron_subj/pron_obj
+        self.role_head         = nn.Linear(span_hidden_dim, NUM_ROLE) # rôle SVO sur NER + pronoms
+        self.voice_head        = nn.Linear(span_hidden_dim, NUM_VOICE)       # active/passive sur verb_trigger
+        self.certainty_head    = nn.Linear(span_hidden_dim, NUM_CERTAINTY)   # certain/modal/denied
 
-        # ── Verb pointer : pour chaque argument, prédire la position tok du verbe gouverneur
-        # Architecture : attention bilinéaire  score(arg_span_i, tok_t) = q_i · k_t
-        #   q_i = W_q * span_h[i]    (dimension proj)
-        #   k_t = W_k * encoder_h[t] (dimension proj)
-        # Supervision : tok_start du svo_verb gouverneur (−1 = non supervisé)
+        # Morpho
+        self.gender_head  = nn.Linear(span_hidden_dim, NUM_GENDER)
+        self.number_head  = nn.Linear(span_hidden_dim, NUM_NUMBER)
+        self.person_head  = nn.Linear(span_hidden_dim, NUM_PERSON)
+
+        # Verb pointer
         _ptr_dim = 64
         self.verb_ptr_query = nn.Linear(span_hidden_dim, _ptr_dim, bias=False)
         self.verb_ptr_key   = nn.Linear(hidden_size,     _ptr_dim, bias=False)
 
-        # Coarse → fine mask
         self.register_buffer("coarse_fine_mask", build_coarse_to_fine_mask())
 
     def _bucket_width(self, width: int) -> int:
@@ -137,18 +139,22 @@ class SpanMultiTaskModel(nn.Module):
             )
 
         return {
-            "span_reps":          span_h,
-            "span_indices":       span_indices,
-            "boundary_logits":    self.boundary_head(span_h),
-            "coarse_logits":      self.coarse_head(span_h),
-            "fine_logits":        self.fine_head(span_h),
-            "svo_boundary_logits":self.svo_boundary_head(span_h),
-            "svo_logits":         self.svo_head(span_h),
-            "voice_logits":       self.voice_head(span_h),
-            "gender_logits":      self.gender_head(span_h),
-            "number_logits":      self.number_head(span_h),
-            "person_logits":      self.person_head(span_h),
-            "verb_ptr_logits":    verb_ptr_logits,          # [N, seq]
+            "span_reps":           span_h,
+            "span_indices":        span_indices,
+            "boundary_logits":     self.boundary_head(span_h),
+            "coarse_logits":       self.coarse_head(span_h),
+            "fine_logits":         self.fine_head(span_h),
+            "svo_boundary_logits": self.svo_boundary_head(span_h),
+            "syn_logits":          self.syn_head(span_h),
+            "role_logits":         self.role_head(span_h),
+            "voice_logits":        self.voice_head(span_h),
+            "certainty_logits":    self.certainty_head(span_h),
+            "gender_logits":       self.gender_head(span_h),
+            "number_logits":       self.number_head(span_h),
+            "person_logits":       self.person_head(span_h),
+            "verb_ptr_logits":     verb_ptr_logits,
+            # compat alias
+            "svo_logits":          self.syn_head(span_h),
         }
 
     def compute_loss(
@@ -158,8 +164,10 @@ class SpanMultiTaskModel(nn.Module):
             coarse_labels,
             fine_labels,
             svo_boundary_labels,
-            svo_labels,
+            syn_labels,
+            role_labels,
             voice_labels,
+            certainty_labels,
             gender_labels,
             number_labels,
             person_labels,
@@ -171,89 +179,96 @@ class SpanMultiTaskModel(nn.Module):
             lambda_boundary=1.0,
             lambda_coarse=1.0,
             lambda_fine=1.2,
-            lambda_svo_boundary=1.0,
-            lambda_svo=1.0,
+            lambda_svo_boundary=0.7,
+            lambda_svo=0.5,        # syn type (verb_trigger / pron)
+            lambda_role=0.6,       # rôle SVO
             lambda_voice=0.5,
+            lambda_certainty=0.4,
             lambda_morpho=0.3,
             lambda_verb_ptr=0.5,
             lambda_compat=0.0,
             focal_gamma=0.0,
     ):
-        """
-        Loss multi-têtes :
-          boundary / coarse / fine  : NER (inchangé)
-          svo                       : rôle SVO sur spans silver (positive only)
-          voice                     : ACTIVE/PASSIVE sur svo_verb uniquement
-        """
         device = outputs["boundary_logits"].device
 
-        b_logits      = outputs["boundary_logits"]
-        c_logits      = outputs["coarse_logits"]
-        f_logits      = outputs["fine_logits"]
-        svo_b_logits  = outputs["svo_boundary_logits"]
-        svo_logits    = outputs["svo_logits"]
-        voice_logits  = outputs["voice_logits"]
-        g_logits      = outputs["gender_logits"]
-        n_logits      = outputs["number_logits"]
-        p_logits      = outputs["person_logits"]
-        vptr_logits   = outputs["verb_ptr_logits"]   # [N, seq]
+        b_logits       = outputs["boundary_logits"]
+        c_logits       = outputs["coarse_logits"]
+        f_logits       = outputs["fine_logits"]
+        svo_b_logits   = outputs["svo_boundary_logits"]
+        syn_logits     = outputs["syn_logits"]
+        role_logits    = outputs["role_logits"]
+        voice_logits   = outputs["voice_logits"]
+        cert_logits    = outputs["certainty_logits"]
+        g_logits       = outputs["gender_logits"]
+        n_logits       = outputs["number_logits"]
+        p_logits       = outputs["person_logits"]
+        vptr_logits    = outputs["verb_ptr_logits"]
 
-        boundary_labels      = boundary_labels.to(device=device, dtype=torch.long)
-        coarse_labels        = coarse_labels.to(device=device, dtype=torch.long)
-        fine_labels          = fine_labels.to(device=device, dtype=torch.long)
-        svo_boundary_labels  = svo_boundary_labels.to(device=device, dtype=torch.long)
-        svo_labels           = svo_labels.to(device=device, dtype=torch.long)
-        voice_labels         = voice_labels.to(device=device, dtype=torch.long)
-        gender_labels        = gender_labels.to(device=device, dtype=torch.long)
-        number_labels        = number_labels.to(device=device, dtype=torch.long)
-        person_labels        = person_labels.to(device=device, dtype=torch.long)
-        gov_verb_labels      = gov_verb_labels.to(device=device, dtype=torch.long)
-        sample_weights       = sample_weights.to(device=device, dtype=torch.float32)
+        boundary_labels     = boundary_labels.to(device=device, dtype=torch.long)
+        coarse_labels       = coarse_labels.to(device=device, dtype=torch.long)
+        fine_labels         = fine_labels.to(device=device, dtype=torch.long)
+        svo_boundary_labels = svo_boundary_labels.to(device=device, dtype=torch.long)
+        syn_labels          = syn_labels.to(device=device, dtype=torch.long)
+        role_labels         = role_labels.to(device=device, dtype=torch.long)
+        voice_labels        = voice_labels.to(device=device, dtype=torch.long)
+        certainty_labels    = certainty_labels.to(device=device, dtype=torch.long)
+        gender_labels       = gender_labels.to(device=device, dtype=torch.long)
+        number_labels       = number_labels.to(device=device, dtype=torch.long)
+        person_labels       = person_labels.to(device=device, dtype=torch.long)
+        gov_verb_labels     = gov_verb_labels.to(device=device, dtype=torch.long)
+        sample_weights      = sample_weights.to(device=device, dtype=torch.float32)
 
         if boundary_class_weights is not None:
             boundary_class_weights = boundary_class_weights.to(device=device, dtype=torch.float32)
         if coarse_class_weights is not None:
             coarse_class_weights = coarse_class_weights.to(device=device, dtype=torch.float32)
+        if fine_class_weights is not None:
+            fine_class_weights = fine_class_weights.to(device=device, dtype=torch.float32)
 
-        # ── 1) Boundary ────────────────────────────────────────────
-        loss_b_per_span = F.cross_entropy(b_logits, boundary_labels,
-                                           weight=boundary_class_weights, reduction="none")
+        # ── 1) NER Boundary ────────────────────────────────────────────────
+        loss_b_per = F.cross_entropy(b_logits, boundary_labels,
+                                     weight=boundary_class_weights, reduction="none")
         if focal_gamma > 0.0:
-            b_probs = F.softmax(b_logits.detach(), dim=-1)
-            p_t = b_probs.gather(1, boundary_labels.unsqueeze(1)).squeeze(1)
-            loss_b_per_span = loss_b_per_span * (1.0 - p_t) ** focal_gamma
-        loss_b = (loss_b_per_span * sample_weights).mean()
+            p_t = F.softmax(b_logits.detach(), dim=-1).gather(1, boundary_labels.unsqueeze(1)).squeeze(1)
+            loss_b_per = loss_b_per * (1.0 - p_t) ** focal_gamma
+        loss_b = (loss_b_per * sample_weights).mean()
 
-        # ── 2) Coarse (tous les spans) ─────────────────────────────
-        loss_c_per_span = F.cross_entropy(c_logits, coarse_labels,
-                                           weight=coarse_class_weights, reduction="none")
-        loss_c = (loss_c_per_span * sample_weights).mean()
+        # ── 2) Coarse ──────────────────────────────────────────────────────
+        loss_c = (F.cross_entropy(c_logits, coarse_labels,
+                                  weight=coarse_class_weights, reduction="none")
+                  * sample_weights).mean()
 
-        # ── 3) Fine (spans NER positifs avec un vrai label fine) ──────
+        # ── 3) Fine (NER positifs) ─────────────────────────────────────────
         pos_mask = (boundary_labels == 1) & (fine_labels < f_logits.size(-1))
         if pos_mask.any():
-            f_logits_pos = f_logits[pos_mask]
-            f_labels_pos = fine_labels[pos_mask]
-            loss_f = (F.cross_entropy(f_logits_pos, f_labels_pos, reduction="none")
+            _fine_w = fine_class_weights if fine_class_weights is not None else None
+            loss_f = (F.cross_entropy(f_logits[pos_mask], fine_labels[pos_mask],
+                                      weight=_fine_w, reduction="none")
                       * sample_weights[pos_mask]).mean()
         else:
             loss_f = torch.tensor(0.0, device=device)
 
-        # ── 4) SVO boundary (verbes + pronoms) ────────────────────
+        # ── 4) Syntactic boundary (verb_trigger / pron) ────────────────────
         loss_svo_b = (F.cross_entropy(svo_b_logits, svo_boundary_labels, reduction="none")
                       * sample_weights).mean()
 
-        # ── 5) SVO (spans silver avec rôle SVO uniquement) ─────────
-        # SVO_NONE_ID = NUM_SVO (sentinel pour les spans non-SVO)
-        svo_mask = (svo_labels < svo_logits.size(-1))
-        if svo_mask.any():
-            loss_svo = (F.cross_entropy(svo_logits[svo_mask], svo_labels[svo_mask], reduction="none")
-                        * sample_weights[svo_mask]).mean()
+        # ── 5) Syn type (verb_trigger=0 / pron_subj=1 / pron_obj=2) ───────
+        syn_mask = (syn_labels < syn_logits.size(-1))
+        if syn_mask.any():
+            loss_syn = (F.cross_entropy(syn_logits[syn_mask], syn_labels[syn_mask], reduction="none")
+                        * sample_weights[syn_mask]).mean()
         else:
-            loss_svo = torch.tensor(0.0, device=device)
+            loss_syn = torch.tensor(0.0, device=device)
 
-        # ── 6) Voice (svo_verb uniquement) ─────────────────────────────
-        # VOICE_NONE_ID = NUM_VOICE (sentinel pour les spans non-verb)
+        # ── 6) Role (sur NER spans + pronoms qui ont un rôle != NONE) ─────
+        role_mask = (role_labels < ROLE_NONE_ID)   # exclut NONE (=6)
+        if role_mask.any():
+            loss_role = (F.cross_entropy(role_logits[role_mask], role_labels[role_mask], reduction="none")
+                         * sample_weights[role_mask]).mean()
+        else:
+            loss_role = torch.tensor(0.0, device=device)
+
+        # ── 7) Voice (sur verb_trigger uniquement) ─────────────────────────
         voice_mask = (voice_labels < voice_logits.size(-1))
         if voice_mask.any():
             loss_voice = (F.cross_entropy(voice_logits[voice_mask], voice_labels[voice_mask], reduction="none")
@@ -261,58 +276,77 @@ class SpanMultiTaskModel(nn.Module):
         else:
             loss_voice = torch.tensor(0.0, device=device)
 
-        # ── 7) Morpho : gender + number + person (spans SVO actifs) ─────────
-        # Supervisés uniquement sur les spans SVO gold (svo_label < NUM_SVO)
-        svo_active = (svo_labels < svo_logits.size(-1))
-        gender_mask = svo_active & (gender_labels < g_logits.size(-1))
-        number_mask = svo_active & (number_labels < n_logits.size(-1))
-        person_mask = svo_active & (person_labels < p_logits.size(-1))
-        if gender_mask.any():
-            loss_gender = (F.cross_entropy(g_logits[gender_mask], gender_labels[gender_mask], reduction="none")
-                           * sample_weights[gender_mask]).mean()
+        # ── 8) Certainty (sur verb_trigger uniquement) ─────────────────────
+        cert_mask = (certainty_labels < cert_logits.size(-1))
+        if cert_mask.any():
+            loss_cert = (F.cross_entropy(cert_logits[cert_mask], certainty_labels[cert_mask], reduction="none")
+                         * sample_weights[cert_mask]).mean()
         else:
-            loss_gender = torch.tensor(0.0, device=device)
-        if number_mask.any():
-            loss_number = (F.cross_entropy(n_logits[number_mask], number_labels[number_mask], reduction="none")
-                           * sample_weights[number_mask]).mean()
-        else:
-            loss_number = torch.tensor(0.0, device=device)
-        if person_mask.any():
-            loss_person = (F.cross_entropy(p_logits[person_mask], person_labels[person_mask], reduction="none")
-                           * sample_weights[person_mask]).mean()
-        else:
-            loss_person = torch.tensor(0.0, device=device)
+            loss_cert = torch.tensor(0.0, device=device)
 
-        # ── 8) Verb pointer (arguments SVO uniquement, gov_verb_labels >= 0) ──
-        seq_len = vptr_logits.size(1)
-        ptr_mask = (
-            (gov_verb_labels >= 0)
-            & (gov_verb_labels < seq_len)      # hors bornes si verbe proche de max_length
-            & (svo_labels < svo_logits.size(-1))
-        )
+        # ── 9) Morpho : gender + number + person ───────────────────────────
+        # Supervisés sur NER spans + syntactic spans qui ont les champs annotés
+        gender_mask = (gender_labels < g_logits.size(-1))
+        number_mask = (number_labels < n_logits.size(-1))
+        person_mask = (person_labels < p_logits.size(-1))
+        loss_gender = (F.cross_entropy(g_logits[gender_mask], gender_labels[gender_mask], reduction="none")
+                       * sample_weights[gender_mask]).mean() if gender_mask.any() else torch.tensor(0.0, device=device)
+        loss_number = (F.cross_entropy(n_logits[number_mask], number_labels[number_mask], reduction="none")
+                       * sample_weights[number_mask]).mean() if number_mask.any() else torch.tensor(0.0, device=device)
+        loss_person = (F.cross_entropy(p_logits[person_mask], person_labels[person_mask], reduction="none")
+                       * sample_weights[person_mask]).mean() if person_mask.any() else torch.tensor(0.0, device=device)
+
+        # ── 10) Verb pointer (spans avec gov_verb_labels != -1) ────────────
+        seq_len  = vptr_logits.size(1)
+        ptr_mask = (gov_verb_labels >= 0) & (gov_verb_labels < seq_len) & (role_labels < ROLE_NONE_ID)
         if ptr_mask.any() and vptr_logits.size(0) > 0:
-            # vptr_logits[ptr_mask] : [K, seq_len]
-            # gov_verb_labels[ptr_mask] : [K] — index du token verbe gouverneur
-            loss_verb_ptr = (
-                F.cross_entropy(
-                    vptr_logits[ptr_mask],
-                    gov_verb_labels[ptr_mask],
-                    reduction="none"
-                ) * sample_weights[ptr_mask]
-            ).mean()
+            loss_verb_ptr = (F.cross_entropy(vptr_logits[ptr_mask], gov_verb_labels[ptr_mask], reduction="none")
+                             * sample_weights[ptr_mask]).mean()
         else:
             loss_verb_ptr = torch.tensor(0.0, device=device)
 
-        # ── Total ──────────────────────────────────────────────────
+        # ── 11) Compat : cohérence inter-têtes pour les eventlets ──────────
+        #
+        # A) role → boundary :
+        #    Un span participant (role != NONE) est forcément un span NER (boundary=1).
+        #    Si boundary manque ce span, l'eventlet est cassé.
+        role_active_mask = (role_labels < ROLE_NONE_ID)
+        if lambda_compat > 0.0 and role_active_mask.any():
+            forced_boundary = torch.ones(
+                role_active_mask.sum(), device=device, dtype=torch.long
+            )
+            loss_compat_rb = (
+                F.cross_entropy(b_logits[role_active_mask], forced_boundary, reduction="none")
+                * sample_weights[role_active_mask]
+            ).mean()
+        else:
+            loss_compat_rb = torch.tensor(0.0, device=device)
+
+        # B) boundary ↔ coarse soft alignment :
+        #    P(boundary=1) doit s'aligner avec P(coarse≠NONE).
+        #    On utilise boundary comme superviseur stable (detach) pour guider coarse.
+        if lambda_compat > 0.0 and b_logits.size(0) > 0:
+            p_boundary_pos  = torch.softmax(b_logits.detach(), dim=-1)[:, 1]          # [N]
+            p_coarse_entity = 1.0 - torch.softmax(c_logits, dim=-1)[:, COARSE_NONE_ID]  # [N]
+            loss_compat_bc  = F.mse_loss(p_coarse_entity, p_boundary_pos)
+        else:
+            loss_compat_bc = torch.tensor(0.0, device=device)
+
+        loss_compat = loss_compat_rb + loss_compat_bc
+
+        # ── Total ──────────────────────────────────────────────────────────
         total_loss = (
             lambda_boundary       * loss_b
             + lambda_coarse       * loss_c
             + lambda_fine         * loss_f
             + lambda_svo_boundary * loss_svo_b
-            + lambda_svo          * loss_svo
+            + lambda_svo          * loss_syn
+            + lambda_role         * loss_role
             + lambda_voice        * loss_voice
+            + lambda_certainty    * loss_cert
             + lambda_morpho       * (loss_gender + loss_number + loss_person)
             + lambda_verb_ptr     * loss_verb_ptr
+            + lambda_compat       * loss_compat
         )
 
         return {
@@ -321,9 +355,13 @@ class SpanMultiTaskModel(nn.Module):
             "loss_coarse":          loss_c.detach(),
             "loss_fine":            loss_f.detach(),
             "loss_svo_boundary":    loss_svo_b.detach(),
-            "loss_svo":             loss_svo.detach(),
+            "loss_syn":             loss_syn.detach(),
+            "loss_role":            loss_role.detach(),
             "loss_voice":           loss_voice.detach(),
+            "loss_certainty":       loss_cert.detach(),
+            "loss_compat":          loss_compat.detach(),
             "num_positive_spans":   int(pos_mask.sum().item()),
-            "num_svo_spans":        int(svo_mask.sum().item()),
+            "num_syn_spans":        int(syn_mask.sum().item()),
+            "num_role_spans":       int(role_mask.sum().item()),
         }
 
