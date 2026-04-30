@@ -857,18 +857,24 @@ class OnnxMultiHeadEntityExtractor(
         // Structure de sortie : FloatBuffer flat au lieu de Array<FloatArray>
         // → 1 objet Java par sortie (vs N floatArrays), moins de JNI overhead
         data class OnnxOutputsFlat(
-            val boundaryFlat: FloatBuffer,  // [N * 2]
-            val coarseFlat:   FloatBuffer,  // [N * nCoarse]
-            val fineFlat:     FloatBuffer,  // [N * nFine]
-            val svoBndFlat:   FloatBuffer?, // [N * 2]
-            val synFlat:      FloatBuffer?, // [N * 3] verb_trigger/pron_subj/pron_obj
-            val roleFlat:     FloatBuffer?, // [N * 7] SUBJECT/OBJECT/OBLIQUE...
-            val voiceFlat:    FloatBuffer?, // [N * 2]
-            val certaintyFlat: FloatBuffer?, // [N * 3] certain/modal/denied
-            val genderFlat:   FloatBuffer?, // [N * 3]
-            val numberFlat:   FloatBuffer?, // [N * 2]
-            val personFlat:   FloatBuffer?, // [N * 3]
-            val verbPtrFlat:  FloatBuffer?, // [N * seqLen] — verb pointer logits
+            val boundaryFlat:   FloatBuffer,  // [N * 2]
+            val coarseFlat:     FloatBuffer,  // [N * nCoarse]
+            val fineFlat:       FloatBuffer,  // [N * nFine]
+            val svoBndFlat:     FloatBuffer?, // [N * 2]
+            val synFlat:        FloatBuffer?, // [N * 3] verb_trigger/pron_subj/pron_obj  (v4 models)
+            val roleFlat:       FloatBuffer?, // [N * 7] SUBJECT/OBJECT/OBLIQUE...       (v4 models)
+            val voiceFlat:      FloatBuffer?, // [N * 2]
+            val certaintyFlat:  FloatBuffer?, // [N * 3] certain/modal/denied
+            val genderFlat:     FloatBuffer?, // [N * 3]
+            val numberFlat:     FloatBuffer?, // [N * 2]
+            val personFlat:     FloatBuffer?, // [N * 3]
+            val verbPtrFlat:    FloatBuffer?, // [N * seqLen] — verb pointer logits
+            // ── v3 backward-compat ────────────────────────────────────────────
+            // Old models exported a single combined svo_logits [N * nSvoLegacy]
+            // instead of the separate syn_logits + role_logits used by v4 models.
+            // When present (and synFlat is absent) the v3 labels are mapped to v4
+            // synLabel / roleName during decoding.
+            val svoLegacyFlat:  FloatBuffer?, // [N * nSvoLegacy] — v3 compat: svo_logits
         )
 
         val resultsByIdx = arrayOfNulls<ExtractionResult>(texts.size)
@@ -944,15 +950,16 @@ class OnnxMultiHeadEntityExtractor(
                     boundaryFlat = (result["boundary_logits"].get() as OnnxTensor).floatBuffer,
                     coarseFlat   = (result["coarse_logits"]  .get() as OnnxTensor).floatBuffer,
                     fineFlat     = (result["fine_logits"]    .get() as OnnxTensor).floatBuffer,
-                    svoBndFlat   = flatBuf("svo_boundary_logits"),
-                    synFlat      = flatBuf("syn_logits"),
-                    roleFlat     = flatBuf("role_logits"),
-                    voiceFlat    = flatBuf("voice_logits"),
-                    certaintyFlat= flatBuf("certainty_logits"),
-                    genderFlat   = flatBuf("gender_logits"),
-                    numberFlat   = flatBuf("number_logits"),
-                    personFlat   = flatBuf("person_logits"),
-                    verbPtrFlat  = flatBuf("verb_ptr_logits"),
+                    svoBndFlat    = flatBuf("svo_boundary_logits"),
+                    synFlat       = flatBuf("syn_logits"),
+                    roleFlat      = flatBuf("role_logits"),
+                    voiceFlat     = flatBuf("voice_logits"),
+                    certaintyFlat = flatBuf("certainty_logits"),
+                    genderFlat    = flatBuf("gender_logits"),
+                    numberFlat    = flatBuf("number_logits"),
+                    personFlat    = flatBuf("person_logits"),
+                    verbPtrFlat   = flatBuf("verb_ptr_logits"),
+                    svoLegacyFlat = flatBuf("svo_logits"),        // v3 compat
                 )
             }
             val msOnnx = ms(tOnnxRun)
@@ -974,6 +981,9 @@ class OnnxMultiHeadEntityExtractor(
             val nPerson  = PERSON_LABELS.size
             // seqLen du bucket courant (verb pointer a [N * seqLen] éléments)
             val nSeqLen  = bucketMaxLen
+            // v3 compat: svo_logits width (0 when absent, i.e. v4 model)
+            val nSvoLegacy = if (onnxOut.svoLegacyFlat != null && N > 0)
+                onnxOut.svoLegacyFlat.capacity() / N else 0
 
             candidates.forEachIndexed { k, cand ->
                 // ── NER ──────────────────────────────────────────────────────
@@ -1096,10 +1106,23 @@ class OnnxMultiHeadEntityExtractor(
                         val synLabel: String
                         val synProb: Float
                         if (onnxOut.synFlat != null) {
+                            // v4 model path: dedicated syn_logits head
                             val p = FloatArray(nSyn)
                             loadRow(onnxOut.synFlat, k * nSyn, p); softmaxInto(p, p)
                             var si = 0; for (j in 1 until nSyn) if (p[j] > p[si]) si = j
                             synLabel = SYN_LABELS.getOrElse(si) { "verb_trigger" }; synProb = p[si]
+                        } else if (onnxOut.svoLegacyFlat != null && nSvoLegacy > 0) {
+                            // v3 compat path: combined svo_logits — map label index to v4 synLabel
+                            // v3 label 0 (svo_verb) → verb_trigger; 10/12 (pron_subj/pron_dem) → pron_subj;
+                            // 11 (pron_obj) → pron_obj; all NP args (1-9) → verb_trigger (artefact, like v4).
+                            val p = FloatArray(nSvoLegacy)
+                            loadRow(onnxOut.svoLegacyFlat, k * nSvoLegacy, p); softmaxInto(p, p)
+                            var li = 0; for (j in 1 until nSvoLegacy) if (p[j] > p[li]) li = j
+                            synLabel = when (li) {
+                                10, 12 -> "pron_subj"
+                                11     -> "pron_obj"
+                                else   -> "verb_trigger"
+                            }; synProb = p[li]
                         } else { synLabel = "verb_trigger"; synProb = 0f }
 
                         // Architecture v4 — arbitrage synLabel vs svo_boundary :
@@ -1116,10 +1139,39 @@ class OnnxMultiHeadEntityExtractor(
                             // Vrai verbe → rôle vaut NONE par définition
                             roleName = "NONE"; roleProb = 0f
                         } else if (onnxOut.roleFlat != null) {
+                            // v4 model path: dedicated role_logits head
                             val p = FloatArray(nRole)
                             loadRow(onnxOut.roleFlat, k * nRole, p); softmaxInto(p, p)
                             var ri = 0; for (j in 1 until nRole) if (p[j] > p[ri]) ri = j
                             roleName = ROLE_LABELS.getOrElse(ri) { "NONE" }; roleProb = p[ri]
+                        } else if (onnxOut.svoLegacyFlat != null && nSvoLegacy > 0) {
+                            // v3 compat path: derive role from combined svo_logits argmax
+                            // v3 label → v4 ROLE_LABELS mapping:
+                            //   0 svo_verb         → NONE (handled by isActualVerb above)
+                            //   1 svo_subject       → SUBJECT
+                            //   2 svo_object        → OBJECT
+                            //   3 svo_iobj          → OBLIQUE
+                            //   4 svo_tcomp         → OBLIQUE
+                            //   5 svo_lcomp         → OBLIQUE
+                            //   6 svo_cause         → OBLIQUE_CAUSE
+                            //   7 attr / 8 nom_event→ SUBJECT
+                            //   9 ent_appos         → APPOS
+                            //  10 pron_subj/12 dem  → SUBJECT
+                            //  11 pron_obj          → OBJECT
+                            //  13 neg               → NONE
+                            val p = FloatArray(nSvoLegacy)
+                            loadRow(onnxOut.svoLegacyFlat, k * nSvoLegacy, p); softmaxInto(p, p)
+                            var li = 0; for (j in 1 until nSvoLegacy) if (p[j] > p[li]) li = j
+                            roleName = when (li) {
+                                1             -> "SUBJECT"       // svo_subject
+                                2             -> "OBJECT"        // svo_object
+                                3, 4, 5       -> "OBLIQUE"       // svo_iobj, svo_tcomp, svo_lcomp
+                                6             -> "OBLIQUE_CAUSE" // svo_cause
+                                7, 8, 10, 12  -> "SUBJECT"       // attr, nom_event, pron_subj, pron_dem
+                                9             -> "APPOS"         // ent_appos
+                                11            -> "OBJECT"        // pron_obj
+                                else          -> "NONE"          // svo_verb (0) or unknown
+                            }; roleProb = p[li]
                         } else { roleName = "NONE"; roleProb = 0f }
 
                         // Guard : pronoms et args forcés doivent passer le seuil roleProb.
