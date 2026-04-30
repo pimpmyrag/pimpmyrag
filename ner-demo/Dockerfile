@@ -45,11 +45,16 @@ WORKDIR /app
 # ── Modèle ONNX (708 MB) téléchargé au BUILD, pas au démarrage ─────
 # Mettre cette couche AVANT le JAR pour bénéficier du cache Docker :
 # si le code change mais pas l'URL du modèle, cette couche est réutilisée.
+# MODEL_SHA256 : changer ce hash invalide le cache Docker et force un re-téléchargement.
 ARG MODEL_URL=https://github.com/pimpmyrag/pimpmyrag/releases/download/v1.1.0-ner-model/best_model_multitask_full.onnx
+ARG MODEL_SHA256=9accd0637a0465ebad73bc8d8d5e905f88a97e7ac440651a37308390d54bcf6c
 RUN mkdir -p model && \
     echo "[docker] downloading model from $MODEL_URL" && \
     curl -fL --retry 3 "$MODEL_URL" -o model/best_model_multitask_full.onnx && \
-    echo "[docker] model size: $(du -sh model/best_model_multitask_full.onnx)"
+    echo "[docker] model size: $(du -sh model/best_model_multitask_full.onnx)" && \
+    echo "[docker] verifying SHA256..." && \
+    echo "${MODEL_SHA256}  model/best_model_multitask_full.onnx" | sha256sum -c - && \
+    echo "[docker] SHA256 OK"
 ENV NER_MODEL_PATH=/app/model/best_model_multitask_full.onnx
 
 # JAR avec bundle Vaadin pré-compilé
