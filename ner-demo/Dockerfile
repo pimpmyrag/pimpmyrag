@@ -53,8 +53,9 @@ RUN mkdir -p model && \
     curl -fL --retry 3 "$MODEL_URL" -o model/best_model_multitask_full.onnx && \
     echo "[docker] model size: $(du -sh model/best_model_multitask_full.onnx)" && \
     echo "[docker] verifying SHA256..." && \
-    echo "${MODEL_SHA256}  model/best_model_multitask_full.onnx" | sha256sum -c - && \
-    echo "[docker] SHA256 OK"
+    ACTUAL=$(openssl dgst -sha256 model/best_model_multitask_full.onnx | awk '{print $2}') && \
+    echo "[docker] actual SHA256: $ACTUAL" && \
+    [ "$ACTUAL" = "$MODEL_SHA256" ] && echo "[docker] SHA256 OK" || { echo "[docker] SHA256 MISMATCH: expected $MODEL_SHA256"; exit 1; }
 ENV NER_MODEL_PATH=/app/model/best_model_multitask_full.onnx
 
 # JAR avec bundle Vaadin pré-compilé
