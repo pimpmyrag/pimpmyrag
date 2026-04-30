@@ -37,7 +37,7 @@ RUN ./gradlew :ner-demo:vaadinBuildFrontend :ner-demo:bootJar \
 # Pas de Node.js : le bundle Vaadin est pré-compilé dans le JAR (production mode)
 FROM eclipse-temurin:21-jre-jammy
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl unzip && \
+RUN apt-get update && apt-get install -y --no-install-recommends curl unzip openssl && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -55,7 +55,12 @@ RUN mkdir -p model && \
     echo "[docker] verifying SHA256..." && \
     ACTUAL=$(openssl dgst -sha256 model/best_model_multitask_full.onnx | awk '{print $2}') && \
     echo "[docker] actual SHA256: $ACTUAL" && \
-    [ "$ACTUAL" = "$MODEL_SHA256" ] && echo "[docker] SHA256 OK" || { echo "[docker] SHA256 MISMATCH: expected $MODEL_SHA256"; exit 1; }
+    if [ "$ACTUAL" = "$MODEL_SHA256" ]; then \
+        echo "[docker] SHA256 OK"; \
+    else \
+        echo "[docker] SHA256 MISMATCH: expected $MODEL_SHA256, got $ACTUAL"; \
+        exit 1; \
+    fi
 ENV NER_MODEL_PATH=/app/model/best_model_multitask_full.onnx
 
 # JAR avec bundle Vaadin pré-compilé
