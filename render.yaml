@@ -15,5 +15,6 @@ services:
       - key: NER_TAU_SVO_BOUNDARY
         # Sur Linux CPU (ONNX Runtime), la tête svo_boundary fire à ~0.65-0.97 sur les NPs
         # (artefact plateforme vs macOS ARM/CoreML). Seuil relevé pour filtrer les faux verbes.
-        # Vrais verbes : p_bnd=0.994-1.000. Faux positifs : p_bnd=0.517-0.752.
-        value: "0.95"
+        # Gap mesuré : faux positifs NPs max=0.752, vrais verbes min≈0.80-0.994.
+        # 0.80 = marge suffisante au-dessus des NPs (0.752) sans couper les verbes faibles.
+        value: "0.80"
