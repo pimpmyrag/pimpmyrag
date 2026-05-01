@@ -136,6 +136,32 @@ jobs:
             SHA256SUMS.txt \
             --clobber
 
+      # ── Mise à jour automatique du Dockerfile → déclenche le rebuild ──────
+      - name: Update Dockerfile ARGs and trigger image rebuild
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OUT_TAG: ${{ inputs.output_tag }}
+          NEW_SHA: ${{ steps.sha.outputs.onnx_sha256 }}
+        run: |
+          set -euo pipefail
+          NEW_URL="https://github.com/${{ github.repository }}/releases/download/${OUT_TAG}/best_model_multitask_full.onnx"
+
+          echo "Mise à jour de ner-demo/Dockerfile :"
+          echo "  MODEL_URL  = $NEW_URL"
+          echo "  MODEL_SHA256 = $NEW_SHA"
+
+          # Remplace les lignes ARG MODEL_URL et ARG MODEL_SHA256
+          sed -i "s|ARG MODEL_URL=.*|ARG MODEL_URL=${NEW_URL}|" ner-demo/Dockerfile
+          sed -i "s|ARG MODEL_SHA256=.*|ARG MODEL_SHA256=${NEW_SHA}|" ner-demo/Dockerfile
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ner-demo/Dockerfile
+          git diff --cached --quiet && echo "Aucun changement détecté" && exit 0
+          git commit -m "ci: use linux-exported ONNX ${OUT_TAG} (sha256=${NEW_SHA::12}…)"
+          git push origin HEAD:main
+          echo "✅ Dockerfile mis à jour — build-push-ner-demo.yml va se déclencher automatiquement"
+
       - name: Summary
         run: |
           echo "## Export ONNX terminé 🎉" >> "$GITHUB_STEP_SUMMARY"
@@ -144,10 +170,11 @@ jobs:
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
           echo "| Release output | \`${{ inputs.output_tag }}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| ONNX SHA-256 | \`${{ steps.sha.outputs.onnx_sha256 }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Dockerfile mis à jour | ✅ build-push-ner-demo.yml déclenché |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "### Mettre à jour Dockerfile" >> "$GITHUB_STEP_SUMMARY"
+          echo "### ARGs dans ner-demo/Dockerfile" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "NER_MODEL_SHA256=${{ steps.sha.outputs.onnx_sha256 }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "NER_MODEL_URL=https://github.com/${{ github.repository }}/releases/download/${{ inputs.output_tag }}/best_model_multitask_full.onnx" >> "$GITHUB_STEP_SUMMARY"
+          echo "ARG MODEL_URL=https://github.com/${{ github.repository }}/releases/download/${{ inputs.output_tag }}/best_model_multitask_full.onnx" >> "$GITHUB_STEP_SUMMARY"
+          echo "ARG MODEL_SHA256=${{ steps.sha.outputs.onnx_sha256 }}" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 

@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'ner-demo/**'
+      - 'ner-demo/Dockerfile'
       - 'connectors/**'
       - 'scripts/render/**'
       - 'training/multi-head/tokenizer_export_clean/**'
