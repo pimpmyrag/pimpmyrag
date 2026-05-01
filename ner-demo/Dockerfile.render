@@ -1,0 +1,6 @@
+# Render-specific Dockerfile: just pulls the pre-built image from GHCR.
+# The real build (Gradle + model download) happens in GitHub Actions.
+# To force a fresh pull on Render, update CACHE_BUST below.
+ARG CACHE_BUST=1
+FROM ghcr.io/pimpmyrag/ner-demo:latest
+

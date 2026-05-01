@@ -1,9 +1,9 @@
 services:
   - type: web
     name: ner-demo
-    runtime: image
-    image:
-      url: ghcr.io/pimpmyrag/ner-demo:latest
+    runtime: docker
+    dockerfilePath: ./ner-demo/Dockerfile.render
+    dockerContext: .
     healthCheckPath: /
     port: 10000
     plan: standard

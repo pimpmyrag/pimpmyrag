@@ -16,7 +16,7 @@ jobs:
     name: Build Docker image & push to GHCR
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
@@ -50,6 +50,7 @@ jobs:
             type=sha,format=short
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -59,4 +60,14 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Bump CACHE_BUST in Dockerfile.render to force Render pull
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          sed -i "s/^ARG CACHE_BUST=.*/ARG CACHE_BUST=${SHORT_SHA}/" ner-demo/Dockerfile.render
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ner-demo/Dockerfile.render
+          git diff --cached --quiet || git commit -m "ci: bump CACHE_BUST to ${SHORT_SHA} [skip ci]"
+          git push origin HEAD:main
 
