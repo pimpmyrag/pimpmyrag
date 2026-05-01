@@ -239,9 +239,13 @@ class NerDemoView(
                 /* ── Mobile bottom-tab navigation ── */
                 '@media (max-width: 640px) {',
                 '  .ner-mobile-nav { display: flex !important; }',
-                '  #ner-body { height: calc(100% - 56px) !important; }',
-                /* default tab = input: sidebar visible, results+detail hidden */
-                '  .ner-sidebar { display: flex !important; position: static !important; width: 100% !important; min-width: unset !important; height: 100% !important; box-shadow: none !important; border-right: none !important; flex-shrink: 1 !important; }',
+                /* réserver l'espace pour la nav bar + safe area (iPhone notch bas) */
+                '  #ner-body { height: calc(100% - 64px - env(safe-area-inset-bottom, 0px)) !important; }',
+                /* default tab = input: sidebar visible, results+detail+settings hidden */
+                '  .ner-sidebar { display: flex !important; position: static !important; width: 100% !important; min-width: unset !important; height: 100% !important; box-shadow: none !important; border-right: none !important; flex-shrink: 1 !important; overflow-y: auto !important; }',
+                /* cacher params accordion et judge par défaut (onglet Saisie) */
+                '  #ner-params { display: none !important; }',
+                '  .ner-judge-panel { display: none !important; }',
                 '  .ner-results-pane { display: none !important; }',
                 '  .ner-rightcol   { display: none !important; }',
                 /* tab = results */
@@ -250,6 +254,11 @@ class NerDemoView(
                 /* tab = detail */
                 '  #ner-body[data-tab="detail"] .ner-sidebar { display: none !important; }',
                 '  #ner-body[data-tab="detail"] .ner-rightcol { display: flex !important; width: 100% !important; min-width: unset !important; height: 100% !important; }',
+                /* tab = settings : montre sidebar mais seulement params + judge (pas input) */
+                '  #ner-body[data-tab="settings"] .ner-input-section { display: none !important; }',
+                '  #ner-body[data-tab="settings"] #ner-params { display: block !important; }',
+                '  #ner-body[data-tab="settings"] .ner-judge-panel { display: flex !important; }',
+                '  #ner-body[data-tab="settings"] .ner-results-pane { display: none !important; }',
                 /* Bigger touch targets */
                 '  vaadin-button { min-height: 44px !important; }',
                 '  #ner-input { min-height: 90px !important; }',
@@ -311,9 +320,10 @@ class NerDemoView(
                 if (nav) {
                   nav.querySelectorAll('[data-tab]').forEach(function(b) {
                     var active = b.getAttribute('data-tab') === tab;
-                    b.style.color       = active ? '#1d4ed8' : '#64748b';
+                    b.style.color       = active ? '#1d4ed8' : '#94a3b8';
                     b.style.fontWeight  = active ? '700'     : '400';
-                    b.style.borderTop   = active ? '2px solid #1d4ed8' : '2px solid transparent';
+                    b.style.borderTop   = active ? '3px solid #1d4ed8' : '3px solid transparent';
+                    b.style.background  = active ? '#eff6ff' : 'transparent';
                   });
                 }
               };
@@ -1574,29 +1584,32 @@ class NerDemoView(
         nav.style["bottom"]          = "0"
         nav.style["left"]            = "0"
         nav.style["right"]           = "0"
-        nav.style["height"]          = "56px"
+        nav.style["height"]          = "calc(64px + env(safe-area-inset-bottom, 0px))"
+        nav.style["padding-bottom"]  = "env(safe-area-inset-bottom, 0px)"
         nav.style["background"]      = "#ffffff"
         nav.style["border-top"]      = "1px solid #e2e8f0"
         nav.style["z-index"]         = "300"
-        nav.style["box-shadow"]      = "0 -2px 12px rgba(0,0,0,.07)"
+        nav.style["box-shadow"]      = "0 -2px 16px rgba(0,0,0,.09)"
         nav.style["align-items"]     = "stretch"
 
         fun tab(emoji: String, label: String, tabKey: String) = Div().apply {
             add(Span(emoji).also {
-                it.style["font-size"] = "1.3em"; it.style["display"] = "block"
+                it.style["font-size"] = "1.5em"; it.style["display"] = "block"
             })
             add(Span(label).also {
-                it.style["font-size"] = "0.62em"; it.style["display"] = "block"; it.style["margin-top"] = "1px"
+                it.style["font-size"] = "0.60em"; it.style["display"] = "block"
+                it.style["margin-top"] = "2px"; it.style["letter-spacing"] = "0.01em"
             })
             style["display"]         = "flex"
             style["flex-direction"]  = "column"
             style["align-items"]     = "center"
             style["justify-content"] = "center"
             style["flex"]            = "1"
+            style["padding"]         = "8px 4px 4px"
             style["cursor"]          = "pointer"
-            style["color"]           = "#64748b"
+            style["color"]           = "#94a3b8"
             style["user-select"]     = "none"
-            style["border-top"]      = "2px solid transparent"
+            style["border-top"]      = "3px solid transparent"
             style["transition"]      = "color .15s, border-color .15s"
             element.setAttribute("data-tab", tabKey)
             addClickListener {
@@ -1604,9 +1617,10 @@ class NerDemoView(
             }
         }
 
-        nav.add(tab("✏️", i18n.mobileTabInput,   "input"))
-        nav.add(tab("📊", i18n.mobileTabResults, "results"))
-        nav.add(tab("📋", i18n.mobileTabDetail,  "detail"))
+        nav.add(tab("✏️", i18n.mobileTabInput,    "input"))
+        nav.add(tab("📊", i18n.mobileTabResults,  "results"))
+        nav.add(tab("📋", i18n.mobileTabDetail,   "detail"))
+        nav.add(tab("⚙️", i18n.mobileTabSettings, "settings"))
         return nav
     }
 

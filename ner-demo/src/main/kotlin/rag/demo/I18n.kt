@@ -92,6 +92,7 @@ data class I18n(
     val mobileTabInput: String,
     val mobileTabResults: String,
     val mobileTabDetail: String,
+    val mobileTabSettings: String,
 ) {
     companion object {
         fun forLanguage(lang: String): I18n = when (lang.lowercase().take(2)) {
@@ -181,6 +182,7 @@ data class I18n(
             mobileTabInput   = "Saisie",
             mobileTabResults = "Résultats",
             mobileTabDetail  = "Détail",
+            mobileTabSettings = "Réglages",
         )
 
         val EN = I18n(
@@ -262,6 +264,7 @@ data class I18n(
             mobileTabInput   = "Input",
             mobileTabResults = "Results",
             mobileTabDetail  = "Detail",
+            mobileTabSettings = "Settings",
         )
 
         val DE = I18n(
@@ -343,6 +346,7 @@ data class I18n(
             mobileTabInput   = "Eingabe",
             mobileTabResults = "Ergebnisse",
             mobileTabDetail  = "Detail",
+            mobileTabSettings = "Einstellungen",
         )
 
         val ES = I18n(
@@ -424,6 +428,7 @@ data class I18n(
             mobileTabInput   = "Entrada",
             mobileTabResults = "Resultados",
             mobileTabDetail  = "Detalle",
+            mobileTabSettings = "Ajustes",
         )
 
         val IT = I18n(
@@ -505,6 +510,7 @@ data class I18n(
             mobileTabInput   = "Testo",
             mobileTabResults = "Risultati",
             mobileTabDetail  = "Dettaglio",
+            mobileTabSettings = "Impostazioni",
         )
     }
 }
