@@ -226,13 +226,33 @@ class NerDemoView(
             (function(){
               var s = document.createElement('style');
               s.textContent = [
-                '@media (max-width: 900px) {',
+                /* ── Desktop medium ── */
+                '@media (max-width: 1200px) and (min-width: 901px) {',
+                '  .ner-rightcol { width: 220px !important; min-width: 220px !important; }',
+                '}',
+                /* ── Tablet (sidebar overlay) ── */
+                '@media (max-width: 900px) and (min-width: 641px) {',
                 '  .ner-sidebar { display: none !important; }',
                 '  .ner-sidebar.ner-open { display: flex !important; position: fixed; left: 0; top: 0; bottom: 0; z-index: 200; box-shadow: 4px 0 16px rgba(0,0,0,.18); }',
                 '  .ner-rightcol { display: none !important; }',
                 '}',
-                '@media (max-width: 1200px) and (min-width: 901px) {',
-                '  .ner-rightcol { width: 220px !important; min-width: 220px !important; }',
+                /* ── Mobile bottom-tab navigation ── */
+                '@media (max-width: 640px) {',
+                '  .ner-mobile-nav { display: flex !important; }',
+                '  #ner-body { height: calc(100% - 56px) !important; }',
+                /* default tab = input: sidebar visible, results+detail hidden */
+                '  .ner-sidebar { display: flex !important; position: static !important; width: 100% !important; min-width: unset !important; height: 100% !important; box-shadow: none !important; border-right: none !important; flex-shrink: 1 !important; }',
+                '  .ner-results-pane { display: none !important; }',
+                '  .ner-rightcol   { display: none !important; }',
+                /* tab = results */
+                '  #ner-body[data-tab="results"] .ner-sidebar { display: none !important; }',
+                '  #ner-body[data-tab="results"] .ner-results-pane { display: flex !important; width: 100% !important; }',
+                /* tab = detail */
+                '  #ner-body[data-tab="detail"] .ner-sidebar { display: none !important; }',
+                '  #ner-body[data-tab="detail"] .ner-rightcol { display: flex !important; width: 100% !important; min-width: unset !important; height: 100% !important; }',
+                /* Bigger touch targets */
+                '  vaadin-button { min-height: 44px !important; }',
+                '  #ner-input { min-height: 90px !important; }',
                 '}',
                 '.ner-resize-x { position: absolute; right: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 100; background: transparent; }',
                 '.ner-resize-x:hover, .ner-resize-x.dragging { background: rgba(99,102,241,.35); border-radius: 4px; }',
@@ -282,6 +302,22 @@ class NerDemoView(
                   document.addEventListener('mouseup', onUp);
                 });
               };
+
+              // ── Mobile bottom-tab switcher ─────────────────────────────────────
+              window.nerMobileSetTab = function(tab) {
+                var body = document.getElementById('ner-body');
+                if (body) body.setAttribute('data-tab', tab);
+                var nav = document.getElementById('ner-mobile-nav');
+                if (nav) {
+                  nav.querySelectorAll('[data-tab]').forEach(function(b) {
+                    var active = b.getAttribute('data-tab') === tab;
+                    b.style.color       = active ? '#1d4ed8' : '#64748b';
+                    b.style.fontWeight  = active ? '700'     : '400';
+                    b.style.borderTop   = active ? '2px solid #1d4ed8' : '2px solid transparent';
+                  });
+                }
+              };
+              if (window.innerWidth <= 640) { window.nerMobileSetTab('input'); }
             })();
         """.trimIndent())
 
@@ -289,6 +325,7 @@ class NerDemoView(
 
         val body = HorizontalLayout()
         body.setSizeFull()
+        body.setId("ner-body")
         body.isPadding = false
         body.isSpacing = false
         body.style["overflow"] = "hidden"
@@ -357,6 +394,7 @@ class NerDemoView(
 
         add(body)
         setFlexGrow(1.0, body)
+        add(buildMobileNav())
 
         // Afficher le placeholder eventlets dès le démarrage
         updateEventletsPanel()
@@ -625,6 +663,7 @@ class NerDemoView(
         pane.style["overflow"] = "hidden"
         pane.style["min-width"] = "0"
         pane.style["height"] = "100%"
+        pane.element.classList.add("ner-results-pane")
         return pane
     }
 
@@ -868,6 +907,7 @@ class NerDemoView(
         eventletsPanel.removeAll()
         eventletsPanel.style["display"] = "none"
         progressBar.isVisible = true
+        UI.getCurrent().page.executeJs("if(window.innerWidth<=640) window.nerMobileSetTab('results')")
 
         // Pré-remplir le flux texte en respectant les séparateurs d'origine
         for ((sent, sep) in entries) {
@@ -1289,6 +1329,7 @@ class NerDemoView(
      */
     private fun showDetail(info: SpanInfo, allEntities: List<rag.model.Entity> = emptyList()) {
         detailPanel.removeAll()
+        UI.getCurrent().page.executeJs("if(window.innerWidth<=640) window.nerMobileSetTab('detail')")
         val ent = info.entity
 
         if (ent != null) {
@@ -1521,6 +1562,52 @@ class NerDemoView(
             step(null,              i18n.tourMcpTitle,      i18n.tourMcpBody),
         )
         return "[${steps.joinToString(",")}]"
+    }
+
+    // ── Mobile bottom navigation bar ─────────────────────────────────────────
+    private fun buildMobileNav(): Div {
+        val nav = Div()
+        nav.setId("ner-mobile-nav")
+        nav.element.classList.add("ner-mobile-nav")
+        nav.style["display"]         = "none"   // caché sur desktop, affiché via CSS @media
+        nav.style["position"]        = "fixed"
+        nav.style["bottom"]          = "0"
+        nav.style["left"]            = "0"
+        nav.style["right"]           = "0"
+        nav.style["height"]          = "56px"
+        nav.style["background"]      = "#ffffff"
+        nav.style["border-top"]      = "1px solid #e2e8f0"
+        nav.style["z-index"]         = "300"
+        nav.style["box-shadow"]      = "0 -2px 12px rgba(0,0,0,.07)"
+        nav.style["align-items"]     = "stretch"
+
+        fun tab(emoji: String, label: String, tabKey: String) = Div().apply {
+            add(Span(emoji).also {
+                it.style["font-size"] = "1.3em"; it.style["display"] = "block"
+            })
+            add(Span(label).also {
+                it.style["font-size"] = "0.62em"; it.style["display"] = "block"; it.style["margin-top"] = "1px"
+            })
+            style["display"]         = "flex"
+            style["flex-direction"]  = "column"
+            style["align-items"]     = "center"
+            style["justify-content"] = "center"
+            style["flex"]            = "1"
+            style["cursor"]          = "pointer"
+            style["color"]           = "#64748b"
+            style["user-select"]     = "none"
+            style["border-top"]      = "2px solid transparent"
+            style["transition"]      = "color .15s, border-color .15s"
+            element.setAttribute("data-tab", tabKey)
+            addClickListener {
+                UI.getCurrent().page.executeJs("window.nerMobileSetTab($0)", tabKey)
+            }
+        }
+
+        nav.add(tab("✏️", i18n.mobileTabInput,   "input"))
+        nav.add(tab("📊", i18n.mobileTabResults, "results"))
+        nav.add(tab("📋", i18n.mobileTabDetail,  "detail"))
+        return nav
     }
 
     // ── Export / Import ───────────────────────────────────────────────────────

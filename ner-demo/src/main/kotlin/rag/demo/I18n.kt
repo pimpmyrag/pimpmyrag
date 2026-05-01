@@ -88,6 +88,10 @@ data class I18n(
     val tourJudgeBody: String,
     val tourMcpTitle: String,
     val tourMcpBody: String,
+    // ── Mobile bottom navigation ─────────────────────────────────────────────
+    val mobileTabInput: String,
+    val mobileTabResults: String,
+    val mobileTabDetail: String,
 ) {
     companion object {
         fun forLanguage(lang: String): I18n = when (lang.lowercase().take(2)) {
@@ -174,6 +178,9 @@ data class I18n(
             tourJudgeBody = "Évalue la qualité NER via un LLM externe (OpenAI, Mistral, Ollama, GitHub Copilot…).<br>Mode statique ou agent avec tool calling.",
             tourMcpTitle = "Accès headless (MCP)",
             tourMcpBody = "Un LLM peut utiliser les outils NER directement via :<br><code>https://ner-demo-ocg3.onrender.com/mcp/sse</code>",
+            mobileTabInput   = "Saisie",
+            mobileTabResults = "Résultats",
+            mobileTabDetail  = "Détail",
         )
 
         val EN = I18n(
@@ -252,6 +259,9 @@ data class I18n(
             tourJudgeBody = "Evaluates NER quality via an external LLM (OpenAI, Mistral, Ollama, GitHub Copilot…).<br>Static mode or agent with tool calling.",
             tourMcpTitle = "Headless access (MCP)",
             tourMcpBody = "An LLM can use NER tools directly via:<br><code>https://ner-demo-ocg3.onrender.com/mcp/sse</code>",
+            mobileTabInput   = "Input",
+            mobileTabResults = "Results",
+            mobileTabDetail  = "Detail",
         )
 
         val DE = I18n(
@@ -330,6 +340,9 @@ data class I18n(
             tourJudgeBody = "Bewertet die NER-Qualität via externem LLM (OpenAI, Mistral, Ollama…).",
             tourMcpTitle = "Headless-Zugriff (MCP)",
             tourMcpBody = "MCP-Endpoint: <code>https://ner-demo-ocg3.onrender.com/mcp/sse</code>",
+            mobileTabInput   = "Eingabe",
+            mobileTabResults = "Ergebnisse",
+            mobileTabDetail  = "Detail",
         )
 
         val ES = I18n(
@@ -408,6 +421,9 @@ data class I18n(
             tourJudgeBody = "Evalúa la calidad NER mediante un LLM externo (OpenAI, Mistral, Ollama…).",
             tourMcpTitle = "Acceso headless (MCP)",
             tourMcpBody = "Endpoint MCP: <code>https://ner-demo-ocg3.onrender.com/mcp/sse</code>",
+            mobileTabInput   = "Entrada",
+            mobileTabResults = "Resultados",
+            mobileTabDetail  = "Detalle",
         )
 
         val IT = I18n(
@@ -486,6 +502,9 @@ data class I18n(
             tourJudgeBody = "Valuta la qualità NER tramite un LLM esterno (OpenAI, Mistral, Ollama…).",
             tourMcpTitle = "Accesso headless (MCP)",
             tourMcpBody = "Endpoint MCP: <code>https://ner-demo-ocg3.onrender.com/mcp/sse</code>",
+            mobileTabInput   = "Testo",
+            mobileTabResults = "Risultati",
+            mobileTabDetail  = "Dettaglio",
         )
     }
 }
