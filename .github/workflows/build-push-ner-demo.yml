@@ -61,13 +61,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Bump CACHE_BUST in Dockerfile.render to force Render pull
+      - name: Update Dockerfile.render with exact SHA tag to force Render pull
         run: |
           SHORT_SHA="${GITHUB_SHA::7}"
-          sed -i "s/^ARG CACHE_BUST=.*/ARG CACHE_BUST=${SHORT_SHA}/" ner-demo/Dockerfile.render
+          sed -i "s|FROM ghcr.io/pimpmyrag/ner-demo:.*|FROM ghcr.io/pimpmyrag/ner-demo:sha-${SHORT_SHA}|" ner-demo/Dockerfile.render
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add ner-demo/Dockerfile.render
-          git diff --cached --quiet || git commit -m "ci: bump CACHE_BUST to ${SHORT_SHA} [skip ci]"
+          git diff --cached --quiet || git commit -m "ci: pin Dockerfile.render to sha-${SHORT_SHA} [skip ci]"
           git push origin HEAD:main
 
