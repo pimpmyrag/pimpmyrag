@@ -1,0 +1,162 @@
+name: Export ONNX model on Linux
+
+on:
+  workflow_dispatch:
+    inputs:
+      pt_release_tag:
+        description: "Release tag containing best_model_multitask.pt (ex: v1.1.0-ner-model)"
+        required: true
+        default: "v1.1.0-ner-model"
+      pt_sha256:
+        description: "Expected SHA-256 of best_model_multitask.pt (optionnel — vide = pas de vérification)"
+        required: false
+        default: "c25644f8f6a5ca64afd268989361964fae5b8f9014e894950b2cda0994f3500d"
+      output_tag:
+        description: "Tag de la release de sortie (ex: v1.2.0-ner-model)"
+        required: true
+        default: "v1.2.0-ner-model"
+      opset:
+        description: "ONNX opset version"
+        required: false
+        default: "17"
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # ── Dépendances CPU-only (pas besoin de CUDA pour l'export) ────────────
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install \
+            "torch>=2.6.0" --index-url https://download.pytorch.org/whl/cpu \
+            "transformers>=4.40.0" \
+            "tokenizers>=0.19.0" \
+            "sentencepiece>=0.2.0" \
+            "onnx>=1.16.0" \
+            "numpy>=1.24.0"
+
+      # ── Téléchargement du checkpoint .pt depuis la release GitHub ──────────
+      - name: Download PT checkpoint from release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PT_TAG: ${{ inputs.pt_release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/model
+          echo "Téléchargement de best_model_multitask.pt depuis la release $PT_TAG"
+          gh release download "$PT_TAG" \
+            --repo "${{ github.repository }}" \
+            --pattern "best_model_multitask.pt" \
+            --dir /tmp/model
+          ls -lh /tmp/model/
+
+      # ── Vérification checksum (si fournie) ────────────────────────────────
+      - name: Verify PT checksum
+        if: ${{ inputs.pt_sha256 != '' }}
+        run: |
+          ACTUAL=$(sha256sum /tmp/model/best_model_multitask.pt | awk '{print $1}')
+          EXPECTED="${{ inputs.pt_sha256 }}"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "❌ SHA-256 mismatch: got $ACTUAL, expected $EXPECTED"
+            exit 1
+          fi
+          echo "✅ SHA-256 OK: $ACTUAL"
+
+      # ── Export ONNX ────────────────────────────────────────────────────────
+      - name: Export ONNX on Linux CPU
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/onnx
+          cd training/multi-head
+          python export_vec_full.py \
+            --checkpoint /tmp/model/best_model_multitask.pt \
+            --output /tmp/onnx/best_model_multitask_full.onnx \
+            --model-name microsoft/deberta-v3-base \
+            --tokenizer-path ../../deberta/tokenizer_export \
+            --opset ${{ inputs.opset }} \
+            --seq-len 128 \
+            --num-spans 64
+          ls -lh /tmp/onnx/
+
+      # ── Compute SHA-256 du nouveau .onnx ─────────────────────────────────
+      - name: Compute output SHA-256
+        id: sha
+        run: |
+          SHA=$(sha256sum /tmp/onnx/best_model_multitask_full.onnx | awk '{print $1}')
+          echo "onnx_sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "✅ ONNX SHA-256: $SHA"
+          echo ""
+          echo "=== À mettre dans Dockerfile ==="
+          echo "NER_MODEL_SHA256=$SHA"
+          echo ""
+          echo "=== À mettre dans render.yaml (si besoin) ==="
+          echo "MODEL_SHA256=$SHA"
+
+      # ── Publication release GitHub ─────────────────────────────────────────
+      - name: Publish to GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OUT_TAG: ${{ inputs.output_tag }}
+        run: |
+          set -euo pipefail
+          cd /tmp/onnx
+
+          # Checksum file
+          sha256sum best_model_multitask_full.onnx > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+          # Créer la release si elle n'existe pas
+          if ! gh release view "$OUT_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release create "$OUT_TAG" \
+              --repo "${{ github.repository }}" \
+              --title "NER multitask ONNX model linux-export $OUT_TAG" \
+              --notes "$(cat <<'EOF'
+Modèle exporté **sur Linux (ubuntu-latest)** — résout les écarts ONNX Runtime macOS/Linux.
+
+- Base : fine-tuning-29042026
+- Export : opset ${{ inputs.opset }}, do_constant_folding=True
+- SHA-256 : ${{ steps.sha.outputs.onnx_sha256 }}
+
+Mettre à jour dans Dockerfile :
+```
+NER_MODEL_SHA256=${{ steps.sha.outputs.onnx_sha256 }}
+```
+EOF
+)"
+          fi
+
+          gh release upload "$OUT_TAG" \
+            --repo "${{ github.repository }}" \
+            best_model_multitask_full.onnx \
+            SHA256SUMS.txt \
+            --clobber
+
+      - name: Summary
+        run: |
+          echo "## Export ONNX terminé 🎉" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Paramètre | Valeur |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Release output | \`${{ inputs.output_tag }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ONNX SHA-256 | \`${{ steps.sha.outputs.onnx_sha256 }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Mettre à jour Dockerfile" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "NER_MODEL_SHA256=${{ steps.sha.outputs.onnx_sha256 }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "NER_MODEL_URL=https://github.com/${{ github.repository }}/releases/download/${{ inputs.output_tag }}/best_model_multitask_full.onnx" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
