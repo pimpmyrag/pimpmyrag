@@ -1,28 +1,14 @@
 services:
   - type: web
     name: ner-demo
-    runtime: docker
-    dockerfilePath: ./ner-demo/Dockerfile
-    dockerContext: .
+    runtime: image
+    image:
+      url: ghcr.io/pimpmyrag/ner-demo:latest
     healthCheckPath: /
     port: 10000
     plan: standard
     envVars:
-      # Skip LFS download during git clone (quota GitHub LFS épuisé + ces fichiers inutiles au build)
-      - key: GIT_LFS_SKIP_SMUDGE
-        value: "1"
       - key: JAVA_TOOL_OPTIONS
         # Heap réduit à 1g : le modèle ONNX (708MB) est en mémoire native (off-heap).
         # Budget mémoire Standard (2GB) : 1GB heap + 708MB ONNX + ~200MB OS/JVM ≈ 1.9GB
         value: -Xms128m -Xmx1g
-      - key: MODEL_URL
-        value: https://github.com/pimpmyrag/pimpmyrag/releases/download/v1.1.0-ner-model/best_model_multitask_full.onnx
-      # OPTIONAL: SHA-256 du modèle pour vérification d'intégrité
-      - key: MODEL_SHA256
-        value: ""
-      # OPTIONAL: si le modèle est déjà présent dans un volume/path connu
-      - key: NER_MODEL_PATH
-        value: ""
-      # NER_TOKENIZER_PATH, TOKENIZER_URL, TOKENIZER_SHA256 ne sont pas nécessaires :
-      # le tokenizer est embarqué dans l'image Docker (training/multi-head/tokenizer_export_clean)
-

@@ -2,7 +2,7 @@ name: Deploy ner-demo to Render
 
 on:
   workflow_run:
-    workflows: ["CI"]
+    workflows: ["Build & Push ner-demo image"]
     types: [completed]
     branches: [main]
   workflow_dispatch:
@@ -54,4 +54,3 @@ jobs:
           done
           echo "Smoke check failed after 10 minutes" >&2
           exit 1
-
