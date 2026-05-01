@@ -1105,11 +1105,14 @@ class OnnxMultiHeadEntityExtractor(
                         // Architecture v4 — arbitrage synLabel vs svo_boundary :
                         // • synLabel == "verb_trigger" AND aboveSvoBnd → vrai verbe, role=NONE forcé
                         //   (le role_head est confus sur les verbes, prédit OBJECT/SUBJECT par erreur)
+                        //   VETO : si pBoundary >= effTauBoundary, le span est une entité NER confirmée
+                        //   (ex : "Macron" p_bnd=0.98) et ne peut pas être un verb trigger même si
+                        //   svo_boundary est élevé (over-firing du modèle peu entraîné).
                         // • synLabel == "pron_subj" | "pron_obj" → pronom, même si p_svob est élevé
                         //   (svo_boundary peut faussement tirer sur des relatifs/"qui" etc.)
                         //   → On lit role depuis role_head et on applique le seuil forcé.
                         // • Chemin forcé classique (aboveSvoBnd=false) → role depuis role_head.
-                        val isActualVerb = aboveSvoBnd && synLabel == "verb_trigger"
+                        val isActualVerb = aboveSvoBnd && synLabel == "verb_trigger" && pBoundary < effTauBoundary
                         val roleName: String
                         val roleProb: Float
                         if (isActualVerb) {
