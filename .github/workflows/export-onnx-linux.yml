@@ -120,23 +120,12 @@ jobs:
           cat SHA256SUMS.txt
 
           # Créer la release si elle n'existe pas
+          NOTES="Modele exporte sur Linux (ubuntu-latest). Resout les ecarts ONNX Runtime macOS/Linux. SHA-256 : ${{ steps.sha.outputs.onnx_sha256 }}"
           if ! gh release view "$OUT_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release create "$OUT_TAG" \
               --repo "${{ github.repository }}" \
               --title "NER multitask ONNX model linux-export $OUT_TAG" \
-              --notes "$(cat <<'EOF'
-Modèle exporté **sur Linux (ubuntu-latest)** — résout les écarts ONNX Runtime macOS/Linux.
-
-- Base : fine-tuning-29042026
-- Export : opset ${{ inputs.opset }}, do_constant_folding=True
-- SHA-256 : ${{ steps.sha.outputs.onnx_sha256 }}
-
-Mettre à jour dans Dockerfile :
-```
-NER_MODEL_SHA256=${{ steps.sha.outputs.onnx_sha256 }}
-```
-EOF
-)"
+              --notes "$NOTES"
           fi
 
           gh release upload "$OUT_TAG" \
