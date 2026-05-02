@@ -1273,7 +1273,7 @@ def main():
 
         # ── W&B log epoch ────────────────────────────────────────────────────
         if _wandb_enabled:
-            wandb.log({
+            log_dict = {
                 "epoch": epoch,
                 "score": score,
                 "train/loss":           train_metrics["loss"],
@@ -1292,7 +1292,23 @@ def main():
                 "val/voice_f1":         val_metrics["voice_macro_f1"],
                 "val/gender_f1":        val_metrics["gender_macro_f1"],
                 "val/number_f1":        val_metrics["number_macro_f1"],
-            }, step=epoch)
+            }
+            # Per-label F1 depuis le classification_report (val fine + coarse)
+            import re as _re
+            for report_key, prefix in [
+                ("fine_report",   "val/fine"),
+                ("coarse_report", "val/coarse"),
+            ]:
+                report_str = val_metrics.get(report_key, "")
+                for line in report_str.splitlines():
+                    # ex: "  hint_person_name   0.95  0.88  0.91   1234"
+                    m = _re.match(r"^\s+(\S+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+\d+", line)
+                    if m:
+                        lbl, prec, rec, f1 = m.group(1), float(m.group(2)), float(m.group(3)), float(m.group(4))
+                        log_dict[f"{prefix}_f1_{lbl}"]        = f1
+                        log_dict[f"{prefix}_precision_{lbl}"] = prec
+                        log_dict[f"{prefix}_recall_{lbl}"]    = rec
+            wandb.log(log_dict, step=epoch)
 
         print("\n[VAL boundary]")
         print(val_metrics["boundary_report"])
