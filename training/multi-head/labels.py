@@ -12,7 +12,7 @@ FINE_LABELS = [
     "hint_norp",             # 2
     "hint_group_role",       # 3
     "hint_org_name",         # 4
-    "hint_inst_name",        # 5  ← nouveau : institution publique/étatique/politique
+    "hint_inst_name",        # 5  institution publique/étatique/politique NOMMÉE (nom propre ou sigle : "Commission Européenne", "OMS", "OTAN") — si générique ("gouvernement", "ministère"), utiliser hint_group_role
     "hint_gpe",              # 6
     "hint_fac_name",         # 7
     "hint_loc_generic",      # 8
