@@ -116,9 +116,9 @@ mkdir -p logs
 log_file="logs/adaptive.log"
 echo "🚀 Démarrage training adaptatif — $(date)" | tee $log_file
 
-# ── Sources gold v5 Claude ────────────────────────────────────────────────────
-# *_v5.jsonl = gold v4 + hint_inst_name + hint_document + fix verb_trigger offsets
-# (généré par convert_to_inst_name_v2.py + fix_verb_trigger.py + convert_to_document.py)
+# ── Sources gold v6 ──────────────────────────────────────────────────────────
+# *_v6.jsonl = v5 + hint_inst_role (label 34, coarse=ORG)
+#   ~803 hint_group_role + ~239 hint_inst_name → hint_inst_role (1042 spans train)
 TRAIN_SILVER="$DATA/train_v6.jsonl"
 VAL_SILVER="$DATA/val_v6.jsonl"
 TEST_SILVER="$DATA/test_v6.jsonl"
@@ -173,7 +173,7 @@ python3 build_multitask_dataset.py \
 if [ "$KEEP_CHECKPOINT" = "1" ]; then
     echo "Reprise depuis checkpoint existant" | tee -a $log_file
     if [ -f checkpoint_best_multitask.pt ]; then
-        # ⚠️  Vérification compatibilité schéma labels (v5 : fine=34, coarse=10)
+        # ⚠️  Vérification compatibilité schéma labels (v6 : fine=35, coarse=10)
         CKPT_FINE=$(python3 -c "
 import torch
 c = torch.load('checkpoint_best_multitask.pt', map_location='cpu')
@@ -181,9 +181,9 @@ sd = c.get('model_state', c)
 k = [k for k in sd if 'fine_head' in k and 'weight' in k]
 print(sd[k[0]].shape[0] if k else 0)
 " 2>/dev/null || echo "0")
-        if [ "$CKPT_FINE" != "34" ] && [ "$CKPT_FINE" != "0" ]; then
-            echo "⚠️  Checkpoint incompatible : fine_head=$CKPT_FINE classes (attendu 34 — labels v5)" | tee -a $log_file
-            echo "   → Démarrage à froid (les anciens checkpoints v4 ont fine=32 ou 33)" | tee -a $log_file
+        if [ "$CKPT_FINE" != "35" ] && [ "$CKPT_FINE" != "0" ]; then
+            echo "⚠️  Checkpoint incompatible : fine_head=$CKPT_FINE classes (attendu 35 — labels v6)" | tee -a $log_file
+            echo "   → Démarrage à froid (checkpoints v5 ont fine=34, v4 ont fine=32/33)" | tee -a $log_file
             resume_arg=""
         else
             resume_arg="--resume checkpoint_best_multitask.pt"

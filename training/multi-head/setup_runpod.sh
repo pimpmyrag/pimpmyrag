@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════
-#  setup_runpod.sh — Setup RunPod pour training v5 (labels v5, dataset DVC)
+#  setup_runpod.sh — Setup RunPod pour training v6 (labels v6, dataset DVC)
 #
 #  Usage depuis RunPod (après git clone) :
 #    cd pimpmyrag/training/multi-head
@@ -16,7 +16,7 @@ set -e
 cd "$(dirname "$0")"
 REPO_ROOT="$(cd ../.. && pwd)"
 
-echo "📦 Setup RunPod v5 — $(date)"
+echo "📦 Setup RunPod v6 — $(date)"
 
 # ── 1. Dépendances ───────────────────────────────────────────────────────────
 echo ""
@@ -50,9 +50,9 @@ else
     export WANDB_MODE=offline
 fi
 
-# ── 3. DVC pull des datasets v5 ──────────────────────────────────────────────
+# ── 3. DVC pull des datasets v6 ──────────────────────────────────────────────
 echo ""
-echo "📥 DVC pull datasets v5..."
+echo "📥 DVC pull datasets v6..."
 cd "$REPO_ROOT"
 
 # Cloudflare R2 — injecte les credentials depuis les variables d'env RunPod
@@ -65,27 +65,28 @@ if [ -n "$AWS_ACCESS_KEY_ID" ]; then
     dvc remote modify --local r2remote secret_access_key "$AWS_SECRET_ACCESS_KEY"
 fi
 
-dvc pull training/multi-head/data/train_v5.jsonl \
-         training/multi-head/data/val_v5.jsonl \
-         training/multi-head/data/test_v5.jsonl
+dvc pull training/multi-head/data/train_v6.jsonl \
+         training/multi-head/data/val_v6.jsonl \
+         training/multi-head/data/test_v6.jsonl
 
 cd training/multi-head
 
-echo "✅ Datasets v5 présents :"
-wc -l data/train_v5.jsonl data/val_v5.jsonl data/test_v5.jsonl
+echo "✅ Datasets v6 présents :"
+wc -l data/train_v6.jsonl data/val_v6.jsonl data/test_v6.jsonl
 
-# ── 4. Vérification schéma labels v5 ─────────────────────────────────────────
+# ── 4. Vérification schéma labels v6 ─────────────────────────────────────────
 echo ""
-echo "🔍 Vérification labels v5 (NUM_FINE=34, NUM_COARSE=10)..."
+echo "🔍 Vérification labels v6 (NUM_FINE=35, NUM_COARSE=10)..."
 python3 - <<'PYEOF'
 import sys
 sys.path.insert(0, '.')
 import labels as L
-assert L.NUM_FINE == 34, f"NUM_FINE={L.NUM_FINE} attendu 34"
+assert L.NUM_FINE == 35, f"NUM_FINE={L.NUM_FINE} attendu 35"
 assert len(L.COARSE_LABELS) == 10, f"NUM_COARSE={len(L.COARSE_LABELS)} attendu 10"
 assert 'hint_inst_name' in L.FINE2ID, "hint_inst_name manquant"
-assert 'hint_document' in L.FINE2ID, "hint_document manquant"
-print(f"✅ labels.py v5 OK — NUM_FINE={L.NUM_FINE}  NUM_COARSE={len(L.COARSE_LABELS)}")
+assert 'hint_inst_role' in L.FINE2ID, "hint_inst_role manquant"
+assert 'hint_document'  in L.FINE2ID, "hint_document manquant"
+print(f"✅ labels.py v6 OK — NUM_FINE={L.NUM_FINE}  NUM_COARSE={len(L.COARSE_LABELS)}")
 PYEOF
 
 # ── 5. Lancement du training ─────────────────────────────────────────────────
@@ -138,7 +139,7 @@ key = os.environ.get("WANDB_API_KEY","")
 api = wandb.Api(api_key=key)
 run = api.run(f"pimpmyrag-ner/$WANDB_RUN_ID")
 artifact = wandb.Artifact("pimpmyrag-ner-model", type="model",
-    description="checkpoint_best + best_model multitask v5")
+    description="checkpoint_best + best_model multitask v6 (hint_inst_role)")
 for fname in ("training/multi-head/checkpoint_best_multitask.pt",
               "training/multi-head/best_model_multitask.pt"):
     if os.path.exists(fname):
