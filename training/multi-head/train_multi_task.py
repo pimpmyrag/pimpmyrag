@@ -242,6 +242,7 @@ def run_epoch(
         max_grad_norm=1.0,
         ema: "ModelEMA | None" = None,
         collect_hn: bool = False,
+        scaler=None,           # torch.GradScaler pour AMP (None = FP32)
 ):
     """
     Version adaptée à l'architecture :
@@ -354,6 +355,8 @@ def run_epoch(
 
     coarse_fine_mask = coarse_fine_mask.to(device)
 
+    amp_enabled = (scaler is not None) and (device == "cuda")
+
     for step, batch in enumerate(loader, start=1):
         input_ids = batch["input_ids"].to(device)
         attention_mask = batch["attention_mask"].to(device)
@@ -407,102 +410,112 @@ def run_epoch(
             )
 
         with torch.set_grad_enabled(train):
-            outputs = model({
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-                "spans": spans,
-            })
+            with torch.amp.autocast("cuda", enabled=amp_enabled):
+                outputs = model({
+                    "input_ids": input_ids,
+                    "attention_mask": attention_mask,
+                    "spans": spans,
+                })
 
-            # Si le modèle renvoie span_indices, on aligne tout sur les spans gardés
-            span_indices = outputs.get("span_indices", None)
-            if span_indices is not None:
-                si = span_indices.to(device=device, dtype=torch.long)
-                boundary_labels_loss     = boundary_labels[si]
-                coarse_labels_loss       = coarse_labels[si]
-                fine_labels_loss         = fine_labels[si]
-                svo_boundary_labels_loss = svo_boundary_labels[si]
-                syn_labels_loss          = syn_labels[si]
-                role_labels_loss         = role_labels[si]
-                voice_labels_loss        = voice_labels[si]
-                certainty_labels_loss    = certainty_labels[si]
-                gender_labels_loss       = gender_labels[si]
-                number_labels_loss       = number_labels[si]
-                person_labels_loss       = person_labels[si]
-                gov_verb_labels_loss     = gov_verb_labels[si]
-                sample_weights_loss      = sample_weights[si]
-            else:
-                boundary_labels_loss     = boundary_labels
-                coarse_labels_loss       = coarse_labels
-                fine_labels_loss         = fine_labels
-                svo_boundary_labels_loss = svo_boundary_labels
-                syn_labels_loss          = syn_labels
-                role_labels_loss         = role_labels
-                voice_labels_loss        = voice_labels
-                certainty_labels_loss    = certainty_labels
-                gender_labels_loss       = gender_labels
-                number_labels_loss       = number_labels
-                person_labels_loss       = person_labels
-                gov_verb_labels_loss     = gov_verb_labels
-                sample_weights_loss      = sample_weights
+                # Si le modele renvoie span_indices, on aligne tout sur les spans gardes
+                span_indices = outputs.get("span_indices", None)
+                if span_indices is not None:
+                    si = span_indices.to(device=device, dtype=torch.long)
+                    boundary_labels_loss     = boundary_labels[si]
+                    coarse_labels_loss       = coarse_labels[si]
+                    fine_labels_loss         = fine_labels[si]
+                    svo_boundary_labels_loss = svo_boundary_labels[si]
+                    syn_labels_loss          = syn_labels[si]
+                    role_labels_loss         = role_labels[si]
+                    voice_labels_loss        = voice_labels[si]
+                    certainty_labels_loss    = certainty_labels[si]
+                    gender_labels_loss       = gender_labels[si]
+                    number_labels_loss       = number_labels[si]
+                    person_labels_loss       = person_labels[si]
+                    gov_verb_labels_loss     = gov_verb_labels[si]
+                    sample_weights_loss      = sample_weights[si]
+                else:
+                    boundary_labels_loss     = boundary_labels
+                    coarse_labels_loss       = coarse_labels
+                    fine_labels_loss         = fine_labels
+                    svo_boundary_labels_loss = svo_boundary_labels
+                    syn_labels_loss          = syn_labels
+                    role_labels_loss         = role_labels
+                    voice_labels_loss        = voice_labels
+                    certainty_labels_loss    = certainty_labels
+                    gender_labels_loss       = gender_labels
+                    number_labels_loss       = number_labels
+                    person_labels_loss       = person_labels
+                    gov_verb_labels_loss     = gov_verb_labels
+                    sample_weights_loss      = sample_weights
 
-            # Sanity check après forward / avant loss
-            num_logits = outputs["fine_logits"].size(0)
-            if not (
-                    num_logits
-                    == boundary_labels_loss.size(0)
-                    == coarse_labels_loss.size(0)
-                    == fine_labels_loss.size(0)
-                    == sample_weights_loss.size(0)
-            ):
-                raise ValueError(
-                    "Mismatch logits/labels après forward: "
-                    f"logits={num_logits}, "
-                    f"boundary={boundary_labels_loss.size(0)}, "
-                    f"coarse={coarse_labels_loss.size(0)}, "
-                    f"fine={fine_labels_loss.size(0)}, "
-                    f"sample_weights={sample_weights_loss.size(0)}, "
-                    f"ids={batch.get('ids')}"
+                # Sanity check apres forward / avant loss
+                num_logits = outputs["fine_logits"].size(0)
+                if not (
+                        num_logits
+                        == boundary_labels_loss.size(0)
+                        == coarse_labels_loss.size(0)
+                        == fine_labels_loss.size(0)
+                        == sample_weights_loss.size(0)
+                ):
+                    raise ValueError(
+                        "Mismatch logits/labels apres forward: "
+                        f"logits={num_logits}, "
+                        f"boundary={boundary_labels_loss.size(0)}, "
+                        f"coarse={coarse_labels_loss.size(0)}, "
+                        f"fine={fine_labels_loss.size(0)}, "
+                        f"sample_weights={sample_weights_loss.size(0)}, "
+                        f"ids={batch.get('ids')}"
+                    )
+
+                loss_dict = model.compute_loss(
+                    outputs=outputs,
+                    boundary_labels=boundary_labels_loss,
+                    coarse_labels=coarse_labels_loss,
+                    fine_labels=fine_labels_loss,
+                    svo_boundary_labels=svo_boundary_labels_loss,
+                    syn_labels=syn_labels_loss,
+                    role_labels=role_labels_loss,
+                    voice_labels=voice_labels_loss,
+                    certainty_labels=certainty_labels_loss,
+                    gender_labels=gender_labels_loss,
+                    number_labels=number_labels_loss,
+                    person_labels=person_labels_loss,
+                    gov_verb_labels=gov_verb_labels_loss,
+                    sample_weights=sample_weights_loss,
+                    boundary_class_weights=boundary_class_weights,
+                    coarse_class_weights=coarse_class_weights,
+                    fine_class_weights=fine_class_weights,
+                    lambda_boundary=lambda_boundary,
+                    lambda_coarse=lambda_coarse,
+                    lambda_fine=lambda_fine,
+                    lambda_svo_boundary=lambda_svo_boundary,
+                    lambda_svo=lambda_svo,
+                    lambda_voice=lambda_voice,
+                    lambda_morpho=lambda_morpho,
+                    lambda_verb_ptr=lambda_verb_ptr,
+                    lambda_compat=lambda_compat,
+                    focal_gamma=focal_gamma,
                 )
 
-            loss_dict = model.compute_loss(
-                outputs=outputs,
-                boundary_labels=boundary_labels_loss,
-                coarse_labels=coarse_labels_loss,
-                fine_labels=fine_labels_loss,
-                svo_boundary_labels=svo_boundary_labels_loss,
-                syn_labels=syn_labels_loss,
-                role_labels=role_labels_loss,
-                voice_labels=voice_labels_loss,
-                certainty_labels=certainty_labels_loss,
-                gender_labels=gender_labels_loss,
-                number_labels=number_labels_loss,
-                person_labels=person_labels_loss,
-                gov_verb_labels=gov_verb_labels_loss,
-                sample_weights=sample_weights_loss,
-                boundary_class_weights=boundary_class_weights,
-                coarse_class_weights=coarse_class_weights,
-                fine_class_weights=fine_class_weights,
-                lambda_boundary=lambda_boundary,
-                lambda_coarse=lambda_coarse,
-                lambda_fine=lambda_fine,
-                lambda_svo_boundary=lambda_svo_boundary,
-                lambda_svo=lambda_svo,
-                lambda_voice=lambda_voice,
-                lambda_morpho=lambda_morpho,
-                lambda_verb_ptr=lambda_verb_ptr,
-                lambda_compat=lambda_compat,
-                focal_gamma=focal_gamma,
-            )
-
-            loss = loss_dict["loss"] / accum_steps
+                loss = loss_dict["loss"] / accum_steps
 
             if train:
-                loss.backward()
+                if amp_enabled:
+                    scaler.scale(loss).backward()
+                else:
+                    loss.backward()
 
         if train and (step % accum_steps == 0):
             if max_grad_norm > 0.0:
+                if amp_enabled:
+                    scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-            optimizer.step()
+            if amp_enabled:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
             optimizer.zero_grad()
             if ema is not None:
                 ema.update(model)
@@ -839,6 +852,10 @@ def main():
                         help="Label smoothing pour coarse/fine CE")
 
     parser.add_argument("--device", choices=["cpu", "mps", "cuda"], default=None)
+    parser.add_argument("--amp", action="store_true",
+                        help="Active Automatic Mixed Precision (BF16 sur CUDA). Gain typique: 2x vitesse.")
+    parser.add_argument("--num-workers", type=int, default=4,
+                        help="Nombre de workers DataLoader (défaut=4, 0=mono-thread).")
     parser.add_argument("--class-weights", choices=["none", "auto"], default="auto")
     parser.add_argument(
         "--class-weight-power",
@@ -971,12 +988,18 @@ def main():
     collate_fn = make_collate_fn(tokenizer)
 
     pin_memory = (device == "cuda")
+    num_workers = args.num_workers
+    # persistent_workers évite de re-forker les workers à chaque epoch
+    persistent = (num_workers > 0)
     train_loader = DataLoader(
         train_ds,
         batch_size=args.batch_size,
         shuffle=True,
         collate_fn=collate_fn,
         pin_memory=pin_memory,
+        num_workers=num_workers,
+        persistent_workers=persistent,
+        prefetch_factor=2 if num_workers > 0 else None,
     )
     val_loader = DataLoader(
         val_ds,
@@ -984,6 +1007,9 @@ def main():
         shuffle=False,
         collate_fn=collate_fn,
         pin_memory=pin_memory,
+        num_workers=num_workers,
+        persistent_workers=persistent,
+        prefetch_factor=2 if num_workers > 0 else None,
     )
     test_loader = DataLoader(
         test_ds,
@@ -991,10 +1017,22 @@ def main():
         shuffle=False,
         collate_fn=collate_fn,
         pin_memory=pin_memory,
+        num_workers=num_workers,
+        persistent_workers=persistent,
+        prefetch_factor=2 if num_workers > 0 else None,
     )
+    print(f"📦 DataLoaders: num_workers={num_workers}, pin_memory={pin_memory}, persistent={persistent}")
 
     model = SpanMultiTaskModel(model_name=args.model_name, num_coarse=len(COARSE_LABELS)).to(device).float()
     total_epochs = args.epochs
+
+    # AMP scaler
+    use_amp = args.amp and (device == "cuda")
+    scaler = torch.amp.GradScaler("cuda") if use_amp else None
+    if use_amp:
+        print("⚡ AMP (BF16) activé — accélération ~2x")
+    else:
+        print("🔢 FP32 (AMP désactivé)")
 
     # Differential LR avec layer-wise decay
     head_lr = args.lr * args.head_lr_multiplier
@@ -1150,6 +1188,7 @@ def main():
             max_grad_norm=args.max_grad_norm,
             ema=ema,
             collect_hn=use_inline_hn and (epoch % args.hn_every == 0),
+            scaler=scaler,
         )
 
         # ── Inline HN mining — mise à jour des poids in-memory ────────────────

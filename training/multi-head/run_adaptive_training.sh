@@ -41,18 +41,24 @@ fi
 # ── Détection device & batch size ────────────────────────
 if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     DEVICE="cuda"
-    BS=64
+    BS=128
     ACCUM=1
-    echo "🚀 Device: CUDA (BS=$BS)"
+    AMP_FLAG="--amp"
+    NUM_WORKERS=4
+    echo "🚀 Device: CUDA (BS=$BS, AMP=ON, workers=$NUM_WORKERS)"
 elif python3 -c "import torch; assert torch.backends.mps.is_available()" 2>/dev/null; then
     DEVICE="mps"
     BS=24
     ACCUM=2
+    AMP_FLAG=""
+    NUM_WORKERS=0
     echo "🍎 Device: MPS (BS=$BS)"
 else
     DEVICE="cpu"
     BS=16
     ACCUM=2
+    AMP_FLAG=""
+    NUM_WORKERS=0
     echo "💻 Device: CPU (BS=$BS)"
 fi
 
@@ -249,6 +255,8 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --hn-decay 0.85 \
         --hn-max-weight 8.0 \
         --hn-min-weight 0.3 \
+        --num-workers $NUM_WORKERS \
+        $AMP_FLAG \
         $resume_arg \
         2>&1 | tee $epoch_log
 
