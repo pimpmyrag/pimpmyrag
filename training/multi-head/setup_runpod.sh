@@ -92,4 +92,66 @@ PYEOF
 echo ""
 echo "🚀 Lancement du training adaptatif..."
 ./run_adaptive_training.sh
+TRAINING_EXIT=$?
 
+# ── 6. Upload artefacts vers R2 (DVC) + W&B ──────────────────────────────────
+echo ""
+echo "📤 Upload artefacts post-training..."
+
+cd "$REPO_ROOT"
+
+# Détermine le run W&B actif (dernier run du projet)
+WANDB_RUN_ID=$(python3 - <<'PYEOF' 2>/dev/null || echo "")
+import os, wandb
+key = os.environ.get("WANDB_API_KEY","")
+if not key:
+    exit(0)
+api = wandb.Api(api_key=key)
+runs = list(api.runs("pimpmyrag-ner", order="-created_at"))
+r = next((x for x in runs if x.state in ("running","finished")), None)
+print(r.id if r else "")
+PYEOF
+
+# Artefacts à conserver
+CKPT_DIR="training/multi-head"
+ARTIFACTS=(
+    "$CKPT_DIR/checkpoint_best_multitask.pt"
+    "$CKPT_DIR/best_model_multitask.pt"
+)
+
+for f in "${ARTIFACTS[@]}"; do
+    if [ -f "$f" ]; then
+        echo "   → DVC add $f"
+        dvc add "$f" 2>/dev/null || true
+    fi
+done
+
+# Push vers R2
+echo "   → dvc push artefacts..."
+dvc push "${ARTIFACTS[@]/#/}" 2>&1 | tail -3 || true
+
+# Log comme W&B artifact
+if [ -n "$WANDB_API_KEY" ] && [ -n "$WANDB_RUN_ID" ]; then
+    python3 - <<PYEOF 2>/dev/null || echo "W&B artifact log skipped"
+import os, wandb
+key = os.environ.get("WANDB_API_KEY","")
+api = wandb.Api(api_key=key)
+run = api.run(f"pimpmyrag-ner/$WANDB_RUN_ID")
+artifact = wandb.Artifact("pimpmyrag-ner-model", type="model",
+    description="checkpoint_best + best_model multitask v5")
+for fname in ("training/multi-head/checkpoint_best_multitask.pt",
+              "training/multi-head/best_model_multitask.pt"):
+    if os.path.exists(fname):
+        artifact.add_file(fname)
+        print(f"  added {fname}")
+run.log_artifact(artifact)
+print("W&B artifact logged OK")
+PYEOF
+fi
+
+echo ""
+if [ $TRAINING_EXIT -eq 0 ]; then
+    echo "✅ Training + upload termines avec succes"
+else
+    echo "⚠️  Training s'est termine avec exit=$TRAINING_EXIT — artefacts uploades quand meme"
+fi
