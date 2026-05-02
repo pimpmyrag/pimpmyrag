@@ -119,9 +119,9 @@ echo "🚀 Démarrage training adaptatif — $(date)" | tee $log_file
 # ── Sources gold v5 Claude ────────────────────────────────────────────────────
 # *_v5.jsonl = gold v4 + hint_inst_name + hint_document + fix verb_trigger offsets
 # (généré par convert_to_inst_name_v2.py + fix_verb_trigger.py + convert_to_document.py)
-TRAIN_SILVER="$DATA/train_v5.jsonl"
-VAL_SILVER="$DATA/val_v5.jsonl"
-TEST_SILVER="$DATA/test_v5.jsonl"
+TRAIN_SILVER="$DATA/train_v6.jsonl"
+VAL_SILVER="$DATA/val_v6.jsonl"
+TEST_SILVER="$DATA/test_v6.jsonl"
 
 # Vérification présence des fichiers gold
 for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do

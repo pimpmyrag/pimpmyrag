@@ -1,3 +1,7 @@
 /train_v5.jsonl
 /val_v5.jsonl
 /test_v5.jsonl
+/test_v4_inst_fixed.jsonl
+/train_v6.jsonl
+/val_v6.jsonl
+/test_v6.jsonl

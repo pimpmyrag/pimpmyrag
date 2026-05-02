@@ -12,7 +12,7 @@ FINE_LABELS = [
     "hint_norp",             # 2
     "hint_group_role",       # 3
     "hint_org_name",         # 4
-    "hint_inst_name",        # 5  institution publique/étatique/politique NOMMÉE (nom propre ou sigle : "Commission Européenne", "OMS", "OTAN") — si générique ("gouvernement", "ministère"), utiliser hint_group_role
+    "hint_inst_name",        # 5  institution NOMMÉE (sigle ou nom propre qualifié : "ONU", "OTAN", "Commission européenne", "Sénat américain")
     "hint_gpe",              # 6
     "hint_fac_name",         # 7
     "hint_loc_generic",      # 8
@@ -41,6 +41,7 @@ FINE_LABELS = [
     "hint_concept",          # 31
     "hint_disease",          # 32
     "hint_language",         # 33
+    "hint_inst_role",        # 34  institution GÉNÉRIQUE sans qualificatif (gouvernement, police, armée, parlement, tribunal…)
 ]
 
 FINE2ID = {x: i for i, x in enumerate(FINE_LABELS)}
@@ -49,7 +50,7 @@ ID2FINE = {i: x for x, i in FINE2ID.items()}
 NUM_FINE = len(FINE_LABELS)
 
 # Sentinel pour les spans négatifs (pas un vrai label fine)
-FINE_NONE_ID = NUM_FINE  # = 34, hors range [0..33]
+FINE_NONE_ID = NUM_FINE  # = 35, hors range [0..34]
 
 # ─────────────────────────────────────────────────────────────
 # COARSE LABELS
@@ -92,7 +93,8 @@ COARSE_TO_FINE = {
     ],
     COARSE2ID["ORG"]: [
         FINE2ID["hint_org_name"],
-        FINE2ID["hint_inst_name"],   # institution publique/étatique
+        FINE2ID["hint_inst_name"],   # institution publique NOMMÉE (sigle, nom propre qualifié)
+        FINE2ID["hint_inst_role"],   # institution générique (gouvernement, police, armée…)
     ],
     COARSE2ID["TIME"]: [
         FINE2ID["hint_time_date"],
