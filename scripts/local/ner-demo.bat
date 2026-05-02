@@ -3,7 +3,7 @@ setlocal EnableDelayedExpansion
 rem NER Demo local launcher for Windows — requires Java 21+
 rem Downloads the ONNX model (~700 MB) automatically on first run.
 
-set MODEL_URL=https://github.com/pimpmyrag/pimpmyrag/releases/download/v1.0.0-ner-model/best_model_multitask_full.onnx
+set MODEL_URL=https://github.com/pimpmyrag/pimpmyrag/releases/download/v1.2.0-ner-model/best_model_multitask_full.onnx
 set CACHE_DIR=%USERPROFILE%\.pimpmyrag
 set MODEL_PATH=%CACHE_DIR%\model\best_model_multitask_full.onnx
 if not defined NER_PORT set NER_PORT=8090
