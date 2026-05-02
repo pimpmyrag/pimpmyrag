@@ -64,32 +64,17 @@ GPU_PROFILES = {
 }
 DEFAULT_GPU = "RTX_4090"
 
-# ── Commande de démarrage dans le pod ─────────────────────────────────────────
-# On clone le repo, installe les deps, pull le dataset via DVC, lance le training
-STARTUP_CMD = """
-set -e
-apt-get update -qq && apt-get install -y -qq git curl
 
-# Clone repo
-git clone https://github.com/pimpmyrag/pimpmyrag.git /workspace/pimpmyrag
-cd /workspace/pimpmyrag/training/multi-head
-
-# Setup complet (deps + dvc pull + wandb login + training)
-chmod +x setup_runpod.sh
-./setup_runpod.sh
-""".strip()
-
-
-def get_env_vars(secrets: dict) -> list[dict]:
-    """Construit la liste des variables d'env à injecter dans le pod."""
-    env = []
+def get_env_vars(secrets: dict) -> dict:
+    """Construit le dict des variables d env a injecter dans le pod."""
+    env = {}
     for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
                 "DVC_R2_ENDPOINT", "WANDB_API_KEY"):
         val = secrets.get(key) or os.environ.get(key, "")
         if val:
-            env.append({"key": key, "value": val})
+            env[key] = val
         elif key == "WANDB_API_KEY":
-            env.append({"key": "WANDB_MODE", "value": "offline"})
+            env["WANDB_MODE"] = "offline"
     return env
 
 
@@ -109,21 +94,24 @@ def launch_pod(gpu_profile: str, spot: bool, dry_run: bool):
         "volume_in_gb":     profile["volume_in_gb"],
         "volume_mount_path": "/workspace",
         "env":              env_vars,
-        "docker_args":      "",
-        "ports":            "",
-        # Commande de démarrage — sera exécutée automatiquement au boot
-        "container_start_command": f"bash -c '{STARTUP_CMD}'",
-        **({"bid_per_gpu": 0.5} if spot else {}),
+        # Commande injectée via docker_args (exécutée au démarrage du container)
+        "docker_args": (
+            "bash -c 'apt-get update -qq && apt-get install -y -qq git && "
+            "git clone https://github.com/pimpmyrag/pimpmyrag.git /workspace/pimpmyrag && "
+            "cd /workspace/pimpmyrag/training/multi-head && "
+            "chmod +x setup_runpod.sh && ./setup_runpod.sh 2>&1 | tee /workspace/training.log'"
+        ),
+        "ports": "8888/http",  # Jupyter optionnel si besoin de debug
     }
 
     print(f"\n🚀 Config pod [{gpu_profile}{'  SPOT' if spot else ''}]")
     print(f"   Image   : {config['image_name']}")
-    print(f"   GPU     : {profile['gpu_type_id']} ×{profile['gpu_count']}")
+    print(f"   GPU     : {profile['gpu_type_id']} x{profile['gpu_count']}")
     print(f"   Disk    : {profile['container_disk_in_gb']}GB container + {profile['volume_in_gb']}GB volume")
-    print(f"   Env vars: {[e['key'] for e in env_vars]}")
+    print(f"   Env vars: {list(env_vars.keys())}")
 
     if dry_run:
-        print("\n⚠️  --dry-run : pod NON créé")
+        print("\n  --dry-run : pod NON cree")
         return
 
     print("\n⏳ Création du pod...")
