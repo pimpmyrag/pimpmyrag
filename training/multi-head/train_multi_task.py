@@ -7,6 +7,13 @@ import argparse
 import json
 from collections import Counter
 
+# W&B — import optionnel pour ne pas bloquer si non installé
+try:
+    import wandb
+    _WANDB_AVAILABLE = True
+except ImportError:
+    _WANDB_AVAILABLE = False
+
 import torch
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
@@ -28,8 +35,11 @@ from labels import (
 # ──────────────────────────────────────────────────────────
 #  Inline Hard Negative Mining — constantes
 # ──────────────────────────────────────────────────────────
-_LOW_PRECISION_COARSE = {"VALUE", "EVENT", "TIME", "ABSTRACT"}
-_LOW_F1_FINE = {"hint_measure", "hint_rate", "hint_infra", "hint_object_generic"}
+_LOW_PRECISION_COARSE = {"VALUE", "EVENT", "TIME", "ABSTRACT", "WORK"}
+_LOW_F1_FINE = {
+    "hint_measure", "hint_rate", "hint_infra", "hint_object_generic",
+    "hint_inst_name", "hint_document",   # nouveaux labels v5 — potentiellement rares en début de training
+}
 _FP_LOW_PREC_EXTRA = 1.5
 _FINE_ERR_EXTRA    = 1.4
 
@@ -883,6 +893,14 @@ def main():
     parser.add_argument("--hn-min-weight",   type=float, default=0.3,
                         help="Poids minimum (défaut=0.3)")
 
+    # ── W&B ──────────────────────────────────────────────────────────────────
+    parser.add_argument("--wandb-project", type=str, default="pimpmyrag-ner",
+                        help="Nom du projet W&B (défaut: pimpmyrag-ner). Mettre '' pour désactiver.")
+    parser.add_argument("--wandb-run-name", type=str, default=None,
+                        help="Nom du run W&B (défaut: autogénéré par W&B)")
+    parser.add_argument("--wandb-tags", type=str, default="",
+                        help="Tags W&B séparés par des virgules (ex: 'v5,deberta,a100')")
+
     args = parser.parse_args()
 
     if args.device:
@@ -891,6 +909,57 @@ def main():
         device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
 
     print(f"✅ device = {device}")
+
+    # ── W&B init ─────────────────────────────────────────────────────────────
+    _wandb_enabled = False
+    if _WANDB_AVAILABLE and args.wandb_project:
+        try:
+            wandb.init(
+                project=args.wandb_project,
+                name=args.wandb_run_name,
+                tags=[t.strip() for t in args.wandb_tags.split(",") if t.strip()],
+                config={
+                    # Hyperparams training
+                    "model_name":        args.model_name,
+                    "lr":                args.lr,
+                    "head_lr_multiplier": args.head_lr_multiplier,
+                    "batch_size":        args.batch_size,
+                    "accum_steps":       args.accum_steps,
+                    "max_epochs":        args.epochs,
+                    "warmup_epochs":     args.warmup_epochs,
+                    "layer_lr_decay":    args.layer_lr_decay,
+                    "ema_decay":         args.ema_decay,
+                    "focal_gamma":       args.focal_gamma,
+                    "max_grad_norm":     args.max_grad_norm,
+                    # Lambdas
+                    "lambda_boundary":   args.lambda_boundary,
+                    "lambda_coarse":     args.lambda_coarse,
+                    "lambda_fine":       args.lambda_fine,
+                    "lambda_svo_boundary": args.lambda_svo_boundary,
+                    "lambda_svo":        args.lambda_svo,
+                    "lambda_voice":      args.lambda_voice,
+                    "lambda_morpho":     args.lambda_morpho,
+                    "lambda_verb_ptr":   args.lambda_verb_ptr,
+                    "lambda_compat":     args.lambda_compat,
+                    # Schema
+                    "num_fine":          len(FINE_LABELS),
+                    "num_coarse":        len(COARSE_LABELS),
+                    # Dataset
+                    "train_path":        args.train,
+                    "val_path":          args.val,
+                },
+                resume="allow",
+            )
+            _wandb_enabled = True
+            print(f"📊 W&B run: {wandb.run.url}")
+        except Exception as e:
+            print(f"⚠️  W&B init échoué ({e}) — training sans W&B")
+    else:
+        if not _WANDB_AVAILABLE:
+            print("⚠️  wandb non installé — pip install wandb pour activer le tracking")
+        elif not args.wandb_project:
+            print("ℹ️  W&B désactivé (--wandb-project vide)")
+
 
     tokenizer_source = args.tokenizer_path or args.model_name
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
@@ -924,7 +993,7 @@ def main():
         pin_memory=pin_memory,
     )
 
-    model = SpanMultiTaskModel(model_name=args.model_name).to(device).float()
+    model = SpanMultiTaskModel(model_name=args.model_name, num_coarse=len(COARSE_LABELS)).to(device).float()
     total_epochs = args.epochs
 
     # Differential LR avec layer-wise decay
@@ -1163,6 +1232,29 @@ def main():
             f"Score={score:.4f}"
         )
 
+        # ── W&B log epoch ────────────────────────────────────────────────────
+        if _wandb_enabled:
+            wandb.log({
+                "epoch": epoch,
+                "score": score,
+                "train/loss":           train_metrics["loss"],
+                "train/boundary_f1":    train_metrics["boundary_f1"],
+                "train/coarse_f1":      train_metrics["coarse_macro_f1"],
+                "train/fine_f1":        train_metrics["fine_macro_f1"],
+                "train/svo_f1":         train_metrics["svo_macro_f1"],
+                "train/voice_f1":       train_metrics["voice_macro_f1"],
+                "train/gender_f1":      train_metrics["gender_macro_f1"],
+                "train/number_f1":      train_metrics["number_macro_f1"],
+                "val/loss":             val_metrics["loss"],
+                "val/boundary_f1":      val_metrics["boundary_f1"],
+                "val/coarse_f1":        val_metrics["coarse_macro_f1"],
+                "val/fine_f1":          val_metrics["fine_macro_f1"],
+                "val/svo_f1":           val_metrics["svo_macro_f1"],
+                "val/voice_f1":         val_metrics["voice_macro_f1"],
+                "val/gender_f1":        val_metrics["gender_macro_f1"],
+                "val/number_f1":        val_metrics["number_macro_f1"],
+            }, step=epoch)
+
         print("\n[VAL boundary]")
         print(val_metrics["boundary_report"])
         print("[VAL coarse]")
@@ -1269,6 +1361,21 @@ def main():
     print(test_metrics["svo_report"])
     if test_metrics.get("gender_macro_f1", 0) > 0:
         print(f"[TEST morpho]  Gender F1={test_metrics['gender_macro_f1']:.4f}  Number F1={test_metrics['number_macro_f1']:.4f}  Person F1={test_metrics['person_macro_f1']:.4f}")
+
+    # ── W&B log test final ───────────────────────────────────────────────────
+    if _wandb_enabled:
+        wandb.log({
+            "test/boundary_f1":  test_metrics["boundary_f1"],
+            "test/coarse_f1":    test_metrics["coarse_macro_f1"],
+            "test/fine_f1":      test_metrics["fine_macro_f1"],
+            "test/svo_f1":       test_metrics["svo_macro_f1"],
+            "test/voice_f1":     test_metrics["voice_macro_f1"],
+            "test/gender_f1":    test_metrics["gender_macro_f1"],
+            "test/number_f1":    test_metrics["number_macro_f1"],
+            "test/loss":         test_metrics["loss"],
+        })
+        wandb.finish()
+        print("📊 W&B run terminé")
 
 
 if __name__ == "__main__":

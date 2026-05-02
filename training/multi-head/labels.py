@@ -12,33 +12,35 @@ FINE_LABELS = [
     "hint_norp",             # 2
     "hint_group_role",       # 3
     "hint_org_name",         # 4
-    "hint_gpe",              # 5
-    "hint_fac_name",         # 6
-    "hint_loc_generic",      # 7
-    "hint_weapon",           # 8
-    "hint_vehicle",          # 9
-    "hint_substance",        # 10
-    "hint_food",             # 11
-    "hint_infra",            # 12
-    "hint_tool",             # 13
-    "hint_object_generic",   # 14
-    "hint_object_name",      # 15
-    "hint_event_nominal",    # 16
-    "hint_event_named",      # 17
-    "hint_time_date",        # 18
-    "hint_time_clock",       # 19
-    "hint_time_duration",    # 20
-    "hint_quantity",         # 21
-    "hint_measure",          # 22
-    "hint_percentage",       # 23
-    "hint_count",            # 24
-    "hint_money",            # 25
-    "hint_rate",             # 26
-    "hint_law",              # 27
+    "hint_inst_name",        # 5  ← nouveau : institution publique/étatique/politique
+    "hint_gpe",              # 6
+    "hint_fac_name",         # 7
+    "hint_loc_generic",      # 8
+    "hint_weapon",           # 9
+    "hint_vehicle",          # 10
+    "hint_substance",        # 11
+    "hint_food",             # 12
+    "hint_infra",            # 13
+    "hint_tool",             # 14
+    "hint_object_generic",   # 15
+    "hint_object_name",      # 16
+    "hint_event_nominal",    # 17
+    "hint_event_named",      # 18
+    "hint_time_date",        # 19
+    "hint_time_clock",       # 20
+    "hint_time_duration",    # 21
+    "hint_quantity",         # 22
+    "hint_measure",          # 23
+    "hint_percentage",       # 24
+    "hint_count",            # 25
+    "hint_money",            # 26
+    "hint_rate",             # 27
     "hint_work_of_art",      # 28
-    "hint_concept",          # 29
-    "hint_disease",          # 30
-    "hint_language",         # 31
+    "hint_law",              # 29
+    "hint_document",         # 30  ← nouveau : rapport, lettre, communiqué, données, contrat…
+    "hint_concept",          # 31
+    "hint_disease",          # 32
+    "hint_language",         # 33
 ]
 
 FINE2ID = {x: i for i, x in enumerate(FINE_LABELS)}
@@ -47,7 +49,7 @@ ID2FINE = {i: x for x, i in FINE2ID.items()}
 NUM_FINE = len(FINE_LABELS)
 
 # Sentinel pour les spans négatifs (pas un vrai label fine)
-FINE_NONE_ID = NUM_FINE  # = 32, hors range [0..31]
+FINE_NONE_ID = NUM_FINE  # = 34, hors range [0..33]
 
 # ─────────────────────────────────────────────────────────────
 # COARSE LABELS
@@ -59,10 +61,11 @@ COARSE_LABELS = [
     "ORG",      # 2
     "TIME",     # 3
     "EVENT",    # 4
-    "OBJECT",   # 5
+    "OBJECT",   # 5  artefacts physiques
     "VALUE",    # 6
-    "ABSTRACT", # 7
-    "NONE",     # 8
+    "WORK",     # 7  ← nouveau : productions intellectuelles/culturelles (oeuvre, loi)
+    "ABSTRACT", # 8
+    "NONE",     # 9
 ]
 
 COARSE2ID = {x: i for i, x in enumerate(COARSE_LABELS)}
@@ -89,6 +92,7 @@ COARSE_TO_FINE = {
     ],
     COARSE2ID["ORG"]: [
         FINE2ID["hint_org_name"],
+        FINE2ID["hint_inst_name"],   # institution publique/étatique
     ],
     COARSE2ID["TIME"]: [
         FINE2ID["hint_time_date"],
@@ -116,9 +120,12 @@ COARSE_TO_FINE = {
         FINE2ID["hint_money"],
         FINE2ID["hint_rate"],
     ],
-    COARSE2ID["ABSTRACT"]: [
-        FINE2ID["hint_law"],
+    COARSE2ID["WORK"]: [
         FINE2ID["hint_work_of_art"],
+        FINE2ID["hint_law"],
+        FINE2ID["hint_document"],    # rapport, lettre, communiqué, données, contrat…
+    ],
+    COARSE2ID["ABSTRACT"]: [
         FINE2ID["hint_concept"],
         FINE2ID["hint_disease"],
         FINE2ID["hint_language"],

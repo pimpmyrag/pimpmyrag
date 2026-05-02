@@ -1,0 +1,6 @@
+[core]
+    autostage = true
+    remote = r2remote
+['remote "r2remote"']
+    url = s3://pimpmyrag-data
+    endpointurl = https://07027fdcb4c08fe1418a9595986c3ac8.r2.cloudflarestorage.com

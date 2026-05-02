@@ -139,3 +139,6 @@ training/multi-head/data/*.multitask.jsonl
 # ── Anciens modèles ONNX supersédés (hors repo)
 debertav3-ner/*.onnx
 debertav3-ner/*.onnx.data
+# Credentials locaux — ne jamais commiter
+.env.local
+training/multi-head/.secrets.env

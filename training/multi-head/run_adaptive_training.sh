@@ -110,12 +110,12 @@ mkdir -p logs
 log_file="logs/adaptive.log"
 echo "🚀 Démarrage training adaptatif — $(date)" | tee $log_file
 
-# ── Sources gold v4 Claude ────────────────────────────────────────────────────
-# train_v4_split.jsonl = gold Claude annoté (NER + verb_trigger + rôles SVO + morpho)
-# val/test = split stratifié depuis le même corpus gold
-TRAIN_SILVER="$DATA/train_v4_split.jsonl"
-VAL_SILVER="$DATA/val_v4_split.jsonl"
-TEST_SILVER="$DATA/test_v4_split.jsonl"
+# ── Sources gold v5 Claude ────────────────────────────────────────────────────
+# *_v5.jsonl = gold v4 + hint_inst_name + hint_document + fix verb_trigger offsets
+# (généré par convert_to_inst_name_v2.py + fix_verb_trigger.py + convert_to_document.py)
+TRAIN_SILVER="$DATA/train_v5.jsonl"
+VAL_SILVER="$DATA/val_v5.jsonl"
+TEST_SILVER="$DATA/test_v5.jsonl"
 
 # Vérification présence des fichiers gold
 for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do
@@ -167,9 +167,23 @@ python3 build_multitask_dataset.py \
 if [ "$KEEP_CHECKPOINT" = "1" ]; then
     echo "Reprise depuis checkpoint existant" | tee -a $log_file
     if [ -f checkpoint_best_multitask.pt ]; then
-        resume_arg="--resume checkpoint_best_multitask.pt"
-        best_score=$(python3 -c "import torch; c=torch.load('checkpoint_best_multitask.pt',map_location='cpu'); print(f\"{c.get('best_score',-1.0):.4f}\")" 2>/dev/null || echo "-1.0")
-        echo "best_score checkpoint: $best_score" | tee -a $log_file
+        # ⚠️  Vérification compatibilité schéma labels (v5 : fine=34, coarse=10)
+        CKPT_FINE=$(python3 -c "
+import torch
+c = torch.load('checkpoint_best_multitask.pt', map_location='cpu')
+sd = c.get('model_state', c)
+k = [k for k in sd if 'fine_head' in k and 'weight' in k]
+print(sd[k[0]].shape[0] if k else 0)
+" 2>/dev/null || echo "0")
+        if [ "$CKPT_FINE" != "34" ] && [ "$CKPT_FINE" != "0" ]; then
+            echo "⚠️  Checkpoint incompatible : fine_head=$CKPT_FINE classes (attendu 34 — labels v5)" | tee -a $log_file
+            echo "   → Démarrage à froid (les anciens checkpoints v4 ont fine=32 ou 33)" | tee -a $log_file
+            resume_arg=""
+        else
+            resume_arg="--resume checkpoint_best_multitask.pt"
+            best_score=$(python3 -c "import torch; c=torch.load('checkpoint_best_multitask.pt',map_location='cpu'); print(f\"{c.get('best_score',-1.0):.4f}\")" 2>/dev/null || echo "-1.0")
+            echo "best_score checkpoint: $best_score" | tee -a $log_file
+        fi
     fi
 elif [ -f checkpoint_best_multitask.pt ] || [ -f checkpoint_last_multitask.pt ]; then
     echo "Suppression anciens checkpoints" | tee -a $log_file
