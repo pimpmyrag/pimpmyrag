@@ -306,7 +306,8 @@ def run_epoch(
         no_valid = ~allowed.any(dim=-1)
 
         masked_logits = fine_logits.clone()
-        masked_logits = masked_logits.masked_fill(~allowed, -1e9)
+        fill_val = torch.finfo(masked_logits.dtype).min
+        masked_logits = masked_logits.masked_fill(~allowed, fill_val)
 
         pred = masked_logits.argmax(dim=-1)
 
