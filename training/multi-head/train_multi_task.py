@@ -1027,17 +1027,8 @@ def main():
     else:
         print("🔢 FP32 (AMP désactivé)")
 
-    # torch.compile — gain 20-40% sur Ampere/Ada/Blackwell
-    # dynamic=True : une seule compilation pour toutes les shapes (DeBERTa variable-length)
-    # Le cache inductor est persisté sur disque → réutilisé entre epochs (process séparés)
-    if use_amp and hasattr(torch, 'compile'):
-        try:
-            import os
-            os.environ.setdefault('TORCHINDUCTOR_CACHE_DIR', '/tmp/torch_inductor_cache')
-            model = torch.compile(model, mode="reduce-overhead", dynamic=True)
-            print("🔥 torch.compile activé (mode=reduce-overhead, dynamic=True, cache=/tmp/torch_inductor_cache)")
-        except Exception as e:
-            print(f"⚠️  torch.compile ignoré: {e}")
+    # torch.compile désactivé pour DeBERTa (attention disentangled trop complexe → >15min compile)
+    # Le gain bf16 + BS plus grand suffit sur RTX 5090
 
     # Differential LR avec layer-wise decay
     head_lr = args.lr * args.head_lr_multiplier
