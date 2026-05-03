@@ -26,20 +26,23 @@ echo "✅ PyTorch $TORCH_VERSION"
 # ── Détection device & batch size ────────────────────────
 if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     DEVICE="cuda"
-    # Adapte le BS selon la VRAM disponible (5090=32GB → BS=256, sinon BS=128)
+    # Adapte le BS selon la VRAM disponible
+    # 24GB (3090) → BS=128 | 32GB (5090) → BS=160 | 40GB+ (A100) → BS=256
     VRAM_GB=$(python3 -c "import torch; print(round(torch.cuda.get_device_properties(0).total_memory/1024**3))" 2>/dev/null || echo "24")
-    if [ "$VRAM_GB" -ge 30 ] 2>/dev/null; then
+    if [ "$VRAM_GB" -ge 40 ] 2>/dev/null; then
         BS=256
-        echo "🏎️  GPU ${VRAM_GB}GB détecté — BS augmenté à $BS"
+    elif [ "$VRAM_GB" -ge 28 ] 2>/dev/null; then
+        BS=160
     else
         BS=128
     fi
     ACCUM=1
     AMP_FLAG="--amp"
     NUM_WORKERS=4
-    # Cache torch.compile persisté entre epochs (process séparés)
+    # Evite la fragmentation mémoire CUDA
+    export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
     export TORCHINDUCTOR_CACHE_DIR="/tmp/torch_inductor_cache"
-    echo "🚀 Device: CUDA (BS=$BS, AMP=BF16, workers=$NUM_WORKERS, VRAM=${VRAM_GB}GB)"
+    echo "🚀 Device: CUDA (BS=$BS, AMP=FP16, workers=$NUM_WORKERS, VRAM=${VRAM_GB}GB)"
 elif python3 -c "import torch; assert torch.backends.mps.is_available()" 2>/dev/null; then
     DEVICE="mps"
     BS=24
