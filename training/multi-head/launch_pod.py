@@ -1,4 +1,4 @@
-"""Lance un pod RunPod pour le training v6."""
+"""Lance un pod RunPod pour le training v6.3 (RTX 5090)."""
 import runpod, os, json
 
 # Charge .secrets.env si nécessaire
@@ -27,20 +27,22 @@ GITHUB_REPO = "https://github.com/pimpmyrag/pimpmyrag.git"
 if env_vars.get("GITHUB_TOKEN"):
     GITHUB_REPO = f"https://{env_vars['GITHUB_TOKEN']}@github.com/pimpmyrag/pimpmyrag.git"
 
+BRANCH = "feature-classif-improvements"
+
 start_cmd = (
     "bash -c '"
     "cd /workspace && "
-    f"git clone {GITHUB_REPO} pimpmyrag 2>&1 | tail -3 && "
+    f"git clone --branch {BRANCH} {GITHUB_REPO} pimpmyrag 2>&1 | tail -3 && "
     "cd pimpmyrag/training/multi-head && "
     "chmod +x setup_runpod.sh && "
-    "./setup_runpod.sh 2>&1 | tee /workspace/training_v6.log"
+    "./setup_runpod.sh 2>&1 | tee /workspace/training_v63.log"
     "'"
 )
 
 pod = runpod.create_pod(
-    name="pimpmyrag-training-v6",
+    name="pimpmyrag-training-v6.3",
     image_name="runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
-    gpu_type_id="NVIDIA GeForce RTX 3090",
+    gpu_type_id="NVIDIA GeForce RTX 5090",
     cloud_type="SECURE",
     gpu_count=1,
     volume_in_gb=50,
