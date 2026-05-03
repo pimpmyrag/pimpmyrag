@@ -411,7 +411,7 @@ def run_epoch(
             )
 
         with torch.set_grad_enabled(train):
-            with torch.amp.autocast("cuda", enabled=amp_enabled, dtype=torch.float16):
+            with torch.amp.autocast("cuda", enabled=amp_enabled, dtype=torch.bfloat16):
                 outputs = model({
                     "input_ids": input_ids,
                     "attention_mask": attention_mask,
@@ -1045,11 +1045,12 @@ def main():
     model = SpanMultiTaskModel(model_name=args.model_name, num_coarse=len(COARSE_LABELS)).to(device).float()
     total_epochs = args.epochs
 
-    # AMP scaler — fp16 nécessite GradScaler pour éviter underflow
+    # AMP BF16 — pas de GradScaler nécessaire (BF16 garde la même dynamique que FP32)
+    # Supporté nativement sur Ampere+ (RTX 3090/4090/5090, A100…)
     use_amp = args.amp and (device == "cuda")
-    scaler = torch.amp.GradScaler("cuda") if use_amp else None
+    scaler = None   # GradScaler inutile en BF16
     if use_amp:
-        print("⚡ AMP (FP16) activé — GradScaler actif")
+        print("⚡ AMP (BF16) activé — pas de GradScaler (stable pour DeBERTa)")
     else:
         print("🔢 FP32 (AMP désactivé)")
 

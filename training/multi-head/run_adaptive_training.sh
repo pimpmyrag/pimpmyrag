@@ -27,21 +27,27 @@ echo "✅ PyTorch $TORCH_VERSION"
 if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     DEVICE="cuda"
     VRAM_GB=$(python3 -c "import torch; print(round(torch.cuda.get_device_properties(0).total_memory/1024**3))" 2>/dev/null || echo "24")
-    # fp32 : ~2x moins de BS qu'en fp16
-    # 40GB+ (A100) → BS=128 | 28-40GB (5090 32GB) → BS=80 | <28GB (3090 24GB) → BS=64
+    # BF16 activé (stable sur Ampere+, contrairement à fp16+GradScaler)
+    # Batch effectif cible ~96 :
+    #   40GB+ (A100)      → BS=128 accum=1  (BF16)
+    #   28-40GB (5090/32) → BS=96  accum=1  (BF16)
+    #   <28GB  (3090/24)  → BS=48  accum=2  (BF16) → batch effectif=96
+    AMP_FLAG="--amp"
     if [ "$VRAM_GB" -ge 40 ] 2>/dev/null; then
         BS=128
+        ACCUM=1
     elif [ "$VRAM_GB" -ge 28 ] 2>/dev/null; then
-        BS=80
+        BS=96
+        ACCUM=1
     else
-        BS=64
+        # RTX 3090 / 4090 24 GB — BF16 permet BS=48 avec 2× accum = 96 effectif
+        BS=48
+        ACCUM=2
     fi
-    ACCUM=1
-    AMP_FLAG=""   # fp32 — AMP désactivé (fp16 GradScaler instable sur DeBERTa)
     NUM_WORKERS=4
     export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
     export TORCHINDUCTOR_CACHE_DIR="/tmp/torch_inductor_cache"
-    echo "🚀 Device: CUDA (BS=$BS, FP32, workers=$NUM_WORKERS, VRAM=${VRAM_GB}GB)"
+    echo "🚀 Device: CUDA (BS=$BS×accum=$ACCUM, BF16, workers=$NUM_WORKERS, VRAM=${VRAM_GB}GB)"
 elif python3 -c "import torch; assert torch.backends.mps.is_available()" 2>/dev/null; then
     DEVICE="mps"
     BS=24

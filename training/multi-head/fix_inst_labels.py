@@ -1,12 +1,19 @@
 """
-Corrige les hint_inst_name generiques (commencant par minuscule)
-→ relab en hint_group_role dans les fichiers de data.
+Corrige les hint_inst_name generiques → hint_group_role dans les fichiers de data.
 
-Logique : si le span hint_inst_name commence par une lettre minuscule,
-c'est un nom commun generique → hint_group_role.
-Les vrais noms propres (majuscule initiale ou sigle) restent hint_inst_name.
+Regle :
+  - hint_inst_name RESTE si le span contient au moins une majuscule
+    ex: "police de Grenoble", "parquet de Paris" → reste hint_inst_name
+  - hint_inst_name → hint_group_role si le span ne contient AUCUNE majuscule
+    ex: "gouvernement", "police", "ministere", "armee reguliere" → hint_group_role
 """
 import json, os, shutil
+
+
+def is_generic_inst(text: str) -> bool:
+    """True si le texte ne contient aucune majuscule → institution generique non nommee."""
+    return not any(c.isupper() for c in text)
+
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
@@ -22,8 +29,13 @@ for fname in FILES_TO_FIX:
         print(f"{fname}: introuvable, skip")
         continue
 
-    shutil.copy2(path, backup)
-    print(f"{fname}: backup -> {backup}")
+    # Restaure le backup si present (pour re-appliquer proprement)
+    if os.path.exists(backup):
+        shutil.copy2(backup, path)
+        print(f"{fname}: restaure depuis backup")
+    else:
+        shutil.copy2(path, backup)
+        print(f"{fname}: backup cree -> {backup}")
 
     fixed_count = 0
     out_lines = []
@@ -37,7 +49,7 @@ for fname in FILES_TO_FIX:
             for sp in ex.get("spans", []):
                 if sp["label"] == "hint_inst_name":
                     t = sp["text"].strip()
-                    if t and t[0].islower():
+                    if t and is_generic_inst(t):
                         sp["label"] = "hint_group_role"
                         fixed_count += 1
             out_lines.append(json.dumps(ex, ensure_ascii=False))
@@ -48,4 +60,3 @@ for fname in FILES_TO_FIX:
     print(f"  → {fixed_count} spans corriges (hint_inst_name → hint_group_role)")
 
 print("\nTermine.")
-
