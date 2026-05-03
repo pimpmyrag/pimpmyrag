@@ -16,7 +16,7 @@ set -e
 cd "$(dirname "$0")"
 REPO_ROOT="$(cd ../.. && pwd)"
 
-echo "📦 Setup RunPod v6.3 — $(date)"
+echo "📦 Setup RunPod v6.6 — $(date)"
 
 # ── 1. Dépendances ───────────────────────────────────────────────────────────
 echo ""
@@ -58,7 +58,7 @@ fi
 
 # ── 3. DVC pull des datasets v6.3 ──────────────────────────────────────────────
 echo ""
-echo "📥 DVC pull datasets v6.3..."
+echo "📥 DVC pull datasets v6.6..."
 cd "$REPO_ROOT"
 
 # Cloudflare R2 — injecte les credentials depuis les variables d'env RunPod
@@ -71,28 +71,29 @@ if [ -n "$AWS_ACCESS_KEY_ID" ]; then
     dvc remote modify --local r2remote secret_access_key "$AWS_SECRET_ACCESS_KEY"
 fi
 
-dvc pull training/multi-head/data/train_v6.3.jsonl \
-         training/multi-head/data/val_v6.3.jsonl \
-         training/multi-head/data/test_v6.3.jsonl
+dvc pull training/multi-head/data/train_v6.6.jsonl \
+         training/multi-head/data/val_v6.6.jsonl \
+         training/multi-head/data/test_v6.6.jsonl
 
 cd training/multi-head
 
-echo "✅ Datasets v6.3 présents :"
-wc -l data/train_v6.3.jsonl data/val_v6.3.jsonl data/test_v6.3.jsonl
+echo "✅ Datasets v6.6 présents :"
+wc -l data/train_v6.6.jsonl data/val_v6.6.jsonl data/test_v6.6.jsonl
 
-# ── 4. Vérification schéma labels v6.3 ─────────────────────────────────────────
+# ── 4. Vérification schéma labels v6.6 ─────────────────────────────────────────
 echo ""
-echo "🔍 Vérification labels v6.3 (NUM_FINE=35, NUM_COARSE=10)..."
+echo "🔍 Vérification labels v6.6 (NUM_FINE=36, NUM_COARSE=10)..."
 python3 - <<'PYEOF'
 import sys
 sys.path.insert(0, '.')
 import labels as L
-assert L.NUM_FINE == 35, f"NUM_FINE={L.NUM_FINE} attendu 35"
+assert L.NUM_FINE == 36, f"NUM_FINE={L.NUM_FINE} attendu 36"
 assert len(L.COARSE_LABELS) == 10, f"NUM_COARSE={len(L.COARSE_LABELS)} attendu 10"
-assert 'hint_inst_name' in L.FINE2ID, "hint_inst_name manquant"
-assert 'hint_inst_role' in L.FINE2ID, "hint_inst_role manquant"
-assert 'hint_document'  in L.FINE2ID, "hint_document manquant"
-print(f"✅ labels.py v6.3 OK — NUM_FINE={L.NUM_FINE}  NUM_COARSE={len(L.COARSE_LABELS)}")
+assert 'hint_inst_name'     in L.FINE2ID, "hint_inst_name manquant"
+assert 'hint_inst_role'     in L.FINE2ID, "hint_inst_role manquant"
+assert 'hint_document'      in L.FINE2ID, "hint_document manquant"
+assert 'hint_concept_named' in L.FINE2ID, "hint_concept_named manquant"
+print(f"✅ labels.py v6.6 OK — NUM_FINE={L.NUM_FINE}  NUM_COARSE={len(L.COARSE_LABELS)}")
 PYEOF
 
 # ── 5. Lancement du training ─────────────────────────────────────────────────
