@@ -16,28 +16,34 @@ set -e
 cd "$(dirname "$0")"
 REPO_ROOT="$(cd ../.. && pwd)"
 
-echo "📦 Setup RunPod v6.1 — $(date)"
+echo "📦 Setup RunPod v6.3 — $(date)"
 
 # ── 1. Dépendances ───────────────────────────────────────────────────────────
 echo ""
 echo "🐍 Installation des dépendances..."
-python3 -m venv venv 2>/dev/null || true
+# --system-site-packages : hérite torch/transformers de l'image de base
+# Évite de re-télécharger torch (2 GB) à chaque pod
+python3 -m venv venv --system-site-packages 2>/dev/null || true
 source venv/bin/activate
 
-# PyTorch CUDA (détecte la version CUDA disponible)
-CUDA_VER=$(nvidia-smi 2>/dev/null | grep -oP "CUDA Version: \K[0-9.]+" | head -1 || echo "")
-if [ -n "$CUDA_VER" ]; then
-    CUDA_SHORT=$(echo "$CUDA_VER" | tr -d '.' | cut -c1-3)
-    echo "   → CUDA $CUDA_VER détecté — wheel cu${CUDA_SHORT}"
-    pip install -q "torch>=2.6.0" --index-url "https://download.pytorch.org/whl/cu${CUDA_SHORT}" \
-        || pip install -q "torch>=2.6.0"
+# Vérifie si torch >=2.6 est déjà dispo (hérité de l'image)
+TORCH_OK=$(python3 -c "import torch; v=tuple(int(x) for x in torch.__version__.split('.')[:2]); print('yes' if v>=(2,6) else 'no')" 2>/dev/null || echo "no")
+if [ "$TORCH_OK" = "no" ]; then
+    echo "   → torch <2.6 dans l'image, upgrade..."
+    CUDA_VER=$(nvidia-smi 2>/dev/null | grep -oP "CUDA Version: \K[0-9.]+" | head -1 || echo "")
+    if [ -n "$CUDA_VER" ]; then
+        CUDA_SHORT=$(echo "$CUDA_VER" | tr -d '.' | cut -c1-3)
+        pip install -q "torch>=2.6.0" --index-url "https://download.pytorch.org/whl/cu${CUDA_SHORT}" \
+            || pip install -q "torch>=2.6.0"
+    else
+        pip install -q "torch>=2.6.0"
+    fi
 else
-    echo "   → Pas de GPU détecté — installation CPU"
-    pip install -q "torch>=2.6.0"
+    echo "   ✅ torch $(python3 -c 'import torch; print(torch.__version__)') déjà installé (image de base)"
 fi
 
+# Installe seulement requirements.txt (sans torch, déjà présent)
 pip install -q -r requirements.txt
-pip install -q wandb dvc dvc-s3
 
 # ── 2. W&B login ─────────────────────────────────────────────────────────────
 echo ""

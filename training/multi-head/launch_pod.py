@@ -41,7 +41,7 @@ start_cmd = (
 
 pod = runpod.create_pod(
     name="pimpmyrag-training-v6.3",
-    image_name="runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
+    image_name="runpod/pytorch:2.6.0-py3.11-cuda12.8.0-devel-ubuntu22.04",
     gpu_type_id="NVIDIA GeForce RTX 5090",
     cloud_type="SECURE",
     gpu_count=1,
