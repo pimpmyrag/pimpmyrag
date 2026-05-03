@@ -50,9 +50,9 @@ else
     export WANDB_MODE=offline
 fi
 
-# ── 3. DVC pull des datasets v6.1 ──────────────────────────────────────────────
+# ── 3. DVC pull des datasets v6.3 ──────────────────────────────────────────────
 echo ""
-echo "📥 DVC pull datasets v6.1..."
+echo "📥 DVC pull datasets v6.3..."
 cd "$REPO_ROOT"
 
 # Cloudflare R2 — injecte les credentials depuis les variables d'env RunPod
@@ -71,12 +71,12 @@ dvc pull training/multi-head/data/train_v6.3.jsonl \
 
 cd training/multi-head
 
-echo "✅ Datasets v6.1 présents :"
+echo "✅ Datasets v6.3 présents :"
 wc -l data/train_v6.3.jsonl data/val_v6.3.jsonl data/test_v6.3.jsonl
 
-# ── 4. Vérification schéma labels v6.1 ─────────────────────────────────────────
+# ── 4. Vérification schéma labels v6.3 ─────────────────────────────────────────
 echo ""
-echo "🔍 Vérification labels v6.1 (NUM_FINE=35, NUM_COARSE=10)..."
+echo "🔍 Vérification labels v6.3 (NUM_FINE=35, NUM_COARSE=10)..."
 python3 - <<'PYEOF'
 import sys
 sys.path.insert(0, '.')
@@ -86,7 +86,7 @@ assert len(L.COARSE_LABELS) == 10, f"NUM_COARSE={len(L.COARSE_LABELS)} attendu 1
 assert 'hint_inst_name' in L.FINE2ID, "hint_inst_name manquant"
 assert 'hint_inst_role' in L.FINE2ID, "hint_inst_role manquant"
 assert 'hint_document'  in L.FINE2ID, "hint_document manquant"
-print(f"✅ labels.py v6.1 OK — NUM_FINE={L.NUM_FINE}  NUM_COARSE={len(L.COARSE_LABELS)}")
+print(f"✅ labels.py v6.3 OK — NUM_FINE={L.NUM_FINE}  NUM_COARSE={len(L.COARSE_LABELS)}")
 PYEOF
 
 # ── 5. Lancement du training ─────────────────────────────────────────────────
