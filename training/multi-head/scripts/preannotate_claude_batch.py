@@ -26,13 +26,15 @@ import httpx
 
 # ─── Taxonomie NER ───────────────────────────────────────────────────────────
 
-TAXONOMY = """## Taxonomie NER — 31 labels fins groupés en 8 catégories
+TAXONOMY = """## Taxonomie NER — 36 labels fins groupés en 9 catégories
 
 ### PER (Personnes)
 - **hint_person_name** : nom propre de personne ("Emmanuel Macron", "Jean Dupont")
-- **hint_person_role** : rôle, titre, fonction ("président", "ministre", "médecin") — SANS le nom propre
-- **hint_norp** : nationalité, ethnie, religion, parti politique ("français", "catholiques", "républicains")
-- **hint_group_role** : groupe de personnes par rôle ("les soldats", "les manifestants", "la police")
+- **hint_person_role** : rôle, titre, fonction d'UN INDIVIDU SINGULIER ("président", "ministre", "médecin") — SANS le nom propre
+- **hint_norp** : nationalité, ethnie, religion, affiliation idéologique ("français", "catholiques", "républicains", "les Kurdes")
+  → désigne une APPARTENANCE IDENTITAIRE. NON : rôle fonctionnel → hint_group_role.
+- **hint_group_role** : groupe de personnes par RÔLE FONCTIONNEL ("les soldats", "les manifestants", "grévistes", "victimes")
+  → le groupe peut changer de membres. NON : identité ethnique/politique → hint_norp.
 
 ### LOC (Lieux)
 - **hint_gpe** : entité géopolitique — pays, ville, région ("France", "Paris", "Bretagne")
@@ -41,7 +43,14 @@ TAXONOMY = """## Taxonomie NER — 31 labels fins groupés en 8 catégories
 - **hint_infra** : infrastructure ("autoroute", "pont", "voie ferrée", "pipeline")
 
 ### ORG (Organisations)
-- **hint_org_name** : nom d'organisation ("ONU", "Apple", "Médecins sans frontières")
+- **hint_org_name** : organisation PRIVÉE ou CIVILE avec nom propre : entreprise ("Apple", "TotalEnergies"),
+  parti nommé ("le PS", "En Marche"), syndicat ("la CGT"), ONG ("Croix-Rouge"), média ("Le Monde"), club ("PSG")
+- **hint_inst_name** : institution PUBLIQUE/ÉTATIQUE avec NOM PROPRE ou SIGLE :
+  ("l'ONU", "l'OTAN", "la BCE", "le Conseil constitutionnel", "Interpol", "la SNCF", "le GIGN")
+  → DOIT avoir un nom propre ou sigle. NON si générique → hint_inst_role.
+- **hint_inst_role** : institution PUBLIQUE désignée de façon GÉNÉRIQUE, sans nom propre :
+  ("le gouvernement", "la police", "l'armée", "le parlement", "les autorités", "la justice", "le ministère")
+  → on peut mettre "un/une" devant. NON si nom propre/sigle → hint_inst_name.
 
 ### TIME (Temps)
 - **hint_time_date** : date, jour, année ("14 juillet 2024", "lundi", "2023")
@@ -50,7 +59,7 @@ TAXONOMY = """## Taxonomie NER — 31 labels fins groupés en 8 catégories
 
 ### EVENT (Événements)
 - **hint_event_nominal** : événement décrit par un nom commun ("élection", "attentat", "crise")
-- **hint_event_named** : événement nommé ("Jeux olympiques de Paris 2024", "COP28")
+- **hint_event_named** : événement nommé ("Jeux olympiques de Paris 2024", "COP28", "la Révolution française")
 
 ### OBJECT (Objets)
 - **hint_weapon** : arme ("fusil", "missile", "couteau", "bombe")
@@ -58,7 +67,7 @@ TAXONOMY = """## Taxonomie NER — 31 labels fins groupés en 8 catégories
 - **hint_substance** : substance, matière première ("pétrole", "uranium", "chlore")
 - **hint_food** : aliment, boisson ("blé", "vin", "fromage", "café")
 - **hint_tool** : outil, instrument, appareil ("radar", "téléphone", "scanner")
-- **hint_object_generic** : objet physique autre ("drapeau", "colis", "document")
+- **hint_object_generic** : objet physique autre ("drapeau", "colis", "matériel")
 - **hint_object_name** : objet nommé / marque ("iPhone", "Rafale", "Falcon 9")
 
 ### VALUE (Valeurs)
@@ -68,10 +77,19 @@ TAXONOMY = """## Taxonomie NER — 31 labels fins groupés en 8 catégories
 - **hint_money** : montant monétaire ("15 millions d'euros", "2,5 milliards de dollars")
 - **hint_rate** : taux, ratio ("3,5 %", "1 pour 1000")
 
+### WORK (Productions écrites/normatives)
+- **hint_law** : texte à FORCE NORMATIVE : loi, décret, traité, convention, code, règlement UE, charte légale
+  ("RGPD", "loi Climat", "article 49.3", "traité de Lisbonne"). NON : concept → hint_concept_named.
+- **hint_document** : écrit SANS force normative : rapport, lettre, communiqué, note, livre blanc, passeport,
+  courriel, contrat privé, version logicielle, affiche, photographie ("rapport annuel", "livre blanc")
+- **hint_work_of_art** : œuvre culturelle NOMMÉE/TITRÉE : livre, film, chanson, tableau, émission TV
+  ("Les Misérables", "La Joconde", "Star Wars"). DOIT avoir un titre précis.
+
 ### ABSTRACT (Abstraits)
-- **hint_law** : loi, traité, texte juridique ("RGPD", "loi Climat", "article 49.3")
-- **hint_work_of_art** : œuvre d'art, livre, film ("Les Misérables", "La Joconde")
-- **hint_concept** : concept abstrait ("démocratie", "laïcité", "souveraineté")
+- **hint_concept** : notion abstraite générique NON nommée ("démocratie", "laïcité", "surveillance", "défense")
+- **hint_concept_named** : concept portant un NOM PROPRE figé : théorème, théorie, phénomène nommé
+  ("loi des grands nombres", "théorie de la relativité", "Big Bang", "effet Dunning-Kruger", "Big Data")
+  → RÈGLE : texte normatif → hint_law. Principe/concept nommé → hint_concept_named.
 - **hint_disease** : maladie, pathologie ("Covid-19", "grippe aviaire", "cancer")
 - **hint_language** : langue ("français", "mandarin", "arabe")
 
@@ -286,13 +304,15 @@ Ne retourne RIEN d'autre que le JSON.
 
 VALID_NER_LABELS = {
     "hint_person_name", "hint_person_role", "hint_norp", "hint_group_role",
-    "hint_org_name", "hint_gpe", "hint_fac_name", "hint_loc_generic",
+    "hint_org_name", "hint_inst_name", "hint_inst_role",
+    "hint_gpe", "hint_fac_name", "hint_loc_generic",
     "hint_infra", "hint_weapon", "hint_vehicle", "hint_substance",
     "hint_food", "hint_tool", "hint_object_generic", "hint_object_name",
     "hint_event_nominal", "hint_event_named", "hint_time_date",
     "hint_time_clock", "hint_time_duration", "hint_measure",
     "hint_percentage", "hint_count", "hint_money", "hint_rate",
-    "hint_law", "hint_work_of_art", "hint_concept", "hint_disease", "hint_language",
+    "hint_law", "hint_document", "hint_work_of_art",
+    "hint_concept", "hint_concept_named", "hint_disease", "hint_language",
 }
 VALID_SVO_LABELS = {"verb_trigger", "pron_subj", "pron_obj"}
 VALID_LABELS = VALID_NER_LABELS | VALID_SVO_LABELS
@@ -408,7 +428,10 @@ def create_batch_requests(candidates: list[dict], batch_size: int, output_jsonl:
                     "model": args_model,
                     "max_tokens": 8192,
                     "temperature": 0.1,
-                    "system": [{"type": "text", "text": SYSTEM_PROMPT}],
+                    # Prompt caching : system prompt identique pour toutes les requêtes
+                    # → mis en cache après la 1ère requête (~90% d'économie sur les tokens système)
+                    "system": [{"type": "text", "text": SYSTEM_PROMPT,
+                                "cache_control": {"type": "ephemeral"}}],
                     "messages": [{"role": "user", "content": user_prompt}],
                 }
             }
@@ -445,7 +468,7 @@ def submit_batch(api_key: str, requests_jsonl: str, max_retries: int = 6) -> str
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
-        "anthropic-beta": "message-batches-2024-09-24",
+        "anthropic-beta": "message-batches-2024-09-24,prompt-caching-2024-07-31",
     }
     requests_list = []
     with open(requests_jsonl, "r", encoding="utf-8") as f:
@@ -500,7 +523,7 @@ def poll_batch(api_key: str, batch_id: str, poll_interval: int = 30) -> dict:
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
-        "anthropic-beta": "message-batches-2024-09-24",
+        "anthropic-beta": "message-batches-2024-09-24,prompt-caching-2024-07-31",
     }
     t_start = time.time()
     consecutive_errors = 0
@@ -542,7 +565,7 @@ def fetch_results(api_key: str, batch_id: str, max_retries: int = 5) -> list[dic
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
-        "anthropic-beta": "message-batches-2024-09-24",
+        "anthropic-beta": "message-batches-2024-09-24,prompt-caching-2024-07-31",
     }
     last_exc = None
     for attempt in range(1, max_retries + 1):

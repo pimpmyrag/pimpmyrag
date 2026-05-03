@@ -115,9 +115,9 @@ echo "🚀 Démarrage training adaptatif — $(date)" | tee $log_file
 # ── Sources gold v6.1 ──────────────────────────────────────────────────────────
 # *_v6.jsonl = v6 + Mistral corrections (v6.1) (label 34, coarse=ORG)
 #   ~803 hint_group_role + ~239 hint_inst_name → hint_inst_role (1042 spans train)
-TRAIN_SILVER="$DATA/train_v6.3.jsonl"
-VAL_SILVER="$DATA/val_v6.3.jsonl"
-TEST_SILVER="$DATA/test_v6.3.jsonl"
+TRAIN_SILVER="$DATA/train_v6.5.jsonl"
+VAL_SILVER="$DATA/val_v6.5.jsonl"
+TEST_SILVER="$DATA/test_v6.5.jsonl"
 
 # Vérification présence des fichiers gold
 for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do
@@ -342,4 +342,17 @@ echo "  ✅ TRAINING ADAPTATIF TERMINÉ" | tee -a $log_file
 echo "  Best val score : $best_score" | tee -a $log_file
 echo "  Niveau final   : ${LEVEL_NAMES[$current_level]}" | tee -a $log_file
 echo "═══════════════════════════════════════════" | tee -a $log_file
+
+# ── Sauvegarde automatique du best model via git ──────────────────────────────
+if [ -f checkpoint_best_multitask.pt ]; then
+    echo "" | tee -a $log_file
+    echo "💾 Sauvegarde du best model dans git..." | tee -a $log_file
+    cp checkpoint_best_multitask.pt best_model.pt
+    git add best_model.pt 2>/dev/null || true
+    git commit -m "best model ${WANDB_RUN_NAME} score=${best_score}" --no-verify 2>&1 | tee -a $log_file || true
+    git push 2>&1 | tee -a $log_file || echo "⚠ git push échoué — récupérer manuellement : scp root@<pod>:<workspace>/checkpoint_best_multitask.pt ." | tee -a $log_file
+    echo "✅ Best model poussé" | tee -a $log_file
+else
+    echo "⚠ Aucun checkpoint_best_multitask.pt trouvé" | tee -a $log_file
+fi
 

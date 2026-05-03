@@ -42,6 +42,7 @@ FINE_LABELS = [
     "hint_disease",          # 32
     "hint_language",         # 33
     "hint_inst_role",        # 34  institution GÉNÉRIQUE sans qualificatif (gouvernement, police, armée, parlement, tribunal…)
+    "hint_concept_named",    # 35  concept/principe portant un NOM PROPRE figé (loi des grands nombres, effet Dunning-Kruger, Big Bang…)
 ]
 
 FINE2ID = {x: i for i, x in enumerate(FINE_LABELS)}
@@ -50,7 +51,7 @@ ID2FINE = {i: x for x, i in FINE2ID.items()}
 NUM_FINE = len(FINE_LABELS)
 
 # Sentinel pour les spans négatifs (pas un vrai label fine)
-FINE_NONE_ID = NUM_FINE  # = 35, hors range [0..34]
+FINE_NONE_ID = NUM_FINE  # = 36, hors range [0..35]
 
 # ─────────────────────────────────────────────────────────────
 # COARSE LABELS
@@ -129,6 +130,7 @@ COARSE_TO_FINE = {
     ],
     COARSE2ID["ABSTRACT"]: [
         FINE2ID["hint_concept"],
+        FINE2ID["hint_concept_named"],
         FINE2ID["hint_disease"],
         FINE2ID["hint_language"],
     ],
