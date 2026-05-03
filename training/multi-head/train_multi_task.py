@@ -915,9 +915,13 @@ def main():
     parser.add_argument("--wandb-project", type=str, default="pimpmyrag-ner",
                         help="Nom du projet W&B (défaut: pimpmyrag-ner). Mettre '' pour désactiver.")
     parser.add_argument("--wandb-run-name", type=str, default=None,
-                        help="Nom du run W&B (défaut: autogénéré par W&B)")
+                        help="Nom du run W&B (défaut: autogénéré)")
+    parser.add_argument("--wandb-run-id", type=str, default=None,
+                        help="ID d'un run W&B existant à reprendre (pour continuer le même run entre epochs)")
+    parser.add_argument("--wandb-id-file", type=str, default="wandb_run_id.txt",
+                        help="Fichier où sauvegarder/lire le run ID W&B entre les epochs")
     parser.add_argument("--wandb-tags", type=str, default="",
-                        help="Tags W&B séparés par des virgules (ex: 'v5,deberta,a100')")
+                        help="Tags W&B séparés par des virgules (ex: 'v6.3,deberta,5090')")
 
     args = parser.parse_args()
 
@@ -932,9 +936,20 @@ def main():
     _wandb_enabled = False
     if _WANDB_AVAILABLE and args.wandb_project:
         try:
+            # Résolution du run ID : argument CLI > fichier persisté > nouveau run
+            wandb_run_id = args.wandb_run_id
+            if not wandb_run_id and args.wandb_id_file:
+                try:
+                    with open(args.wandb_id_file) as f:
+                        wandb_run_id = f.read().strip() or None
+                except FileNotFoundError:
+                    pass
+
             wandb.init(
                 project=args.wandb_project,
                 name=args.wandb_run_name,
+                id=wandb_run_id,
+                resume="allow",
                 tags=[t.strip() for t in args.wandb_tags.split(",") if t.strip()],
                 config={
                     # Hyperparams training
@@ -966,10 +981,13 @@ def main():
                     "train_path":        args.train,
                     "val_path":          args.val,
                 },
-                resume="allow",
             )
+            # Persiste le run ID pour les epochs suivantes
+            if args.wandb_id_file:
+                with open(args.wandb_id_file, "w") as f:
+                    f.write(wandb.run.id)
             _wandb_enabled = True
-            print(f"📊 W&B run: {wandb.run.url}")
+            print(f"📊 W&B run: {wandb.run.name} | {wandb.run.url}")
         except Exception as e:
             print(f"⚠️  W&B init échoué ({e}) — training sans W&B")
     else:

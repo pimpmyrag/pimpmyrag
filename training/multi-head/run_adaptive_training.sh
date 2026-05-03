@@ -132,6 +132,20 @@ echo "📦 Source gold v4 : $TRAIN_SILVER ($(wc -l < "$TRAIN_SILVER") phrases)" 
 echo "📊 Val  source    : $VAL_SILVER  ($(wc -l < "$VAL_SILVER") phrases)"    | tee -a $log_file
 echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"    | tee -a $log_file
 
+# ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
+# Format : v6.3-deberta-bs160-RTX_5090-0503-1430
+DATASET_VERSION=$(basename "$TRAIN_SILVER" | grep -oE 'v[0-9]+\.[0-9]+' | head -1 || echo "v6")
+GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
+WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
+WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp16,adaptive"
+WANDB_ID_FILE="wandb_run_id.txt"
+# Supprime un éventuel run ID d'une session précédente (sauf en mode reprise)
+if [ "$KEEP_CHECKPOINT" != "1" ]; then
+    rm -f "$WANDB_ID_FILE"
+fi
+echo "📊 W&B run name : $WANDB_RUN_NAME" | tee -a $log_file
+echo "📊 W&B tags     : $WANDB_TAGS"     | tee -a $log_file
+
 rebuild_dataset() {
     local level=$1
     local hard=${HARD_PER_GOLD[$level]}
@@ -253,6 +267,9 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --hn-max-weight 8.0 \
         --hn-min-weight 0.3 \
         --num-workers $NUM_WORKERS \
+        --wandb-run-name  "$WANDB_RUN_NAME" \
+        --wandb-tags      "$WANDB_TAGS" \
+        --wandb-id-file   "$WANDB_ID_FILE" \
         $AMP_FLAG \
         $resume_arg \
         2>&1 | tee $epoch_log
