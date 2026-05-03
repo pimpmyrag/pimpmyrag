@@ -52,6 +52,8 @@ if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     ACCUM=1
     AMP_FLAG="--amp"
     NUM_WORKERS=4
+    # Cache torch.compile persisté entre epochs (process séparés)
+    export TORCHINDUCTOR_CACHE_DIR="/tmp/torch_inductor_cache"
     echo "🚀 Device: CUDA (BS=$BS, AMP=BF16, workers=$NUM_WORKERS, VRAM=${VRAM_GB}GB)"
 elif python3 -c "import torch; assert torch.backends.mps.is_available()" 2>/dev/null; then
     DEVICE="mps"
