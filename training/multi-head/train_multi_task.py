@@ -356,7 +356,7 @@ def run_epoch(
 
     coarse_fine_mask = coarse_fine_mask.to(device)
 
-    amp_enabled = (scaler is not None) and (device == "cuda")
+    amp_enabled = (device == "cuda") and (scaler is not None)
 
     for step, batch in enumerate(loader, start=1):
         input_ids = batch["input_ids"].to(device)
@@ -411,7 +411,7 @@ def run_epoch(
             )
 
         with torch.set_grad_enabled(train):
-            with torch.amp.autocast("cuda", enabled=amp_enabled, dtype=torch.bfloat16):
+            with torch.amp.autocast("cuda", enabled=amp_enabled, dtype=torch.float16):
                 outputs = model({
                     "input_ids": input_ids,
                     "attention_mask": attention_mask,
@@ -502,13 +502,21 @@ def run_epoch(
                 loss = loss_dict["loss"] / accum_steps
 
             if train:
-                # bf16 : pas de scaler nécessaire, backward direct
-                loss.backward()
+                if scaler is not None:
+                    scaler.scale(loss).backward()
+                else:
+                    loss.backward()
 
         if train and (step % accum_steps == 0):
             if max_grad_norm > 0.0:
+                if scaler is not None:
+                    scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-            optimizer.step()
+            if scaler is not None:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
             optimizer.zero_grad()
             if ema is not None:
                 ema.update(model)
@@ -1019,11 +1027,11 @@ def main():
     model = SpanMultiTaskModel(model_name=args.model_name, num_coarse=len(COARSE_LABELS)).to(device).float()
     total_epochs = args.epochs
 
-    # AMP scaler — bf16 n'a pas besoin de GradScaler (pas d'underflow)
+    # AMP scaler — fp16 nécessite GradScaler pour éviter underflow
     use_amp = args.amp and (device == "cuda")
-    scaler = None  # bf16 : pas de scaling nécessaire
+    scaler = torch.amp.GradScaler("cuda") if use_amp else None
     if use_amp:
-        print("⚡ AMP (BF16) activé — GradScaler désactivé (bf16 stable)")
+        print("⚡ AMP (FP16) activé — GradScaler actif")
     else:
         print("🔢 FP32 (AMP désactivé)")
 
