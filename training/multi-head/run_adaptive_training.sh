@@ -41,11 +41,18 @@ fi
 # ── Détection device & batch size ────────────────────────
 if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     DEVICE="cuda"
-    BS=128
+    # Adapte le BS selon la VRAM disponible (5090=32GB → BS=256, sinon BS=128)
+    VRAM_GB=$(python3 -c "import torch; print(round(torch.cuda.get_device_properties(0).total_memory/1024**3))" 2>/dev/null || echo "24")
+    if [ "$VRAM_GB" -ge 30 ] 2>/dev/null; then
+        BS=256
+        echo "🏎️  GPU ${VRAM_GB}GB détecté — BS augmenté à $BS"
+    else
+        BS=128
+    fi
     ACCUM=1
     AMP_FLAG="--amp"
     NUM_WORKERS=4
-    echo "🚀 Device: CUDA (BS=$BS, AMP=ON, workers=$NUM_WORKERS)"
+    echo "🚀 Device: CUDA (BS=$BS, AMP=BF16, workers=$NUM_WORKERS, VRAM=${VRAM_GB}GB)"
 elif python3 -c "import torch; assert torch.backends.mps.is_available()" 2>/dev/null; then
     DEVICE="mps"
     BS=24

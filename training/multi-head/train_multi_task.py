@@ -411,7 +411,7 @@ def run_epoch(
             )
 
         with torch.set_grad_enabled(train):
-            with torch.amp.autocast("cuda", enabled=amp_enabled):
+            with torch.amp.autocast("cuda", enabled=amp_enabled, dtype=torch.bfloat16):
                 outputs = model({
                     "input_ids": input_ids,
                     "attention_mask": attention_mask,
@@ -502,21 +502,13 @@ def run_epoch(
                 loss = loss_dict["loss"] / accum_steps
 
             if train:
-                if amp_enabled:
-                    scaler.scale(loss).backward()
-                else:
-                    loss.backward()
+                # bf16 : pas de scaler nécessaire, backward direct
+                loss.backward()
 
         if train and (step % accum_steps == 0):
             if max_grad_norm > 0.0:
-                if amp_enabled:
-                    scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-            if amp_enabled:
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                optimizer.step()
+            optimizer.step()
             optimizer.zero_grad()
             if ema is not None:
                 ema.update(model)
@@ -1027,13 +1019,21 @@ def main():
     model = SpanMultiTaskModel(model_name=args.model_name, num_coarse=len(COARSE_LABELS)).to(device).float()
     total_epochs = args.epochs
 
-    # AMP scaler
+    # AMP scaler — bf16 n'a pas besoin de GradScaler (pas d'underflow)
     use_amp = args.amp and (device == "cuda")
-    scaler = torch.amp.GradScaler("cuda") if use_amp else None
+    scaler = None  # bf16 : pas de scaling nécessaire
     if use_amp:
-        print("⚡ AMP (BF16) activé — accélération ~2x")
+        print("⚡ AMP (BF16) activé — GradScaler désactivé (bf16 stable)")
     else:
         print("🔢 FP32 (AMP désactivé)")
+
+    # torch.compile — gain 20-40% sur Ampere/Ada/Blackwell
+    if use_amp and hasattr(torch, 'compile'):
+        try:
+            model = torch.compile(model, mode="reduce-overhead")
+            print("🔥 torch.compile activé (mode=reduce-overhead)")
+        except Exception as e:
+            print(f"⚠️  torch.compile ignoré: {e}")
 
     # Differential LR avec layer-wise decay
     head_lr = args.lr * args.head_lr_multiplier
