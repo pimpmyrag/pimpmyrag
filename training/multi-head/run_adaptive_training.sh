@@ -26,23 +26,22 @@ echo "✅ PyTorch $TORCH_VERSION"
 # ── Détection device & batch size ────────────────────────
 if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     DEVICE="cuda"
-    # Adapte le BS selon la VRAM disponible
-    # 24GB (3090) → BS=128 | 32GB (5090) → BS=160 | 40GB+ (A100) → BS=256
     VRAM_GB=$(python3 -c "import torch; print(round(torch.cuda.get_device_properties(0).total_memory/1024**3))" 2>/dev/null || echo "24")
+    # fp32 : ~2x moins de BS qu'en fp16
+    # 40GB+ (A100) → BS=128 | 28-40GB (5090 32GB) → BS=80 | <28GB (3090 24GB) → BS=64
     if [ "$VRAM_GB" -ge 40 ] 2>/dev/null; then
-        BS=256
-    elif [ "$VRAM_GB" -ge 28 ] 2>/dev/null; then
-        BS=160
-    else
         BS=128
+    elif [ "$VRAM_GB" -ge 28 ] 2>/dev/null; then
+        BS=80
+    else
+        BS=64
     fi
     ACCUM=1
-    AMP_FLAG="--amp"
+    AMP_FLAG=""   # fp32 — AMP désactivé (fp16 GradScaler instable sur DeBERTa)
     NUM_WORKERS=4
-    # Evite la fragmentation mémoire CUDA
     export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
     export TORCHINDUCTOR_CACHE_DIR="/tmp/torch_inductor_cache"
-    echo "🚀 Device: CUDA (BS=$BS, AMP=FP16, workers=$NUM_WORKERS, VRAM=${VRAM_GB}GB)"
+    echo "🚀 Device: CUDA (BS=$BS, FP32, workers=$NUM_WORKERS, VRAM=${VRAM_GB}GB)"
 elif python3 -c "import torch; assert torch.backends.mps.is_available()" 2>/dev/null; then
     DEVICE="mps"
     BS=24
@@ -137,7 +136,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 DATASET_VERSION=$(basename "$TRAIN_SILVER" | grep -oE 'v[0-9]+\.[0-9]+' | head -1 || echo "v6")
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
-WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp16,adaptive"
+WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
 WANDB_ID_FILE="wandb_run_id.txt"
 # Supprime un éventuel run ID d'une session précédente (sauf en mode reprise)
 if [ "$KEEP_CHECKPOINT" != "1" ]; then
