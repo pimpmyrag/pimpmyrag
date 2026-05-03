@@ -1,0 +1,5 @@
+outs:
+- md5: 9827488436b1f9d1a775ba2cc955a93f
+  size: 27762176
+  hash: md5
+  path: train_v6.6.jsonl
