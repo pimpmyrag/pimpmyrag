@@ -119,9 +119,9 @@ echo "🚀 Démarrage training adaptatif — $(date)" | tee $log_file
 # ── Sources gold v6.1 ──────────────────────────────────────────────────────────
 # *_v6.jsonl = v6 + Mistral corrections (v6.1) (label 34, coarse=ORG)
 #   ~803 hint_group_role + ~239 hint_inst_name → hint_inst_role (1042 spans train)
-TRAIN_SILVER="$DATA/train_v6.1.jsonl"
-VAL_SILVER="$DATA/val_v6.1.jsonl"
-TEST_SILVER="$DATA/test_v6.1.jsonl"
+TRAIN_SILVER="$DATA/train_v6.3.jsonl"
+VAL_SILVER="$DATA/val_v6.3.jsonl"
+TEST_SILVER="$DATA/test_v6.3.jsonl"
 
 # Vérification présence des fichiers gold
 for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do

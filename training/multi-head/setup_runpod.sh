@@ -65,14 +65,14 @@ if [ -n "$AWS_ACCESS_KEY_ID" ]; then
     dvc remote modify --local r2remote secret_access_key "$AWS_SECRET_ACCESS_KEY"
 fi
 
-dvc pull training/multi-head/data/train_v6.1.jsonl \
-         training/multi-head/data/val_v6.1.jsonl \
-         training/multi-head/data/test_v6.1.jsonl
+dvc pull training/multi-head/data/train_v6.3.jsonl \
+         training/multi-head/data/val_v6.3.jsonl \
+         training/multi-head/data/test_v6.3.jsonl
 
 cd training/multi-head
 
 echo "✅ Datasets v6.1 présents :"
-wc -l data/train_v6.1.jsonl data/val_v6.1.jsonl data/test_v6.1.jsonl
+wc -l data/train_v6.3.jsonl data/val_v6.3.jsonl data/test_v6.3.jsonl
 
 # ── 4. Vérification schéma labels v6.1 ─────────────────────────────────────────
 echo ""
