@@ -37,12 +37,19 @@ FINE_LABELS = [
     "hint_rate",             # 27
     "hint_work_of_art",      # 28
     "hint_law",              # 29
-    "hint_document",         # 30  ← nouveau : rapport, lettre, communiqué, données, contrat…
-    "hint_concept",          # 31
-    "hint_disease",          # 32
-    "hint_language",         # 33
-    "hint_inst_role",        # 34  institution GÉNÉRIQUE sans qualificatif (gouvernement, police, armée, parlement, tribunal…)
-    "hint_concept_named",    # 35  concept/principe portant un NOM PROPRE figé (loi des grands nombres, effet Dunning-Kruger, Big Bang…)
+    "hint_document",         # 30  rapport, lettre, communiqué, données, contrat…
+    "hint_disease",          # 31
+    "hint_language",         # 32
+    "hint_inst_role",        # 33  institution GÉNÉRIQUE sans qualificatif (gouvernement, police, armée, parlement, tribunal…)
+    # ▼ v6.9 : hint_concept éclaté en 7 sous-types + fallback (ancien hint_concept_named fusionné dans hint_concept puis redistribué)
+    "hint_rule",             # 34  règle, procédure, norme, protocole opérationnel
+    "hint_doctrine",         # 35  doctrine, idéologie, courant de pensée, théorie (nommée ou non)
+    "hint_state",            # 36  état, condition, situation abstraite (pauvreté, crise, guerre, paix…)
+    "hint_notion",           # 37  notion, concept abstrait pur, valeur, principe philosophique
+    "hint_work_generic",     # 38  production culturelle générique sans titre (film, livre, presse, médias…)
+    "hint_field",            # 39  domaine / secteur d'activité (santé, éducation, agriculture, finance…)
+    "hint_process",          # 40  processus socio-économique continu (réforme, privatisation, mondialisation…)
+    "hint_concept",          # 41  ← fallback : concept abstrait inclassable dans les 7 sous-types ci-dessus
 ]
 
 FINE2ID = {x: i for i, x in enumerate(FINE_LABELS)}
@@ -51,7 +58,7 @@ ID2FINE = {i: x for x, i in FINE2ID.items()}
 NUM_FINE = len(FINE_LABELS)
 
 # Sentinel pour les spans négatifs (pas un vrai label fine)
-FINE_NONE_ID = NUM_FINE  # = 36, hors range [0..35]
+FINE_NONE_ID = NUM_FINE  # = 42, hors range [0..41]
 
 # ─────────────────────────────────────────────────────────────
 # COARSE LABELS
@@ -126,13 +133,20 @@ COARSE_TO_FINE = {
     COARSE2ID["WORK"]: [
         FINE2ID["hint_work_of_art"],
         FINE2ID["hint_law"],
-        FINE2ID["hint_document"],    # rapport, lettre, communiqué, données, contrat…
+        FINE2ID["hint_document"],       # rapport, lettre, communiqué, données, contrat…
+        FINE2ID["hint_work_generic"],   # v6.9 : production culturelle générique sans titre (film, presse, cinéma…)
     ],
     COARSE2ID["ABSTRACT"]: [
-        FINE2ID["hint_concept"],
-        FINE2ID["hint_concept_named"],
         FINE2ID["hint_disease"],
         FINE2ID["hint_language"],
+        # v6.9 : hint_concept redistributé en 6 sous-types + fallback
+        FINE2ID["hint_rule"],
+        FINE2ID["hint_doctrine"],
+        FINE2ID["hint_state"],
+        FINE2ID["hint_notion"],
+        FINE2ID["hint_field"],
+        FINE2ID["hint_process"],
+        FINE2ID["hint_concept"],  # fallback résiduel
     ],
 }
 

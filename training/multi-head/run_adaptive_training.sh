@@ -132,12 +132,14 @@ if [ "$NER_ONLY_BENCH" = "1" ]; then
     L_VERB_PTR=0.0
 fi
 
-# ── Sources gold v6.1 ──────────────────────────────────────────────────────────
-# *_v6.jsonl = v6 + Mistral corrections (v6.1) (label 34, coarse=ORG)
-#   ~803 hint_group_role + ~239 hint_inst_name → hint_inst_role (1042 spans train)
-TRAIN_SILVER="$DATA/train_v6.6.jsonl"
-VAL_SILVER="$DATA/val_v6.6.jsonl"
-TEST_SILVER="$DATA/test_v6.6.jsonl"
+# ── Sources gold v6.9 ──────────────────────────────────────────────────────────
+# v6.9 : hint_concept redistributé en 7 sous-types via Claude Haiku Batch API
+#   hint_notion, hint_field, hint_state, hint_work_generic,
+#   hint_doctrine, hint_rule, hint_process + hint_concept (fallback ~10%)
+#   → 42 fine labels (FINE_NONE_ID=42)
+TRAIN_SILVER="$DATA/train_v6.9.jsonl"
+VAL_SILVER="$DATA/val_v6.9.jsonl"
+TEST_SILVER="$DATA/test_v6.9.jsonl"
 
 # Vérification présence des fichiers gold
 for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do
@@ -215,9 +217,9 @@ sd = c.get('model_state', c)
 k = [k for k in sd if 'fine_head' in k and 'weight' in k]
 print(sd[k[0]].shape[0] if k else 0)
 " 2>/dev/null || echo "0")
-        if [ "$CKPT_FINE" != "36" ] && [ "$CKPT_FINE" != "0" ]; then
-            echo "⚠️  Checkpoint incompatible : fine_head=$CKPT_FINE classes (attendu 36 — labels v6.6)" | tee -a $log_file
-            echo "   → Démarrage à froid (checkpoints v5 ont fine=34, v4 ont fine=32/33)" | tee -a $log_file
+        if [ "$CKPT_FINE" != "42" ] && [ "$CKPT_FINE" != "0" ]; then
+            echo "⚠️  Checkpoint incompatible : fine_head=$CKPT_FINE classes (attendu 42 — labels v6.9)" | tee -a $log_file
+            echo "   → Démarrage à froid (checkpoints v6.6 ont fine=36, v5 ont fine=34)" | tee -a $log_file
             resume_arg=""
         else
             resume_arg="--resume checkpoint_best_multitask.pt"
