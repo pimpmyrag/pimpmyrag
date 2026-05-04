@@ -46,8 +46,8 @@ GPU_PROFILES = {
     "RTX_4090": {
         "gpu_type_id": "NVIDIA GeForce RTX 4090",
         "gpu_count":   1,
-        "container_disk_in_gb": 50,
-        "volume_in_gb": 20,
+        "container_disk_in_gb": 80,
+        "volume_in_gb": 80,
     },
     "A100_SXM": {
         "gpu_type_id": "NVIDIA A100 80GB PCIe",
@@ -58,8 +58,8 @@ GPU_PROFILES = {
     "RTX_3090": {
         "gpu_type_id": "NVIDIA GeForce RTX 3090",
         "gpu_count":   1,
-        "container_disk_in_gb": 50,
-        "volume_in_gb": 20,
+        "container_disk_in_gb": 80,
+        "volume_in_gb": 80,
     },
 }
 DEFAULT_GPU = "RTX_4090"
@@ -85,11 +85,13 @@ def launch_pod(gpu_profile: str, spot: bool, dry_run: bool):
         sys.exit(1)
 
     env_vars = get_env_vars(secrets)
+    cloud_type = "COMMUNITY" if spot else "SECURE"
     config = {
-        "name":             "pimpmyrag-training",
+        "name":             f"pimpmyrag-training{'-spot' if spot else ''}",
         # CUDA 12.8 (cu1281) pour compatibilité avec drivers < 12.9
         "image_name":       "runpod/pytorch:1.0.3-cu1281-torch260-ubuntu2204",
         "gpu_type_id":      profile["gpu_type_id"],
+        "cloud_type":       cloud_type,
         "gpu_count":        profile["gpu_count"],
         "container_disk_in_gb": profile["container_disk_in_gb"],
         "volume_in_gb":     profile["volume_in_gb"],
@@ -107,6 +109,7 @@ def launch_pod(gpu_profile: str, spot: bool, dry_run: bool):
 
     print(f"\n🚀 Config pod [{gpu_profile}{'  SPOT' if spot else ''}]")
     print(f"   Image   : {config['image_name']}")
+    print(f"   Cloud   : {cloud_type}")
     print(f"   GPU     : {profile['gpu_type_id']} x{profile['gpu_count']}")
     print(f"   Disk    : {profile['container_disk_in_gb']}GB container + {profile['volume_in_gb']}GB volume")
     print(f"   Env vars: {list(env_vars.keys())}")
