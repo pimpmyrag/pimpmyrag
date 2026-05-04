@@ -16,7 +16,7 @@ set -e
 cd "$(dirname "$0")"
 REPO_ROOT="$(cd ../.. && pwd)"
 
-echo "📦 Setup RunPod v6.6 — $(date)"
+echo "📦 Setup RunPod v6.9 — $(date)"
 
 # ── 1. Dépendances ───────────────────────────────────────────────────────────
 echo ""
@@ -56,9 +56,9 @@ else
     export WANDB_MODE=offline
 fi
 
-# ── 3. DVC pull des datasets v6.3 ──────────────────────────────────────────────
+# ── 3. DVC pull des datasets v6.9 ──────────────────────────────────────────────
 echo ""
-echo "📥 DVC pull datasets v6.6..."
+echo "📥 DVC pull datasets v6.9..."
 cd "$REPO_ROOT"
 
 # Cloudflare R2 — injecte les credentials depuis les variables d'env RunPod
@@ -71,29 +71,28 @@ if [ -n "$AWS_ACCESS_KEY_ID" ]; then
     dvc remote modify --local r2remote secret_access_key "$AWS_SECRET_ACCESS_KEY"
 fi
 
-dvc pull training/multi-head/data/train_v6.6.jsonl \
-         training/multi-head/data/val_v6.6.jsonl \
-         training/multi-head/data/test_v6.6.jsonl
+dvc pull training/multi-head/data/train_v6.9.jsonl \
+         training/multi-head/data/val_v6.9.jsonl \
+         training/multi-head/data/test_v6.9.jsonl
 
 cd training/multi-head
 
-echo "✅ Datasets v6.6 présents :"
-wc -l data/train_v6.6.jsonl data/val_v6.6.jsonl data/test_v6.6.jsonl
+echo "✅ Datasets v6.9 présents :"
+wc -l data/train_v6.9.jsonl data/val_v6.9.jsonl data/test_v6.9.jsonl
 
-# ── 4. Vérification schéma labels v6.6 ─────────────────────────────────────────
+# ── 4. Vérification schéma labels v6.9 ─────────────────────────────────────────
 echo ""
-echo "🔍 Vérification labels v6.6 (NUM_FINE=36, NUM_COARSE=10)..."
+echo "🔍 Vérification labels v6.9 (NUM_FINE=42, NUM_COARSE=10)..."
 python3 - <<'PYEOF'
 import sys
 sys.path.insert(0, '.')
 import labels as L
-assert L.NUM_FINE == 36, f"NUM_FINE={L.NUM_FINE} attendu 36"
+assert L.NUM_FINE == 42, f"NUM_FINE={L.NUM_FINE} attendu 42"
 assert len(L.COARSE_LABELS) == 10, f"NUM_COARSE={len(L.COARSE_LABELS)} attendu 10"
-assert 'hint_inst_name'     in L.FINE2ID, "hint_inst_name manquant"
-assert 'hint_inst_role'     in L.FINE2ID, "hint_inst_role manquant"
-assert 'hint_document'      in L.FINE2ID, "hint_document manquant"
-assert 'hint_concept_named' in L.FINE2ID, "hint_concept_named manquant"
-print(f"✅ labels.py v6.6 OK — NUM_FINE={L.NUM_FINE}  NUM_COARSE={len(L.COARSE_LABELS)}")
+for lbl in ('hint_notion','hint_field','hint_state','hint_rule','hint_doctrine',
+            'hint_process','hint_work_generic'):
+    assert lbl in L.FINE2ID, f"{lbl} manquant dans labels.py"
+print(f"✅ labels.py v6.9 OK — NUM_FINE={L.NUM_FINE}  NUM_COARSE={len(L.COARSE_LABELS)}")
 PYEOF
 
 # ── 5. Lancement du training ─────────────────────────────────────────────────
