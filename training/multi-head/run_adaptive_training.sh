@@ -66,10 +66,10 @@ fi
 
 MODEL="microsoft/deberta-v3-base"
 DATA="data"
-MAX_EPOCHS=40
-PATIENCE=3
-MAX_EPOCHS_PER_LEVEL=5
-MIN_DELTA=0.0005
+MAX_EPOCHS=${MAX_EPOCHS:-40}
+PATIENCE=${PATIENCE:-3}
+MAX_EPOCHS_PER_LEVEL=${MAX_EPOCHS_PER_LEVEL:-5}
+MIN_DELTA=${MIN_DELTA:-0.0005}
 
 # Niveaux de difficulté progressifs (6 niveaux)
 LEVEL_NAMES=("easy" "easy+" "medium" "medium+" "hard" "full")
