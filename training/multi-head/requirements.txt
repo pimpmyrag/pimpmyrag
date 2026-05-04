@@ -12,9 +12,12 @@ protobuf>=4.0.0
 # Experiment tracking
 wandb>=0.17.0
 
-# Dataset versioning (remote storage)
+# Dataset versioning (pull datasets uniquement — pas de dvc add/push depuis le pod)
 dvc>=3.0.0
-dvc-s3>=3.0.0   # backend S3 — remplacer par dvc-gs pour GCS, ou retirer si remote SSH/local
+dvc-s3>=3.0.0   # backend S3 pour dvc pull
+
+# Upload direct vers R2/S3 sans git (remplace git push depuis le pod)
+awscli>=1.32.0
 
 # RunPod SDK (lancement pods depuis le local)
 runpod>=1.9.0

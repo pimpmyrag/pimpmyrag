@@ -418,15 +418,60 @@ echo "  Best val score : $best_score" | tee -a $log_file
 echo "  Niveau final   : ${LEVEL_NAMES[$current_level]}" | tee -a $log_file
 echo "═══════════════════════════════════════════" | tee -a $log_file
 
-# ── Sauvegarde automatique du best model via git ──────────────────────────────
+# ── Sauvegarde automatique du best model (W&B artifact + R2 direct) ──────────
+# On n'utilise PAS git push depuis le pod (pas de credentials write).
+# Upload binaire direct vers R2 via aws s3 cp, + W&B artifact si clé dispo.
 if [ -f checkpoint_best_multitask.pt ]; then
     echo "" | tee -a $log_file
-    echo "💾 Sauvegarde du best model dans git..." | tee -a $log_file
-    cp checkpoint_best_multitask.pt best_model.pt
-    git add best_model.pt 2>/dev/null || true
-    git commit -m "best model ${WANDB_RUN_NAME} score=${best_score}" --no-verify 2>&1 | tee -a $log_file || true
-    git push 2>&1 | tee -a $log_file || echo "⚠ git push échoué — récupérer manuellement : scp root@<pod>:<workspace>/checkpoint_best_multitask.pt ." | tee -a $log_file
-    echo "✅ Best model poussé" | tee -a $log_file
+    echo "💾 Upload best model vers R2 + W&B artifact..." | tee -a $log_file
+    cp checkpoint_best_multitask.pt best_model_multitask.pt
+
+    # ── Upload R2 (direct, sans dvc add qui nécessite git) ────────────────────
+    R2_ENDPOINT="${DVC_R2_ENDPOINT:-https://07027fdcb4c08fe1418a9595986c3ac8.r2.cloudflarestorage.com}"
+    R2_DEST="s3://pimpmyrag-data/models/${WANDB_RUN_NAME}/"
+    if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+        echo "   → aws s3 cp vers $R2_DEST" | tee -a $log_file
+        aws s3 cp checkpoint_best_multitask.pt "${R2_DEST}checkpoint_best_multitask.pt" \
+            --endpoint-url "$R2_ENDPOINT" 2>&1 | tee -a $log_file || \
+            echo "⚠ R2 upload échoué" | tee -a $log_file
+        aws s3 cp best_model_multitask.pt "${R2_DEST}best_model_multitask.pt" \
+            --endpoint-url "$R2_ENDPOINT" 2>&1 | tee -a $log_file || true
+        echo "   ✅ Upload R2 OK : $R2_DEST" | tee -a $log_file
+    else
+        echo "⚠ AWS_ACCESS_KEY_ID absent — R2 upload ignoré" | tee -a $log_file
+    fi
+
+    # ── W&B artifact ─────────────────────────────────────────────────────────
+    if [ -n "$WANDB_API_KEY" ]; then
+        python3 - <<PYEOF 2>&1 | tee -a $log_file || echo "⚠ W&B artifact log échoué"
+import os, wandb
+run_id_file = "wandb_run_id.txt"
+run_id = open(run_id_file).read().strip() if os.path.exists(run_id_file) else None
+api = wandb.Api(api_key=os.environ["WANDB_API_KEY"])
+run = api.run(f"pimpmyrag-ner/{run_id}") if run_id else \
+      next((r for r in api.runs("pimpmyrag-ner", order="-created_at")
+            if r.state in ("running","finished")), None)
+if run is None:
+    print("⚠ Aucun run W&B trouvé — artifact non loggé")
+else:
+    art = wandb.Artifact(
+        "pimpmyrag-ner-model", type="model",
+        description=f"multitask best model — run=${run.name} score=$best_score",
+        metadata={"run_name": "$WANDB_RUN_NAME", "best_score": $best_score},
+    )
+    for fname in ("checkpoint_best_multitask.pt", "best_model_multitask.pt"):
+        if os.path.exists(fname):
+            art.add_file(fname)
+            print(f"  added {fname}")
+    run.log_artifact(art)
+    print(f"✅ W&B artifact loggé sur run {run.name}")
+PYEOF
+    else
+        echo "⚠ WANDB_API_KEY absent — W&B artifact ignoré" | tee -a $log_file
+    fi
+
+    echo "✅ Best model sauvegardé (R2 + W&B artifact)" | tee -a $log_file
+    echo "   Récupération locale : aws s3 cp ${R2_DEST}checkpoint_best_multitask.pt . --endpoint-url $R2_ENDPOINT" | tee -a $log_file
 else
     echo "⚠ Aucun checkpoint_best_multitask.pt trouvé" | tee -a $log_file
 fi
