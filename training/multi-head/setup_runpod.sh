@@ -102,37 +102,44 @@ echo "🚀 Lancement du training adaptatif..."
 ./run_adaptive_training.sh
 TRAINING_EXIT=$?
 
-# ── 6. Upload artefacts vers R2 (direct aws s3 cp, sans git) + W&B ───────────
-# On n'utilise PAS dvc add (crée des .dvc qui nécessitent un commit git)
-# ni git push (pas de credentials write depuis un pod RunPod).
-# Upload direct via aws s3 cp + W&B artifact.
+# ── 6. Upload artefacts vers R2 (boto3, déjà dans l'image) + W&B ─────────────
+# On n'utilise PAS dvc add (nécessite git commit) ni awscli (lourd à installer).
+# boto3 est préinstallé dans l'image runpod/pytorch.
 echo ""
-echo "📤 Upload artefacts post-training (R2 direct + W&B artifact)..."
+echo "📤 Upload artefacts post-training (R2 boto3 + W&B artifact)..."
 
 cd "$REPO_ROOT"
 
 CKPT_DIR="training/multi-head"
 R2_ENDPOINT="${DVC_R2_ENDPOINT:-https://07027fdcb4c08fe1418a9595986c3ac8.r2.cloudflarestorage.com}"
-# Le chemin R2 est déterminé par le nom du run stocké dans wandb_run_id.txt (ou timestamp)
 UPLOAD_TAG=$(date +%Y%m%d-%H%M)
-R2_DEST="s3://pimpmyrag-data/models/setup-${UPLOAD_TAG}/"
+R2_PREFIX="models/setup-${UPLOAD_TAG}"
 
-# Upload R2 direct
+# Upload R2 via boto3 (pas besoin d'awscli)
 if [ -n "$AWS_ACCESS_KEY_ID" ]; then
-    echo "   → Upload R2 : $R2_DEST"
-    for fname in \
-        "$CKPT_DIR/checkpoint_best_multitask.pt" \
-        "$CKPT_DIR/best_model_multitask.pt"; do
-        if [ -f "$fname" ]; then
-            aws s3 cp "$fname" "${R2_DEST}$(basename $fname)" \
-                --endpoint-url "$R2_ENDPOINT" 2>&1 | tail -2 \
-                && echo "   ✅ $(basename $fname) uploadé vers R2" \
-                || echo "   ⚠ Upload R2 échoué pour $(basename $fname)"
-        fi
-    done
-    echo ""
-    echo "   📋 Récupération locale :"
-    echo "      aws s3 cp ${R2_DEST}checkpoint_best_multitask.pt . --endpoint-url $R2_ENDPOINT"
+    python3 - <<PYEOF 2>&1 || echo "⚠ Upload R2 échoué"
+import os, boto3
+endpoint = os.environ.get("DVC_R2_ENDPOINT", "https://07027fdcb4c08fe1418a9595986c3ac8.r2.cloudflarestorage.com")
+s3 = boto3.client("s3",
+    endpoint_url=endpoint,
+    aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+    aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+)
+files = [
+    ("$CKPT_DIR/checkpoint_best_multitask.pt", "$R2_PREFIX/checkpoint_best_multitask.pt"),
+    ("$CKPT_DIR/best_model_multitask.pt",      "$R2_PREFIX/best_model_multitask.pt"),
+]
+for local, key in files:
+    if os.path.exists(local):
+        size_mb = os.path.getsize(local) / 1024**2
+        print(f"  → upload {local} ({size_mb:.0f} MB)...")
+        s3.upload_file(local, "pimpmyrag-data", key)
+        print(f"  ✅ s3://pimpmyrag-data/{key}")
+    else:
+        print(f"  ⚠ {local} introuvable, ignoré")
+print(f"\\n  📋 Récupération locale :")
+print(f"     python3 -c \\"import boto3; boto3.client('s3', endpoint_url='{endpoint}', ...).download_file('pimpmyrag-data', '$R2_PREFIX/checkpoint_best_multitask.pt', 'checkpoint_best_multitask.pt')\\"")
+PYEOF
 else
     echo "   ⚠ AWS_ACCESS_KEY_ID absent — upload R2 ignoré"
 fi

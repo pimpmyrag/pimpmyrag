@@ -426,17 +426,30 @@ if [ -f checkpoint_best_multitask.pt ]; then
     echo "💾 Upload best model vers R2 + W&B artifact..." | tee -a $log_file
     cp checkpoint_best_multitask.pt best_model_multitask.pt
 
-    # ── Upload R2 (direct, sans dvc add qui nécessite git) ────────────────────
+    # ── Upload R2 via boto3 (préinstallé dans l'image, pas besoin d'awscli) ──────
     R2_ENDPOINT="${DVC_R2_ENDPOINT:-https://07027fdcb4c08fe1418a9595986c3ac8.r2.cloudflarestorage.com}"
-    R2_DEST="s3://pimpmyrag-data/models/${WANDB_RUN_NAME}/"
+    R2_PREFIX="models/${WANDB_RUN_NAME}"
     if [ -n "$AWS_ACCESS_KEY_ID" ]; then
-        echo "   → aws s3 cp vers $R2_DEST" | tee -a $log_file
-        aws s3 cp checkpoint_best_multitask.pt "${R2_DEST}checkpoint_best_multitask.pt" \
-            --endpoint-url "$R2_ENDPOINT" 2>&1 | tee -a $log_file || \
-            echo "⚠ R2 upload échoué" | tee -a $log_file
-        aws s3 cp best_model_multitask.pt "${R2_DEST}best_model_multitask.pt" \
-            --endpoint-url "$R2_ENDPOINT" 2>&1 | tee -a $log_file || true
-        echo "   ✅ Upload R2 OK : $R2_DEST" | tee -a $log_file
+        echo "   → boto3 upload vers R2 : $R2_PREFIX/" | tee -a $log_file
+        python3 - <<PYEOF 2>&1 | tee -a $log_file || echo "⚠ R2 upload échoué" | tee -a $log_file
+import os, boto3
+s3 = boto3.client("s3",
+    endpoint_url=os.environ.get("DVC_R2_ENDPOINT","https://07027fdcb4c08fe1418a9595986c3ac8.r2.cloudflarestorage.com"),
+    aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+    aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+)
+for fname, key in [
+    ("checkpoint_best_multitask.pt", "$R2_PREFIX/checkpoint_best_multitask.pt"),
+    ("best_model_multitask.pt",      "$R2_PREFIX/best_model_multitask.pt"),
+]:
+    if os.path.exists(fname):
+        sz = os.path.getsize(fname)/1024**2
+        print(f"  uploading {fname} ({sz:.0f} MB)...")
+        s3.upload_file(fname, "pimpmyrag-data", key)
+        print(f"  OK s3://pimpmyrag-data/{key}")
+PYEOF
+        echo "   ✅ Upload R2 OK" | tee -a $log_file
+        echo "   Récupération : python3 -c \"import boto3; boto3.client('s3',endpoint_url='$R2_ENDPOINT',...).download_file('pimpmyrag-data','$R2_PREFIX/checkpoint_best_multitask.pt','ckpt.pt')\"" | tee -a $log_file
     else
         echo "⚠ AWS_ACCESS_KEY_ID absent — R2 upload ignoré" | tee -a $log_file
     fi

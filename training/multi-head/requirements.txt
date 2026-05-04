@@ -16,8 +16,8 @@ wandb>=0.17.0
 dvc>=3.0.0
 dvc-s3>=3.0.0   # backend S3 pour dvc pull
 
-# Upload direct vers R2/S3 sans git (remplace git push depuis le pod)
-awscli>=1.32.0
+# boto3 est déjà dans l'image RunPod — pas besoin d'awscli (lourd)
+# L'upload R2 se fait via boto3 directement (voir setup_runpod.sh)
 
 # RunPod SDK (lancement pods depuis le local)
 runpod>=1.9.0
