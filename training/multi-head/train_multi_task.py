@@ -4,6 +4,7 @@ import os
 os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
 
 import argparse
+import csv
 import json
 from collections import Counter
 
@@ -76,6 +77,103 @@ class ModelEMA:
 
     def state_dict(self):
         return self.shadow
+
+
+def build_fine_diagnostics(y_true, y_pred, split_name: str | None = None) -> dict:
+    """Construit des diagnostics fins légers et exportables.
+
+    - inclut un bucket `INVALID_COARSE` pour les prédictions fine = -1
+    - exporte une matrice sparse CSV et un résumé JSON si `split_name` est fourni
+    """
+    if not y_true:
+        return {
+            "fine_support_positive": 0,
+            "fine_top_confusions": [],
+            "fine_hard_labels": [],
+        }
+
+    label_names = list(FINE_LABELS) + ["INVALID_COARSE"]
+    label_ids = list(range(len(FINE_LABELS))) + [-1]
+    label_to_name = {i: n for i, n in zip(label_ids, label_names)}
+
+    conf = {(t, p): 0 for t in label_ids for p in label_ids}
+    support = Counter(y_true)
+    for yt, yp in zip(y_true, y_pred):
+        if yt not in label_to_name:
+            continue
+        pred_key = yp if yp in label_to_name else -1
+        conf[(yt, pred_key)] += 1
+
+    top_confusions = []
+    for (yt, yp), count in conf.items():
+        if count <= 0 or yt == yp:
+            continue
+        row_total = sum(conf[(yt, p)] for p in label_ids)
+        top_confusions.append({
+            "true_id": yt,
+            "true_label": label_to_name[yt],
+            "pred_id": yp,
+            "pred_label": label_to_name[yp],
+            "count": count,
+            "row_pct": round(count / max(1, row_total), 4),
+            "support": row_total,
+        })
+    top_confusions.sort(key=lambda x: (-x["count"], -x["row_pct"], x["true_label"], x["pred_label"]))
+
+    hard_labels = []
+    for label_id, label_name in enumerate(FINE_LABELS):
+        row_total = sum(conf[(label_id, p)] for p in label_ids)
+        if row_total <= 0:
+            continue
+        best_offdiag = max((conf[(label_id, p)], label_to_name[p]) for p in label_ids if p != label_id)
+        tp = conf[(label_id, label_id)]
+        recall = tp / row_total
+        hard_labels.append({
+            "label": label_name,
+            "support": row_total,
+            "recall": round(recall, 4),
+            "top_confused_with": best_offdiag[1],
+            "top_confused_count": best_offdiag[0],
+        })
+    hard_labels.sort(key=lambda x: (x["recall"], -x["support"], x["label"]))
+
+    if split_name:
+        sparse_rows = [
+            {
+                "true_label": label_to_name[yt],
+                "pred_label": label_to_name[yp],
+                "count": count,
+            }
+            for (yt, yp), count in conf.items() if count > 0
+        ]
+        csv_path = f"fine_confusion_{split_name}.csv"
+        json_path = f"fine_diagnostics_{split_name}.json"
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=["true_label", "pred_label", "count"])
+            writer.writeheader()
+            writer.writerows(sparse_rows)
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "split": split_name,
+                    "top_confusions": top_confusions[:30],
+                    "hard_labels": hard_labels[:20],
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+    else:
+        csv_path = None
+        json_path = None
+
+    return {
+        "fine_support_positive": len(y_true),
+        "fine_top_confusions": top_confusions[:20],
+        "fine_hard_labels": hard_labels[:12],
+        "fine_confusion_csv": csv_path,
+        "fine_diagnostics_json": json_path,
+    }
 
 
 # ──────────────────────────────────────────────────────────
@@ -243,6 +341,7 @@ def run_epoch(
         ema: "ModelEMA | None" = None,
         collect_hn: bool = False,
         scaler=None,           # torch.GradScaler pour AMP (None = FP32)
+        eval_split: str | None = None,
 ):
     """
     Version adaptée à l'architecture :
@@ -728,6 +827,9 @@ def run_epoch(
         ) if all_svo_true else "N/A",
         "hn_results_by_id": hn_results_by_id,
     }
+
+    if not train:
+        metrics.update(build_fine_diagnostics(all_f_true_pos, all_f_pred_pos, split_name=eval_split))
 
     return metrics
 
@@ -1254,6 +1356,7 @@ def main():
             log_every=args.log_every,
             focal_gamma=args.focal_gamma,
             max_grad_norm=0.0,   # pas de clipping en eval
+            eval_split="val",
         )
 
         if use_ema:
@@ -1331,6 +1434,10 @@ def main():
                         log_dict[f"{prefix}_f1_{lbl}"]        = f1
                         log_dict[f"{prefix}_precision_{lbl}"] = prec
                         log_dict[f"{prefix}_recall_{lbl}"]    = rec
+            for item in val_metrics.get("fine_top_confusions", [])[:5]:
+                pair = f"{item['true_label']}__{item['pred_label']}"
+                log_dict[f"val/fine_confusion_count_{pair}"] = item["count"]
+                log_dict[f"val/fine_confusion_row_pct_{pair}"] = item["row_pct"]
             wandb.log(log_dict, step=epoch)
 
         print("\n[VAL boundary]")
@@ -1339,6 +1446,16 @@ def main():
         print(val_metrics["coarse_report"])
         print("[VAL fine]")
         print(val_metrics["fine_report"])
+        if val_metrics.get("fine_top_confusions"):
+            print("[VAL fine top confusions]")
+            for item in val_metrics["fine_top_confusions"][:8]:
+                print(f"  {item['true_label']} -> {item['pred_label']}  count={item['count']} row_pct={item['row_pct']:.3f} support={item['support']}")
+        if val_metrics.get("fine_hard_labels"):
+            print("[VAL fine labels fragiles]")
+            for item in val_metrics["fine_hard_labels"][:8]:
+                print(f"  {item['label']}  recall={item['recall']:.3f} support={item['support']} top_confusion={item['top_confused_with']} ({item['top_confused_count']})")
+        if val_metrics.get("fine_confusion_csv"):
+            print(f"[VAL fine exports] csv={val_metrics['fine_confusion_csv']} json={val_metrics['fine_diagnostics_json']}")
         print("[VAL svo]")
         print(val_metrics["svo_report"])
         if val_metrics.get("gender_macro_f1", 0) > 0:
@@ -1416,6 +1533,7 @@ def main():
         accum_steps=args.accum_steps,
         log_every=args.log_every,
         focal_gamma=args.focal_gamma,
+        eval_split="test",
     )
 
     print("\n🎯 TEST")
@@ -1435,6 +1553,16 @@ def main():
     print(test_metrics["coarse_report"])
     print("[TEST fine]")
     print(test_metrics["fine_report"])
+    if test_metrics.get("fine_top_confusions"):
+        print("[TEST fine top confusions]")
+        for item in test_metrics["fine_top_confusions"][:8]:
+            print(f"  {item['true_label']} -> {item['pred_label']}  count={item['count']} row_pct={item['row_pct']:.3f} support={item['support']}")
+    if test_metrics.get("fine_hard_labels"):
+        print("[TEST fine labels fragiles]")
+        for item in test_metrics["fine_hard_labels"][:8]:
+            print(f"  {item['label']}  recall={item['recall']:.3f} support={item['support']} top_confusion={item['top_confused_with']} ({item['top_confused_count']})")
+    if test_metrics.get("fine_confusion_csv"):
+        print(f"[TEST fine exports] csv={test_metrics['fine_confusion_csv']} json={test_metrics['fine_diagnostics_json']}")
     print("[TEST svo]")
     print(test_metrics["svo_report"])
     if test_metrics.get("gender_macro_f1", 0) > 0:
@@ -1451,6 +1579,10 @@ def main():
             "test/gender_f1":    test_metrics["gender_macro_f1"],
             "test/number_f1":    test_metrics["number_macro_f1"],
             "test/loss":         test_metrics["loss"],
+            **{
+                f"test/fine_confusion_count_{item['true_label']}__{item['pred_label']}": item["count"]
+                for item in test_metrics.get("fine_top_confusions", [])[:5]
+            },
         })
         wandb.finish()
         print("📊 W&B run terminé")
