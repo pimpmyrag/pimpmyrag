@@ -109,6 +109,12 @@ START_LEVEL=${START_LEVEL:-0}
 START_EPOCH=${START_EPOCH:-1}
 KEEP_CHECKPOINT=${KEEP_CHECKPOINT:-0}
 NER_ONLY_BENCH=${NER_ONLY_BENCH:-0}
+# Phase NER-only initiale : stabilise boundary/coarse/fine avant d'introduire les têtes SVO.
+# Mettre à 0 pour désactiver (multitask dès le début), ou >0 pour N epochs warmup.
+# Empirique : les gains NER-only (+4 pts boundary sur ep 39) se forment surtout dans les
+# 5-10 premières epochs — après, le plateau NER est atteint.
+# Pendant le warmup : SVO=0, stagnation/level ignorés, checkpoint NER sauvegardé séparément.
+NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-6}
 
 current_level=$START_LEVEL
 stagnation_count=0
@@ -120,6 +126,9 @@ resume_arg=""
 mkdir -p logs
 log_file="logs/adaptive.log"
 echo "🚀 Démarrage training adaptatif — $(date)" | tee $log_file
+if [ "$NER_ONLY_BENCH" != "1" ] && [ "$NER_WARMUP_EPOCHS" -gt 0 ]; then
+    echo "🏋️  Phase NER warmup : $NER_WARMUP_EPOCHS epochs sans SVO avant multitask" | tee -a $log_file
+fi
 
 if [ "$NER_ONLY_BENCH" = "1" ]; then
     echo "🧪 Mode NER-only benchmark activé" | tee -a $log_file
@@ -243,18 +252,45 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
 
     epoch_log="logs/epoch_${current_epoch}.log"
 
-    # ── Calcul des lambdas SVO pour ce niveau (ramp progressif) ──────────────
-    svo_pct=${SVO_RAMP_PCT[$current_level]}
-    L_SVO_B_NOW=$(python3 -c "print(f'{$L_SVO_BOUNDARY * $svo_pct / 100:.4f}')")
-    L_SVO_NOW=$(python3   -c "print(f'{$L_SVO        * $svo_pct / 100:.4f}')")
-    L_ROLE_NOW=$(python3  -c "print(f'{$L_ROLE       * $svo_pct / 100:.4f}')")
-    L_VOICE_NOW=$(python3 -c "print(f'{$L_VOICE      * $svo_pct / 100:.4f}')")
-    L_CERTAINTY_NOW=$(python3 -c "print(f'{$L_CERTAINTY * $svo_pct / 100:.4f}')")
-    L_MORPHO_NOW=$(python3 -c "print(f'{$L_MORPHO    * $svo_pct / 100:.4f}')")
-    L_VPTR_NOW=$(python3  -c "print(f'{$L_VERB_PTR   * $svo_pct / 100:.4f}')")
-    echo "🎛️  Lambdas niveau ${LEVEL_NAMES[$current_level]} (SVO ramp=${svo_pct}%)" | tee -a $log_file
-    echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE  fine=$L_FINE" | tee -a $log_file
-    echo "      SVO  : svo_boundary=$L_SVO_B_NOW  svo=$L_SVO_NOW  role=$L_ROLE_NOW  voice=$L_VOICE_NOW  certainty=$L_CERTAINTY_NOW  morpho=$L_MORPHO_NOW  verb_ptr=$L_VPTR_NOW" | tee -a $log_file
+    # ── Calcul des lambdas SVO ────────────────────────────────────────────────
+    # Phase 1 : NER warmup (current_epoch <= NER_WARMUP_EPOCHS)
+    #   → SVO = 0, têtes SVO non entraînées, gradient NER pur
+    # Phase 2 : multitask avec ramp par niveau (comme avant)
+    in_warmup=0
+    if [ "$NER_ONLY_BENCH" != "1" ] && [ "$NER_WARMUP_EPOCHS" -gt 0 ] \
+       && [ $current_epoch -le $NER_WARMUP_EPOCHS ]; then
+        in_warmup=1
+        L_SVO_B_NOW=0.0000
+        L_SVO_NOW=0.0000
+        L_ROLE_NOW=0.0000
+        L_VOICE_NOW=0.0000
+        L_CERTAINTY_NOW=0.0000
+        L_MORPHO_NOW=0.0000
+        L_VPTR_NOW=0.0000
+        echo "🏋️  Warmup NER-only ep $current_epoch/$NER_WARMUP_EPOCHS — SVO=0" | tee -a $log_file
+        echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE  fine=$L_FINE" | tee -a $log_file
+    else
+        # Phase multitask : ramp SVO progressif par niveau
+        if [ $in_warmup -eq 0 ] && [ $current_epoch -eq $((NER_WARMUP_EPOCHS + 1)) ] \
+           && [ "$NER_WARMUP_EPOCHS" -gt 0 ]; then
+            echo "🚀 Fin warmup NER → démarrage multitask (niveau ${LEVEL_NAMES[$current_level]})" | tee -a $log_file
+            # Réinitialiser stagnation/niveau pour repartir proprement en multitask
+            stagnation_count=0
+            epochs_at_level=0
+            best_score=-1.0
+        fi
+        svo_pct=${SVO_RAMP_PCT[$current_level]}
+        L_SVO_B_NOW=$(python3 -c "print(f'{$L_SVO_BOUNDARY * $svo_pct / 100:.4f}')")
+        L_SVO_NOW=$(python3   -c "print(f'{$L_SVO        * $svo_pct / 100:.4f}')")
+        L_ROLE_NOW=$(python3  -c "print(f'{$L_ROLE       * $svo_pct / 100:.4f}')")
+        L_VOICE_NOW=$(python3 -c "print(f'{$L_VOICE      * $svo_pct / 100:.4f}')")
+        L_CERTAINTY_NOW=$(python3 -c "print(f'{$L_CERTAINTY * $svo_pct / 100:.4f}')")
+        L_MORPHO_NOW=$(python3 -c "print(f'{$L_MORPHO    * $svo_pct / 100:.4f}')")
+        L_VPTR_NOW=$(python3  -c "print(f'{$L_VERB_PTR   * $svo_pct / 100:.4f}')")
+        echo "🎛️  Lambdas niveau ${LEVEL_NAMES[$current_level]} (SVO ramp=${svo_pct}%)" | tee -a $log_file
+        echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE  fine=$L_FINE" | tee -a $log_file
+        echo "      SVO  : svo_boundary=$L_SVO_B_NOW  svo=$L_SVO_NOW  role=$L_ROLE_NOW  voice=$L_VOICE_NOW  certainty=$L_CERTAINTY_NOW  morpho=$L_MORPHO_NOW  verb_ptr=$L_VPTR_NOW" | tee -a $log_file
+    fi
 
     python3 train_multi_task.py \
         --train $DATA/train.adaptive.multitask.jsonl \
@@ -290,14 +326,13 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --hn-boost-fn 2.0 \
         --hn-boost-coarse 2.5 \
         --hn-boost-fine 2.0 \
-        --hn-boost-fp-svo $( [ "$NER_ONLY_BENCH" = "1" ] && echo "0.0" || echo "3.0" ) \
-        --hn-boost-fn-svo $( [ "$NER_ONLY_BENCH" = "1" ] && echo "0.0" || echo "2.0" ) \
+        --hn-boost-fp-svo $( [ "$NER_ONLY_BENCH" = "1" ] || [ "$in_warmup" = "1" ] && echo "0.0" || echo "3.0" ) \
+        --hn-boost-fn-svo $( [ "$NER_ONLY_BENCH" = "1" ] || [ "$in_warmup" = "1" ] && echo "0.0" || echo "2.0" ) \
         --hn-decay 0.85 \
         --hn-max-weight 8.0 \
         --hn-min-weight 0.3 \
         --num-workers $NUM_WORKERS \
-        $( [ "$NER_ONLY_BENCH" = "1" ] && echo "--ner-only-score" ) \
-        --wandb-run-name  "$WANDB_RUN_NAME" \
+        $( [ "$NER_ONLY_BENCH" = "1" ] && echo "--ner-only-score" ) \        --wandb-run-name  "$WANDB_RUN_NAME" \
         --wandb-tags      "$WANDB_TAGS" \
         --wandb-id-file   "$WANDB_ID_FILE" \
         $AMP_FLAG \
@@ -332,6 +367,15 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
     else
         stagnation_count=$((stagnation_count + 1))
         echo "⏸️  Pas d'amélioration ($stagnation_count/$PATIENCE)" | tee -a $log_file
+    fi
+
+    # Pendant le warmup NER : ne pas toucher au niveau ni à la stagnation
+    # (le score NER-only ne reflète pas encore le régime multitask final)
+    if [ "$in_warmup" = "1" ]; then
+        resume_arg=""
+        [ -f checkpoint_best_multitask.pt ] && resume_arg="--resume checkpoint_best_multitask.pt"
+        current_epoch=$((current_epoch + 1))
+        continue
     fi
 
     epochs_at_level=$((epochs_at_level + 1))
