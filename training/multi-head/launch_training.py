@@ -78,7 +78,7 @@ def get_env_vars(secrets: dict) -> dict:
     return env
 
 
-def launch_pod(gpu_profile: str, spot: bool, dry_run: bool):
+def launch_pod(gpu_profile: str, spot: bool, dry_run: bool, ner_only: bool = False):
     profile = GPU_PROFILES.get(gpu_profile)
     if not profile:
         print(f"❌ GPU inconnu : {gpu_profile}. Choix : {list(GPU_PROFILES)}")
@@ -86,8 +86,9 @@ def launch_pod(gpu_profile: str, spot: bool, dry_run: bool):
 
     env_vars = get_env_vars(secrets)
     cloud_type = "COMMUNITY" if spot else "SECURE"
+    training_prefix = "NER_ONLY_BENCH=1 " if ner_only else ""
     config = {
-        "name":             f"pimpmyrag-training{'-spot' if spot else ''}",
+        "name":             f"pimpmyrag-training{'-spot' if spot else ''}{'-neronly' if ner_only else ''}",
         # CUDA 12.8 (cu1281) pour compatibilité avec drivers < 12.9
         "image_name":       "runpod/pytorch:1.0.3-cu1281-torch260-ubuntu2204",
         "gpu_type_id":      profile["gpu_type_id"],
@@ -102,7 +103,7 @@ def launch_pod(gpu_profile: str, spot: bool, dry_run: bool):
             "bash -c 'apt-get update -qq && apt-get install -y -qq git && "
             "git clone https://github.com/pimpmyrag/pimpmyrag.git /workspace/pimpmyrag && "
             "cd /workspace/pimpmyrag/training/multi-head && "
-            "chmod +x setup_runpod.sh && ./setup_runpod.sh 2>&1 | tee /workspace/training.log'"
+            f"chmod +x setup_runpod.sh && {training_prefix}./setup_runpod.sh 2>&1 | tee /workspace/training.log'"
         ),
         "ports": "8888/http",  # Jupyter optionnel si besoin de debug
     }
@@ -110,6 +111,7 @@ def launch_pod(gpu_profile: str, spot: bool, dry_run: bool):
     print(f"\n🚀 Config pod [{gpu_profile}{'  SPOT' if spot else ''}]")
     print(f"   Image   : {config['image_name']}")
     print(f"   Cloud   : {cloud_type}")
+    print(f"   Mode    : {'NER-only' if ner_only else 'multitask'}")
     print(f"   GPU     : {profile['gpu_type_id']} x{profile['gpu_count']}")
     print(f"   Disk    : {profile['container_disk_in_gb']}GB container + {profile['volume_in_gb']}GB volume")
     print(f"   Env vars: {list(env_vars.keys())}")
@@ -186,6 +188,8 @@ def main():
                         help="Mode spot/interruptible (environ 40%% moins cher)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Affiche la config sans créer le pod")
+    parser.add_argument("--ner-only", action="store_true",
+                        help="Injecte NER_ONLY_BENCH=1 dans le pod pour lancer le benchmark NER-only")
     parser.add_argument("--stop", metavar="POD_ID",
                         help="Arrête un pod en cours")
     parser.add_argument("--list", action="store_true",
@@ -197,7 +201,7 @@ def main():
     elif args.stop:
         stop_pod(args.stop)
     else:
-        launch_pod(args.gpu, args.spot, args.dry_run)
+        launch_pod(args.gpu, args.spot, args.dry_run, args.ner_only)
 
 
 if __name__ == "__main__":
