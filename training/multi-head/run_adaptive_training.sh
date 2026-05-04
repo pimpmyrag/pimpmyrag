@@ -332,7 +332,8 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --hn-max-weight 8.0 \
         --hn-min-weight 0.3 \
         --num-workers $NUM_WORKERS \
-        $( [ "$NER_ONLY_BENCH" = "1" ] && echo "--ner-only-score" ) \        --wandb-run-name  "$WANDB_RUN_NAME" \
+        $( [ "$NER_ONLY_BENCH" = "1" ] && echo "--ner-only-score" ) \
+        --wandb-run-name  "$WANDB_RUN_NAME" \
         --wandb-tags      "$WANDB_TAGS" \
         --wandb-id-file   "$WANDB_ID_FILE" \
         $AMP_FLAG \
