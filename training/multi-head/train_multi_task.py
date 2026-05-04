@@ -330,7 +330,9 @@ def run_epoch(
         lambda_fine=1.8,
         lambda_svo_boundary=0.7,
         lambda_svo=0.6,
+        lambda_role=0.6,
         lambda_voice=0.15,
+        lambda_certainty=0.4,
         lambda_morpho=0.3,
         lambda_verb_ptr=0.25,
         lambda_compat=0.0,   # transmis à compute_loss (compat inter-têtes pour eventlets)
@@ -591,7 +593,9 @@ def run_epoch(
                     lambda_fine=lambda_fine,
                     lambda_svo_boundary=lambda_svo_boundary,
                     lambda_svo=lambda_svo,
+                    lambda_role=lambda_role,
                     lambda_voice=lambda_voice,
+                    lambda_certainty=lambda_certainty,
                     lambda_morpho=lambda_morpho,
                     lambda_verb_ptr=lambda_verb_ptr,
                     lambda_compat=lambda_compat,
@@ -924,8 +928,12 @@ def main():
     parser.add_argument("--lambda-fine", type=float, default=1.8)
     parser.add_argument("--lambda-svo", type=float, default=0.6,
                         help="Pondération de la loss SVO (défaut=0.8)")
+    parser.add_argument("--lambda-role", type=float, default=0.6,
+                        help="Pondération de la loss rôle SVO (défaut=0.6)")
     parser.add_argument("--lambda-voice", type=float, default=0.15,
                         help="Pondération de la loss voice ACTIVE/PASSIVE (défaut=0.5)")
+    parser.add_argument("--lambda-certainty", type=float, default=0.4,
+                        help="Pondération de la loss certainty (défaut=0.4)")
     parser.add_argument("--lambda-svo-boundary", type=float, default=0.7,
                         help="Pondération de la loss svo_boundary (détection verbes/pronoms, défaut=0.9)")
     parser.add_argument("--lambda-morpho", type=float, default=0.3,
@@ -1024,6 +1032,8 @@ def main():
                         help="Fichier où sauvegarder/lire le run ID W&B entre les epochs")
     parser.add_argument("--wandb-tags", type=str, default="",
                         help="Tags W&B séparés par des virgules (ex: 'v6.3,deberta,5090')")
+    parser.add_argument("--ner-only-score", action="store_true",
+                        help="Calcule le score d'early stopping uniquement sur les têtes NER (sans SVO)")
 
     args = parser.parse_args()
 
@@ -1303,7 +1313,9 @@ def main():
             lambda_fine=args.lambda_fine,
             lambda_svo_boundary=args.lambda_svo_boundary,
             lambda_svo=args.lambda_svo,
+            lambda_role=args.lambda_role,
             lambda_voice=args.lambda_voice,
+            lambda_certainty=args.lambda_certainty,
             lambda_morpho=args.lambda_morpho,
             lambda_verb_ptr=args.lambda_verb_ptr,
             lambda_compat=args.lambda_compat,
@@ -1348,7 +1360,9 @@ def main():
             lambda_fine=args.lambda_fine,
             lambda_svo_boundary=args.lambda_svo_boundary,
             lambda_svo=args.lambda_svo,
+            lambda_role=args.lambda_role,
             lambda_voice=args.lambda_voice,
+            lambda_certainty=args.lambda_certainty,
             lambda_morpho=args.lambda_morpho,
             lambda_verb_ptr=args.lambda_verb_ptr,
             lambda_compat=args.lambda_compat,
@@ -1365,12 +1379,19 @@ def main():
         # Step scheduler after each epoch
         scheduler.step()
 
-        score = (
-            val_metrics["boundary_f1"] * 1.5   # +0.5 vs avant : boundary est la tête la plus fragile
-            + val_metrics["coarse_macro_f1"] * 1.0
-            + val_metrics["fine_macro_f1"] * 2.0
-            + val_metrics["svo_macro_f1"] * 0.5
-        ) / 5.0
+        if args.ner_only_score:
+            score = (
+                val_metrics["boundary_f1"] * 1.5
+                + val_metrics["coarse_macro_f1"] * 1.0
+                + val_metrics["fine_macro_f1"] * 2.0
+            ) / 4.5
+        else:
+            score = (
+                val_metrics["boundary_f1"] * 1.5   # +0.5 vs avant : boundary est la tête la plus fragile
+                + val_metrics["coarse_macro_f1"] * 1.0
+                + val_metrics["fine_macro_f1"] * 2.0
+                + val_metrics["svo_macro_f1"] * 0.5
+            ) / 5.0
 
         print(f"\n📅 Epoch {epoch}")
         print(
@@ -1526,7 +1547,9 @@ def main():
         lambda_fine=args.lambda_fine,
         lambda_svo_boundary=args.lambda_svo_boundary,
         lambda_svo=args.lambda_svo,
+        lambda_role=args.lambda_role,
         lambda_voice=args.lambda_voice,
+        lambda_certainty=args.lambda_certainty,
         lambda_morpho=args.lambda_morpho,
         lambda_verb_ptr=args.lambda_verb_ptr,
         lambda_compat=args.lambda_compat,

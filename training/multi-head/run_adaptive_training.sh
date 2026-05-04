@@ -89,7 +89,9 @@ L_FINE=1.8        # Conseillé (vs 1.0 avant) — discrimine mieux les labels fi
 # Aux niveaux inférieurs, un facteur de montée multiplicatif est appliqué.
 L_SVO_BOUNDARY=0.7   # Boundary SVO (silver → moins critique)
 L_SVO=0.6            # Labels SVO (svo_verb/subject/object/iobj/tcomp/lcomp/cause/attr…)
+L_ROLE=0.6           # Rôles SVO
 L_VOICE=0.15         # Voix active/passive (très silver)
+L_CERTAINTY=0.4      # Certainty active/hypo/etc. (silver)
 L_MORPHO=0.2         # Gender/Number/Person (silver)
 L_VERB_PTR=0.25      # Pointer head verbe gouverneur (silver)
 
@@ -106,6 +108,7 @@ SVO_RAMP_PCT=(5 15 35 60 85 100)  # pourcentage × 100 du lambda cible
 START_LEVEL=${START_LEVEL:-0}
 START_EPOCH=${START_EPOCH:-1}
 KEEP_CHECKPOINT=${KEEP_CHECKPOINT:-0}
+NER_ONLY_BENCH=${NER_ONLY_BENCH:-0}
 
 current_level=$START_LEVEL
 stagnation_count=0
@@ -117,6 +120,17 @@ resume_arg=""
 mkdir -p logs
 log_file="logs/adaptive.log"
 echo "🚀 Démarrage training adaptatif — $(date)" | tee $log_file
+
+if [ "$NER_ONLY_BENCH" = "1" ]; then
+    echo "🧪 Mode NER-only benchmark activé" | tee -a $log_file
+    L_SVO_BOUNDARY=0.0
+    L_SVO=0.0
+    L_ROLE=0.0
+    L_VOICE=0.0
+    L_CERTAINTY=0.0
+    L_MORPHO=0.0
+    L_VERB_PTR=0.0
+fi
 
 # ── Sources gold v6.1 ──────────────────────────────────────────────────────────
 # *_v6.jsonl = v6 + Mistral corrections (v6.1) (label 34, coarse=ORG)
@@ -143,6 +157,10 @@ DATASET_VERSION=$(basename "$TRAIN_SILVER" | grep -oE 'v[0-9]+\.[0-9]+' | head -
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
+if [ "$NER_ONLY_BENCH" = "1" ]; then
+    WANDB_RUN_NAME="${WANDB_RUN_NAME}-neronly"
+    WANDB_TAGS="${WANDB_TAGS},ner-only"
+fi
 WANDB_ID_FILE="wandb_run_id.txt"
 # Supprime un éventuel run ID d'une session précédente (sauf en mode reprise)
 if [ "$KEEP_CHECKPOINT" != "1" ]; then
@@ -227,12 +245,14 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
     svo_pct=${SVO_RAMP_PCT[$current_level]}
     L_SVO_B_NOW=$(python3 -c "print(f'{$L_SVO_BOUNDARY * $svo_pct / 100:.4f}')")
     L_SVO_NOW=$(python3   -c "print(f'{$L_SVO        * $svo_pct / 100:.4f}')")
+    L_ROLE_NOW=$(python3  -c "print(f'{$L_ROLE       * $svo_pct / 100:.4f}')")
     L_VOICE_NOW=$(python3 -c "print(f'{$L_VOICE      * $svo_pct / 100:.4f}')")
+    L_CERTAINTY_NOW=$(python3 -c "print(f'{$L_CERTAINTY * $svo_pct / 100:.4f}')")
     L_MORPHO_NOW=$(python3 -c "print(f'{$L_MORPHO    * $svo_pct / 100:.4f}')")
     L_VPTR_NOW=$(python3  -c "print(f'{$L_VERB_PTR   * $svo_pct / 100:.4f}')")
     echo "🎛️  Lambdas niveau ${LEVEL_NAMES[$current_level]} (SVO ramp=${svo_pct}%)" | tee -a $log_file
     echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE  fine=$L_FINE" | tee -a $log_file
-    echo "      SVO  : svo_boundary=$L_SVO_B_NOW  svo=$L_SVO_NOW  voice=$L_VOICE_NOW  morpho=$L_MORPHO_NOW  verb_ptr=$L_VPTR_NOW" | tee -a $log_file
+    echo "      SVO  : svo_boundary=$L_SVO_B_NOW  svo=$L_SVO_NOW  role=$L_ROLE_NOW  voice=$L_VOICE_NOW  certainty=$L_CERTAINTY_NOW  morpho=$L_MORPHO_NOW  verb_ptr=$L_VPTR_NOW" | tee -a $log_file
 
     python3 train_multi_task.py \
         --train $DATA/train.adaptive.multitask.jsonl \
@@ -253,10 +273,12 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lambda-fine       $L_FINE \
         --lambda-svo-boundary $L_SVO_B_NOW \
         --lambda-svo        $L_SVO_NOW \
+        --lambda-role       $L_ROLE_NOW \
         --lambda-voice      $L_VOICE_NOW \
+        --lambda-certainty  $L_CERTAINTY_NOW \
         --lambda-morpho     $L_MORPHO_NOW \
         --lambda-verb-ptr   $L_VPTR_NOW \
-        --lambda-compat     0.2 \
+        --lambda-compat     $( [ "$NER_ONLY_BENCH" = "1" ] && echo "0.0" || echo "0.2" ) \
         --focal-gamma 0.5 \
         --device $DEVICE \
         --layer-lr-decay 0.9 \
@@ -266,12 +288,13 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --hn-boost-fn 2.0 \
         --hn-boost-coarse 2.5 \
         --hn-boost-fine 2.0 \
-        --hn-boost-fp-svo 3.0 \
-        --hn-boost-fn-svo 2.0 \
+        --hn-boost-fp-svo $( [ "$NER_ONLY_BENCH" = "1" ] && echo "0.0" || echo "3.0" ) \
+        --hn-boost-fn-svo $( [ "$NER_ONLY_BENCH" = "1" ] && echo "0.0" || echo "2.0" ) \
         --hn-decay 0.85 \
         --hn-max-weight 8.0 \
         --hn-min-weight 0.3 \
         --num-workers $NUM_WORKERS \
+        $( [ "$NER_ONLY_BENCH" = "1" ] && echo "--ner-only-score" ) \
         --wandb-run-name  "$WANDB_RUN_NAME" \
         --wandb-tags      "$WANDB_TAGS" \
         --wandb-id-file   "$WANDB_ID_FILE" \
