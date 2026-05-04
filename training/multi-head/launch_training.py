@@ -87,7 +87,8 @@ def launch_pod(gpu_profile: str, spot: bool, dry_run: bool):
     env_vars = get_env_vars(secrets)
     config = {
         "name":             "pimpmyrag-training",
-        "image_name":       "runpod/pytorch:1.0.3-cu1290-torch260-ubuntu2204",
+        # CUDA 12.8 (cu1281) pour compatibilité avec drivers < 12.9
+        "image_name":       "runpod/pytorch:1.0.3-cu1281-torch260-ubuntu2204",
         "gpu_type_id":      profile["gpu_type_id"],
         "gpu_count":        profile["gpu_count"],
         "container_disk_in_gb": profile["container_disk_in_gb"],
