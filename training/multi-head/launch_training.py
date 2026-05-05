@@ -101,7 +101,7 @@ def launch_pod(gpu_profile: str, spot: bool, dry_run: bool, ner_only: bool = Fal
         # Commande injectée via docker_args (exécutée au démarrage du container)
         "docker_args": (
             "bash -c 'apt-get update -qq && apt-get install -y -qq git && "
-            "git clone https://github.com/pimpmyrag/pimpmyrag.git /workspace/pimpmyrag && "
+            "git clone --branch main https://github.com/pimpmyrag/pimpmyrag.git /workspace/pimpmyrag && "
             "cd /workspace/pimpmyrag/training/multi-head && "
             f"chmod +x setup_runpod.sh && {training_prefix}./setup_runpod.sh 2>&1 | tee /workspace/training.log'"
         ),

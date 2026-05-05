@@ -1,22 +1,22 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════
-#  setup_runpod.sh — Setup RunPod pour training v6.1.1 (labels v6.1, dataset DVC)
+#  setup_runpod.sh — Setup RunPod pour training v7.0 (labels v7.0, dataset DVC)
 #
-#  Usage depuis RunPod (après git clone) :
+#  Usage depuis RunPod (aprs git clone) :
 #    cd pimpmyrag/training/multi-head
 #    chmod +x setup_runpod.sh && ./setup_runpod.sh
 #
 #  Variables d'environnement attendues (RunPod → Secrets) :
-#    WANDB_API_KEY           — clé W&B (optionnel, offline si absent)
-#    AWS_ACCESS_KEY_ID       — pour DVC remote S3 (si remote = S3)
+#    WANDB_API_KEY           — cl W&B (optionnel, offline si absent)
+#    AWS_ACCESS_KEY_ID       — pour DVC remote R2 (Cloudflare)
 #    AWS_SECRET_ACCESS_KEY   — idem
-#    DVC_REMOTE              — nom du remote DVC à utiliser (défaut: s3remote)
+#    DVC_R2_ENDPOINT         — URL endpoint R2
 # ═══════════════════════════════════════════════════════════════════════════
 set -e
 cd "$(dirname "$0")"
 REPO_ROOT="$(cd ../.. && pwd)"
 
-echo "📦 Setup RunPod v6.9 — $(date)"
+echo "📦 Setup RunPod v7.0 — $(date)"
 
 # ── 1. Dépendances ───────────────────────────────────────────────────────────
 echo ""
@@ -56,9 +56,9 @@ else
     export WANDB_MODE=offline
 fi
 
-# ── 3. DVC pull des datasets v6.9 ──────────────────────────────────────────────
+# ── 3. DVC pull des datasets v7.0 ──────────────────────────────────────────────
 echo ""
-echo "📥 DVC pull datasets v6.9..."
+echo "📥 DVC pull datasets v7.0..."
 cd "$REPO_ROOT"
 
 # Cloudflare R2 — injecte les credentials depuis les variables d'env RunPod
@@ -70,31 +70,33 @@ if [ -n "$AWS_ACCESS_KEY_ID" ]; then
     dvc remote modify --local r2remote secret_access_key "$AWS_SECRET_ACCESS_KEY"
 fi
 
-dvc pull training/multi-head/data/train_v6.9.jsonl \
-         training/multi-head/data/val_v6.9.jsonl \
-         training/multi-head/data/test_v6.9.jsonl
+dvc pull training/multi-head/data/train_v7.0.jsonl \
+         training/multi-head/data/val_v7.0.jsonl \
+         training/multi-head/data/test_v7.0.jsonl
 
 cd training/multi-head
 
-echo "✅ Datasets v6.9 présents :"
-wc -l data/train_v6.9.jsonl data/val_v6.9.jsonl data/test_v6.9.jsonl
+echo "✅ Datasets v7.0 présents :"
+wc -l data/train_v7.0.jsonl data/val_v7.0.jsonl data/test_v7.0.jsonl
 
-# ── 4. Vérification schéma labels v6.9 ─────────────────────────────────────────
+# ── 4. Vérification schéma labels v7.0 ─────────────────────────────────────────
 echo ""
-echo "🔍 Vérification labels v6.9 (NUM_FINE=42, NUM_COARSE=10)..."
+echo "🔍 Vérification labels v7.0 (NUM_FINE=39, NUM_COARSE=10)..."
 python3 - <<'PYEOF'
 import sys
 sys.path.insert(0, '.')
 import labels as L
-assert L.NUM_FINE == 42, f"NUM_FINE={L.NUM_FINE} attendu 42"
+assert L.NUM_FINE == 39, f"NUM_FINE={L.NUM_FINE} attendu 39"
 assert len(L.COARSE_LABELS) == 10, f"NUM_COARSE={len(L.COARSE_LABELS)} attendu 10"
 assert 'hint_inst_name'     in L.FINE2ID, "hint_inst_name manquant"
 assert 'hint_inst_role'     in L.FINE2ID, "hint_inst_role manquant"
 assert 'hint_document'      in L.FINE2ID, "hint_document manquant"
-assert 'hint_notion'        in L.FINE2ID, "hint_notion manquant (v6.9)"
-assert 'hint_process'       in L.FINE2ID, "hint_process manquant (v6.9)"
-assert 'hint_doctrine'      in L.FINE2ID, "hint_doctrine manquant (v6.9)"
-print(f"✅ labels.py v6.9 OK — NUM_FINE={L.NUM_FINE}  NUM_COARSE={len(L.COARSE_LABELS)}")
+assert 'hint_notion'    in L.FINE2ID, "hint_notion manquant (v7.0)"
+assert 'hint_doctrine'  in L.FINE2ID, "hint_doctrine manquant (v7.0)"
+assert 'hint_process' not in L.FINE2ID, "hint_process encore present — labels.py pas mis a jour v7.0"
+assert 'hint_rule'    not in L.FINE2ID, "hint_rule encore present — labels.py pas mis a jour v7.0"
+assert 'hint_concept' not in L.FINE2ID, "hint_concept encore present — labels.py pas mis a jour v7.0"
+print(f"✅ labels.py v7.0 OK — NUM_FINE={L.NUM_FINE}  NUM_COARSE={len(L.COARSE_LABELS)}")
 PYEOF
 
 # ── 5. Lancement du training ─────────────────────────────────────────────────
@@ -156,7 +158,7 @@ if run is None:
     print("⚠ Aucun run W&B trouvé — artifact non loggé")
 else:
     art = wandb.Artifact("pimpmyrag-ner-model", type="model",
-        description="checkpoint_best + best_model multitask v6.9")
+        description="checkpoint_best + best_model multitask v7.0")
     for fname in ("training/multi-head/checkpoint_best_multitask.pt",
                   "training/multi-head/best_model_multitask.pt"):
         if os.path.exists(fname):
