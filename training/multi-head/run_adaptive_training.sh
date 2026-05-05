@@ -141,14 +141,14 @@ if [ "$NER_ONLY_BENCH" = "1" ]; then
     L_VERB_PTR=0.0
 fi
 
-# ── Sources gold v6.9 ──────────────────────────────────────────────────────────
-# v6.9 : hint_concept redistributé en 7 sous-types via Claude Haiku Batch API
-#   hint_notion, hint_field, hint_state, hint_work_generic,
-#   hint_doctrine, hint_rule, hint_process + hint_concept (fallback ~10%)
-#   → 42 fine labels (FINE_NONE_ID=42)
-TRAIN_SILVER="$DATA/train_v6.9.jsonl"
-VAL_SILVER="$DATA/val_v6.9.jsonl"
-TEST_SILVER="$DATA/test_v6.9.jsonl"
+# ── Sources gold v7.0 ──────────────────────────────────────────────────────────
+# v7.0 : hint_rule, hint_process, hint_concept supprimés (→ hint_notion/hint_event_nominal)
+#   hint_concept éclaté en 4 sous-types sans fallback :
+#   hint_doctrine, hint_state, hint_notion, hint_work_generic, hint_field
+#   → 39 fine labels (FINE_NONE_ID=39)
+TRAIN_SILVER="$DATA/train_v7.0.jsonl"
+VAL_SILVER="$DATA/val_v7.0.jsonl"
+TEST_SILVER="$DATA/test_v7.0.jsonl"
 
 # Vérification présence des fichiers gold
 for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do
@@ -158,7 +158,7 @@ for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do
         exit 1
     fi
 done
-echo "📦 Source gold v4 : $TRAIN_SILVER ($(wc -l < "$TRAIN_SILVER") phrases)" | tee -a $log_file
+echo "📦 Source gold v7.0 : $TRAIN_SILVER ($(wc -l < "$TRAIN_SILVER") phrases)" | tee -a $log_file
 echo "📊 Val  source    : $VAL_SILVER  ($(wc -l < "$VAL_SILVER") phrases)"    | tee -a $log_file
 echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"    | tee -a $log_file
 
@@ -226,9 +226,9 @@ sd = c.get('model_state', c)
 k = [k for k in sd if 'fine_head' in k and 'weight' in k]
 print(sd[k[0]].shape[0] if k else 0)
 " 2>/dev/null || echo "0")
-        if [ "$CKPT_FINE" != "42" ] && [ "$CKPT_FINE" != "0" ]; then
-            echo "⚠️  Checkpoint incompatible : fine_head=$CKPT_FINE classes (attendu 42 — labels v6.9)" | tee -a $log_file
-            echo "   → Démarrage à froid (checkpoints v6.6 ont fine=36, v5 ont fine=34)" | tee -a $log_file
+        if [ "$CKPT_FINE" != "39" ] && [ "$CKPT_FINE" != "0" ]; then
+            echo "⚠️  Checkpoint incompatible : fine_head=$CKPT_FINE classes (attendu 39 — labels v7.0)" | tee -a $log_file
+            echo "   → Démarrage à froid (checkpoints v6.9 ont fine=42, v6.6 ont fine=36)" | tee -a $log_file
             resume_arg=""
         else
             resume_arg="--resume checkpoint_best_multitask.pt"
