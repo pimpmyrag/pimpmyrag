@@ -66,10 +66,10 @@ fi
 
 MODEL="microsoft/deberta-v3-base"
 DATA="data"
-MAX_EPOCHS=${MAX_EPOCHS:-50}
-PATIENCE=${PATIENCE:-4}
-MAX_EPOCHS_PER_LEVEL=${MAX_EPOCHS_PER_LEVEL:-8}
-MIN_DELTA=${MIN_DELTA:-0.0005}
+MAX_EPOCHS=${MAX_EPOCHS:-60}
+PATIENCE=${PATIENCE:-5}
+MAX_EPOCHS_PER_LEVEL=${MAX_EPOCHS_PER_LEVEL:-12}
+MIN_DELTA=${MIN_DELTA:-0.0003}
 
 # Niveaux de difficulté progressifs (6 niveaux)
 LEVEL_NAMES=("easy" "easy+" "medium" "medium+" "hard" "full")
@@ -303,7 +303,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --patience 0 \
         --batch-size $BS \
         --accum-steps $ACCUM \
-        --lr 5e-6 \
+        --lr 8e-6 \
         --head-lr-multiplier 4.0 \
         --warmup-epochs 0 \
         --max-grad-norm 1.0 \
