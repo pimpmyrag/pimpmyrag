@@ -29,25 +29,25 @@ FINE_LABELS = [
     "hint_time_date",        # 19
     "hint_time_clock",       # 20
     "hint_time_duration",    # 21
-    "hint_quantity",         # 22
-    "hint_measure",          # 23
-    "hint_percentage",       # 24
-    "hint_count",            # 25
-    "hint_money",            # 26
-    "hint_rate",             # 27
-    "hint_work_of_art",      # 28
-    "hint_law",              # 29
-    "hint_document",         # 30  rapport, lettre, communiqué, données, contrat…
-    "hint_disease",          # 31
-    "hint_language",         # 32
-    "hint_inst_role",        # 33  institution GÉNÉRIQUE sans qualificatif (gouvernement, police, armée, parlement, tribunal…)
+    "hint_measure",          # 22
+    "hint_percentage",       # 23
+    "hint_count",            # 24
+    "hint_money",            # 25
+    "hint_rate",             # 26
+    "hint_work_of_art",      # 27
+    "hint_work_of_art",      # 27
+    "hint_law",              # 28
+    "hint_document",         # 29  rapport, lettre, communiqué, données, contrat…
+    "hint_disease",          # 30
+    "hint_language",         # 31
+    "hint_inst_role",        # 32  institution GÉNÉRIQUE sans qualificatif (gouvernement, police, armée, parlement, tribunal…)
     # ▼ v7.0 : hint_rule, hint_process, hint_concept supprimés (→ hint_notion/hint_event_nominal)
     #          hint_concept éclaté en 4 sous-types sans fallback
-    "hint_doctrine",         # 34  doctrine, idéologie, courant de pensée, théorie (nommée ou non)
-    "hint_state",            # 35  état, condition, situation abstraite (pauvreté, crise, guerre, paix…)
-    "hint_notion",           # 36  notion, concept abstrait pur, valeur, principe, règle/norme générique
-    "hint_work_generic",     # 37  production culturelle générique sans titre (film, livre, presse, médias…)
-    "hint_field",            # 38  domaine / secteur d'activité (santé, éducation, agriculture, finance…)
+    "hint_doctrine",         # 33  doctrine, idéologie, courant de pensée, théorie (nommée ou non)
+    "hint_state",            # 34  état, condition, situation abstraite (pauvreté, crise, guerre, paix…)
+    "hint_notion",           # 35  notion, concept abstrait pur, valeur, principe, règle/norme générique
+    "hint_work_generic",     # 36  production culturelle générique sans titre (film, livre, presse, médias…)
+    "hint_field",            # 37  domaine / secteur d'activité (santé, éducation, agriculture, finance…)
 ]
 
 FINE2ID = {x: i for i, x in enumerate(FINE_LABELS)}
@@ -56,7 +56,7 @@ ID2FINE = {i: x for x, i in FINE2ID.items()}
 NUM_FINE = len(FINE_LABELS)
 
 # Sentinel pour les spans négatifs (pas un vrai label fine)
-FINE_NONE_ID = NUM_FINE  # = 39, hors range [0..38]
+FINE_NONE_ID = NUM_FINE  # = 38, hors range [0..37]
 
 # ─────────────────────────────────────────────────────────────
 # COARSE LABELS
@@ -121,7 +121,6 @@ COARSE_TO_FINE = {
         FINE2ID["hint_object_name"],
     ],
     COARSE2ID["VALUE"]: [
-        FINE2ID["hint_quantity"],
         FINE2ID["hint_measure"],
         FINE2ID["hint_percentage"],
         FINE2ID["hint_count"],

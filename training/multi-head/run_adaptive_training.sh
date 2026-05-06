@@ -141,14 +141,15 @@ if [ "$NER_ONLY_BENCH" = "1" ]; then
     L_VERB_PTR=0.0
 fi
 
-# ── Sources gold v7.0 ──────────────────────────────────────────────────────────
+# ── Sources gold v8.0 ──────────────────────────────────────────────────────────
 # v7.0 : hint_rule, hint_process, hint_concept supprimés (→ hint_notion/hint_event_nominal)
 #   hint_concept éclaté en 4 sous-types sans fallback :
 #   hint_doctrine, hint_state, hint_notion, hint_work_generic, hint_field
-#   → 39 fine labels (FINE_NONE_ID=39)
-TRAIN_SILVER="$DATA/train_v7.0.jsonl"
-VAL_SILVER="$DATA/val_v7.0.jsonl"
-TEST_SILVER="$DATA/test_v7.0.jsonl"
+# v8.0 : hint_quantity supprimé (→ hint_measure comme fallback)
+#   → 38 fine labels (FINE_NONE_ID=38)
+TRAIN_SILVER="$DATA/train.jsonl"
+VAL_SILVER="$DATA/val.jsonl"
+TEST_SILVER="$DATA/test.jsonl"
 
 # Vérification présence des fichiers gold
 for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do
@@ -158,13 +159,13 @@ for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do
         exit 1
     fi
 done
-echo "📦 Source gold v7.0 : $TRAIN_SILVER ($(wc -l < "$TRAIN_SILVER") phrases)" | tee -a $log_file
+echo "📦 Source gold (DVC) : $TRAIN_SILVER ($(wc -l < "$TRAIN_SILVER") phrases)" | tee -a $log_file
 echo "📊 Val  source    : $VAL_SILVER  ($(wc -l < "$VAL_SILVER") phrases)"    | tee -a $log_file
 echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"    | tee -a $log_file
 
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
-DATASET_VERSION=$(basename "$TRAIN_SILVER" | grep -oE 'v[0-9]+\.[0-9]+' | head -1 || echo "v6")
+DATASET_VERSION="v8.0"
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
@@ -226,9 +227,9 @@ sd = c.get('model_state', c)
 k = [k for k in sd if 'fine_head' in k and 'weight' in k]
 print(sd[k[0]].shape[0] if k else 0)
 " 2>/dev/null || echo "0")
-        if [ "$CKPT_FINE" != "39" ] && [ "$CKPT_FINE" != "0" ]; then
-            echo "⚠️  Checkpoint incompatible : fine_head=$CKPT_FINE classes (attendu 39 — labels v7.0)" | tee -a $log_file
-            echo "   → Démarrage à froid (checkpoints v6.9 ont fine=42, v6.6 ont fine=36)" | tee -a $log_file
+        if [ "$CKPT_FINE" != "38" ] && [ "$CKPT_FINE" != "0" ]; then
+            echo "⚠️  Checkpoint incompatible : fine_head=$CKPT_FINE classes (attendu 38 — labels v8.0 sans hint_quantity)" | tee -a $log_file
+            echo "   → Démarrage à froid (v7.0 ont fine=39, v6.9 ont fine=42, v6.6 ont fine=36)" | tee -a $log_file
             resume_arg=""
         else
             resume_arg="--resume checkpoint_best_multitask.pt"
