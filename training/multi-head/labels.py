@@ -35,7 +35,6 @@ FINE_LABELS = [
     "hint_money",            # 25
     "hint_rate",             # 26
     "hint_work_of_art",      # 27
-    "hint_work_of_art",      # 27
     "hint_law",              # 28
     "hint_document",         # 29  rapport, lettre, communiqué, données, contrat…
     "hint_disease",          # 30
@@ -43,6 +42,7 @@ FINE_LABELS = [
     "hint_inst_role",        # 32  institution GÉNÉRIQUE sans qualificatif (gouvernement, police, armée, parlement, tribunal…)
     # ▼ v7.0 : hint_rule, hint_process, hint_concept supprimés (→ hint_notion/hint_event_nominal)
     #          hint_concept éclaté en 4 sous-types sans fallback
+    # ▼ v8.0 : hint_quantity supprimé (→ hint_measure comme fallback)
     "hint_doctrine",         # 33  doctrine, idéologie, courant de pensée, théorie (nommée ou non)
     "hint_state",            # 34  état, condition, situation abstraite (pauvreté, crise, guerre, paix…)
     "hint_notion",           # 35  notion, concept abstrait pur, valeur, principe, règle/norme générique
