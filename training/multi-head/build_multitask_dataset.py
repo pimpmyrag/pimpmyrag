@@ -119,6 +119,10 @@ def build_gold_candidates(row, tokenizer):
                 if v_tok is not None:
                     gov_verb_tok_start = v_tok[0]
 
+            # Conversion du champ person (peut être int ou str dans différentes versions du dataset)
+            person_raw = sp.get("person")
+            person_id = PERSON2ID.get(str(person_raw) if person_raw is not None else "", PERSON_NONE_ID)
+
             cand = {
                 "char_start":          start,
                 "char_end":            end,
@@ -134,7 +138,7 @@ def build_gold_candidates(row, tokenizer):
                 "certainty_label_id":  certainty_id,
                 "gender_label_id":     GENDER2ID.get(sp.get("gender"), GENDER_NONE_ID),
                 "number_label_id":     NUMBER2ID.get(sp.get("number"), NUMBER_NONE_ID),
-                "person_label_id":     PERSON2ID.get(sp.get("person"), PERSON_NONE_ID),
+                "person_label_id":     person_id,
                 "gov_verb_tok_start":  gov_verb_tok_start,
                 "mod_of_tok_start":    -1,
                 "neg_type":            "syn_gold",
