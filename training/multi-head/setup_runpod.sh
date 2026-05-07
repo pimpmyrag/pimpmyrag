@@ -45,6 +45,12 @@ fi
 # Installe seulement requirements.txt (sans torch, déjà présent)
 pip install -q -r requirements.txt
 
+# Fix DebertaV2 lazy loader : sentencepiece DOIT être dans le venv, pas juste system-site-packages.
+# Avec --system-site-packages, le sentencepiece système est visible mais son extension C peut être
+# incompatible avec le Python du venv → ModuleNotFoundError à l'import de DebertaV2Model.
+pip install -q --force-reinstall "sentencepiece>=0.2.0" "protobuf>=4.0.0"
+echo "   ✅ sentencepiece $(python3 -c 'import sentencepiece; print(sentencepiece.__version__)')"
+
 # ── 2. W&B login ─────────────────────────────────────────────────────────────
 echo ""
 if [ -n "$WANDB_API_KEY" ]; then
