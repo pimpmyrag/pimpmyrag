@@ -21,24 +21,28 @@ echo "📦 Setup RunPod v8.1 — $(date)"
 # ── 1. Dépendances ───────────────────────────────────────────────────────────
 echo ""
 echo "🐍 Installation des dépendances..."
-# --system-site-packages : hérite du torch CUDA de l'image de base (garanti GPU)
-# Sans ça, pip installe torch CPU depuis PyPI en fallback → DEVICE=cpu → scores ~0
+# --system-site-packages : hérite torch/transformers de l'image de base
+# Évite de re-télécharger torch (2 GB) à chaque pod
 python3 -m venv venv --system-site-packages 2>/dev/null || true
 source venv/bin/activate
 
-TORCH_VER=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "inconnu")
-CUDA_OK=$(python3 -c "import torch; print('yes' if torch.cuda.is_available() else 'no')" 2>/dev/null || echo "no")
-echo "   ✅ torch ${TORCH_VER} (CUDA disponible: $CUDA_OK)"
+# Vérifie si torch >=2.6 est déjà dispo (hérité de l'image)
+TORCH_OK=$(python3 -c "import torch; v=tuple(int(x) for x in torch.__version__.split('.')[:2]); print('yes' if v>=(2,6) else 'no')" 2>/dev/null || echo "no")
+if [ "$TORCH_OK" = "no" ]; then
+    echo "   → torch <2.6 dans l'image, upgrade..."
+    CUDA_VER=$(nvidia-smi 2>/dev/null | grep -oP "CUDA Version: \K[0-9.]+" | head -1 || echo "")
+    if [ -n "$CUDA_VER" ]; then
+        CUDA_SHORT=$(echo "$CUDA_VER" | tr -d '.' | cut -c1-3)
+        pip install -q "torch>=2.6.0" --index-url "https://download.pytorch.org/whl/cu${CUDA_SHORT}" \
+            || pip install -q "torch>=2.6.0"
+    else
+        pip install -q "torch>=2.6.0"
+    fi
+else
+    echo "   ✅ torch $(python3 -c 'import torch; print(torch.__version__)') déjà installé (image de base)"
+fi
 
-# ── Fix DeBERTa-v2 : force-reinstall sentencepiece + protobuf dans le venv ──
-# Avec --system-site-packages, les versions système peuvent être incohérentes avec
-# la version de transformers qu'on installe → DebertaV2Model ModuleNotFoundError.
-# --force-reinstall garantit une version propre dans le venv qui prend la priorité.
-echo "   → Force-reinstall sentencepiece + protobuf + transformers (fix DebertaV2)..."
-pip install -q --force-reinstall "sentencepiece>=0.1.99" "protobuf>=4.0.0"
-pip install -q --force-reinstall "transformers>=4.40.0,<4.51.0" "tokenizers>=0.19.0"
-
-# ── Reste des dépendances (torch exclu) ──────────────────────────────────────
+# Installe seulement requirements.txt (sans torch, déjà présent)
 pip install -q -r requirements.txt
 
 # ── 2. W&B login ─────────────────────────────────────────────────────────────
@@ -57,39 +61,14 @@ echo ""
 echo "📥 DVC pull datasets v8.1..."
 cd "$REPO_ROOT"
 
-# ── Pré-check credentials R2 ─────────────────────────────────────────────────
-if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
-    echo ""
-    echo "⚠️  Credentials R2 manquants (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)"
-    echo "   → Sur RunPod : pod template → Environment Variables → ajouter les secrets"
-    echo "   → Ou saisir maintenant :"
-    echo ""
-    if [ -t 0 ]; then
-        # Terminal interactif — on peut lire
-        read -r -p "   AWS_ACCESS_KEY_ID     : " AWS_ACCESS_KEY_ID
-        read -r -s -p "   AWS_SECRET_ACCESS_KEY : " AWS_SECRET_ACCESS_KEY
-        echo ""
-        read -r -p "   DVC_R2_ENDPOINT (entrée = valeur par défaut) : " _EP
-        [ -n "$_EP" ] && DVC_R2_ENDPOINT="$_EP"
-        export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY DVC_R2_ENDPOINT
-    else
-        echo "   ❌ Aucun terminal interactif — impossible de saisir les credentials."
-        echo "      Relancer le pod avec les secrets configurés OU exporter les variables"
-        echo "      avant d'appeler ce script :"
-        echo "        export AWS_ACCESS_KEY_ID=..."
-        echo "        export AWS_SECRET_ACCESS_KEY=..."
-        echo "        export DVC_R2_ENDPOINT=https://..."
-        echo "        ./setup_runpod.sh"
-        exit 1
-    fi
-fi
-
 # Cloudflare R2 — injecte les credentials depuis les variables d'env RunPod
 if [ -n "$DVC_R2_ENDPOINT" ]; then
     dvc remote modify r2remote endpointurl "$DVC_R2_ENDPOINT"
 fi
-dvc remote modify --local r2remote access_key_id     "$AWS_ACCESS_KEY_ID"
-dvc remote modify --local r2remote secret_access_key "$AWS_SECRET_ACCESS_KEY"
+if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+    dvc remote modify --local r2remote access_key_id     "$AWS_ACCESS_KEY_ID"
+    dvc remote modify --local r2remote secret_access_key "$AWS_SECRET_ACCESS_KEY"
+fi
 
 dvc pull training/multi-head/data/train_v8.1.jsonl \
          training/multi-head/data/val_v8.1.jsonl \
