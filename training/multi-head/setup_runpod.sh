@@ -64,14 +64,39 @@ echo ""
 echo "📥 DVC pull datasets v8.1..."
 cd "$REPO_ROOT"
 
+# ── Pré-check credentials R2 ─────────────────────────────────────────────────
+if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+    echo ""
+    echo "⚠️  Credentials R2 manquants (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)"
+    echo "   → Sur RunPod : pod template → Environment Variables → ajouter les secrets"
+    echo "   → Ou saisir maintenant :"
+    echo ""
+    if [ -t 0 ]; then
+        # Terminal interactif — on peut lire
+        read -r -p "   AWS_ACCESS_KEY_ID     : " AWS_ACCESS_KEY_ID
+        read -r -s -p "   AWS_SECRET_ACCESS_KEY : " AWS_SECRET_ACCESS_KEY
+        echo ""
+        read -r -p "   DVC_R2_ENDPOINT (entrée = valeur par défaut) : " _EP
+        [ -n "$_EP" ] && DVC_R2_ENDPOINT="$_EP"
+        export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY DVC_R2_ENDPOINT
+    else
+        echo "   ❌ Aucun terminal interactif — impossible de saisir les credentials."
+        echo "      Relancer le pod avec les secrets configurés OU exporter les variables"
+        echo "      avant d'appeler ce script :"
+        echo "        export AWS_ACCESS_KEY_ID=..."
+        echo "        export AWS_SECRET_ACCESS_KEY=..."
+        echo "        export DVC_R2_ENDPOINT=https://..."
+        echo "        ./setup_runpod.sh"
+        exit 1
+    fi
+fi
+
 # Cloudflare R2 — injecte les credentials depuis les variables d'env RunPod
 if [ -n "$DVC_R2_ENDPOINT" ]; then
     dvc remote modify r2remote endpointurl "$DVC_R2_ENDPOINT"
 fi
-if [ -n "$AWS_ACCESS_KEY_ID" ]; then
-    dvc remote modify --local r2remote access_key_id     "$AWS_ACCESS_KEY_ID"
-    dvc remote modify --local r2remote secret_access_key "$AWS_SECRET_ACCESS_KEY"
-fi
+dvc remote modify --local r2remote access_key_id     "$AWS_ACCESS_KEY_ID"
+dvc remote modify --local r2remote secret_access_key "$AWS_SECRET_ACCESS_KEY"
 
 dvc pull training/multi-head/data/train_v8.1.jsonl \
          training/multi-head/data/val_v8.1.jsonl \
