@@ -40,9 +40,9 @@ if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
         BS=96
         ACCUM=1
     else
-        # RTX 3090 / 4090 24 GB — BS=32 accum=3 = 96 effectif (plus stable qu'BS=48)
-        BS=32
-        ACCUM=3
+        # RTX 3090 / 4090 24 GB — BF16 BS=48 accum=2 = batch effectif 96
+        BS=48
+        ACCUM=2
     fi
     NUM_WORKERS=4
     export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
@@ -352,7 +352,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --hn-max-weight 8.0 \
         --hn-min-weight 0.3 \
         --num-workers $NUM_WORKERS \
-        $( [ "$NER_ONLY_BENCH" = "1" ] || [ "$in_warmup" = "1" ] && echo "--ner-only-score" ) \
+        $( [ "$NER_ONLY_BENCH" = "1" ] && echo "--ner-only-score" ) \
         --wandb-run-name  "$WANDB_RUN_NAME" \
         --wandb-tags      "$WANDB_TAGS" \
         --wandb-id-file   "$WANDB_ID_FILE" \
@@ -393,11 +393,10 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         fi
     fi
 
-    # Pendant le warmup NER : toujours résumer depuis LAST (pas best)
-    # sinon si score < MIN_DELTA, on repart du même checkpoint → le modèle n'apprend rien
+    # Pendant le warmup NER : ne pas toucher au niveau ni à la stagnation
     if [ "$in_warmup" = "1" ]; then
         resume_arg=""
-        [ -f checkpoint_last_multitask.pt ] && resume_arg="--resume checkpoint_last_multitask.pt"
+        [ -f checkpoint_best_multitask.pt ] && resume_arg="--resume checkpoint_best_multitask.pt"
         current_epoch=$((current_epoch + 1))
         continue
     fi
