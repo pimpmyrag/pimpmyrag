@@ -393,11 +393,11 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         fi
     fi
 
-    # Pendant le warmup NER : ne pas toucher au niveau ni à la stagnation
-    # (score NER-only avec --ner-only-score, comparable epoch à epoch)
+    # Pendant le warmup NER : toujours résumer depuis LAST (pas best)
+    # sinon si score < MIN_DELTA, on repart du même checkpoint → le modèle n'apprend rien
     if [ "$in_warmup" = "1" ]; then
         resume_arg=""
-        [ -f checkpoint_best_multitask.pt ] && resume_arg="--resume checkpoint_best_multitask.pt"
+        [ -f checkpoint_last_multitask.pt ] && resume_arg="--resume checkpoint_last_multitask.pt"
         current_epoch=$((current_epoch + 1))
         continue
     fi
