@@ -95,14 +95,17 @@ L_CERTAINTY=0.4      # Certainty active/hypo/etc. (silver)
 L_MORPHO=0.2         # Gender/Number/Person (silver)
 L_VERB_PTR=0.25      # Pointer head verbe gouverneur (silver)
 
-# ── Ramp SVO par niveau ───────────────────────────────────────────────────────
-# Le modèle apprend NER en premier.  SVO monte progressivement quand le NER
-# est stable, pour éviter l'interférence de gradient sur boundary/fine.
-#   Niveau 0 (easy)   : SVO à  5% → contribution négligeable sur le gradient
-#   Niveau 2 (medium) : SVO à 35% → commence à avoir du signal
-#   Niveau 5 (full)   : SVO à 100% → plein régime
-# Tableau 6 valeurs (1 par niveau), virgule pas supportée en bash → on multiplie ×100
-SVO_RAMP_PCT=(5 15 35 60 85 100)  # pourcentage × 100 du lambda cible
+# ── Ramp SVO linéaire sur epochs (v8.1) ──────────────────────────────────────
+# CHANGEMENT v8.1 : Rampup linéaire fixe au lieu de rampup par phases/niveaux.
+# Justification : Le score NER est déjà bon à epoch 10-15, pas besoin d'attendre
+# 40+ epochs pour commencer SVO sérieusement. Rampup plus rapide = meilleur SVO.
+#   Epochs 1-6   : warmup NER (λ_SVO = 0)
+#   Epochs 7-20  : rampup linéaire SVO (0 → 1.0)
+#   Epochs 21+   : plein régime (λ_SVO = 1.0)
+# Cette logique remplace SVO_RAMP_PCT (désormais ignoré, gardé pour compatibilité)
+SVO_RAMP_PCT=(5 15 35 60 85 100)  # DEPRECATED v8.1 — ignoré, rampup linéaire utilisé
+SVO_RAMPUP_START=7    # Epoch de début du rampup (après warmup NER)
+SVO_RAMPUP_END=20     # Epoch où SVO atteint 100%
 
 # Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
 START_LEVEL=${START_LEVEL:-0}
@@ -141,15 +144,14 @@ if [ "$NER_ONLY_BENCH" = "1" ]; then
     L_VERB_PTR=0.0
 fi
 
-# ── Sources gold v8.0 ──────────────────────────────────────────────────────────
-# v7.0 : hint_rule, hint_process, hint_concept supprimés (→ hint_notion/hint_event_nominal)
-#   hint_concept éclaté en 4 sous-types sans fallback :
-#   hint_doctrine, hint_state, hint_notion, hint_work_generic, hint_field
-# v8.0 : hint_quantity supprimé (→ hint_measure comme fallback)
-#   → 38 fine labels (FINE_NONE_ID=38)
-TRAIN_SILVER="$DATA/train.jsonl"
-VAL_SILVER="$DATA/val.jsonl"
-TEST_SILVER="$DATA/test.jsonl"
+# ── Sources gold v8.1 ──────────────────────────────────────────────────────────
+# v8.0 : hint_quantity supprimé (→ hint_measure comme fallback), 38 fine labels
+# v8.1 : morpho Stanza+gender_guesser sur tous les spans, re-annotation hint_person_name,
+#         nettoyage hint_measure/count/rate/percentage, fragments adjec. supprimés,
+#         hint_object_generic documents → hint_document
+TRAIN_SILVER="$DATA/train_v8.1.jsonl"
+VAL_SILVER="$DATA/val_v8.1.jsonl"
+TEST_SILVER="$DATA/test_v8.1.jsonl"
 
 # Vérification présence des fichiers gold
 for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do
@@ -165,7 +167,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
-DATASET_VERSION="v8.0"
+DATASET_VERSION="v8.1"
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
@@ -253,10 +255,13 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
 
     epoch_log="logs/epoch_${current_epoch}.log"
 
-    # ── Calcul des lambdas SVO ────────────────────────────────────────────────
+    # ── Calcul des lambdas SVO (v8.1 : rampup linéaire) ───────────────────────
     # Phase 1 : NER warmup (current_epoch <= NER_WARMUP_EPOCHS)
     #   → SVO = 0, têtes SVO non entraînées, gradient NER pur
-    # Phase 2 : multitask avec ramp par niveau (comme avant)
+    # Phase 2 : rampup linéaire SVO (epochs 7-20)
+    #   → SVO progress = (epoch - 6) / 14.0 (0.0 → 1.0)
+    # Phase 3 : plein régime (epochs 21+)
+    #   → SVO progress = 1.0
     in_warmup=0
     if [ "$NER_ONLY_BENCH" != "1" ] && [ "$NER_WARMUP_EPOCHS" -gt 0 ] \
        && [ $current_epoch -le $NER_WARMUP_EPOCHS ]; then
@@ -271,24 +276,38 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         echo "🏋️  Warmup NER-only ep $current_epoch/$NER_WARMUP_EPOCHS — SVO=0" | tee -a $log_file
         echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE  fine=$L_FINE" | tee -a $log_file
     else
-        # Phase multitask : ramp SVO progressif par niveau
+        # Phase multitask : rampup SVO linéaire sur epochs (v8.1)
         if [ $in_warmup -eq 0 ] && [ $current_epoch -eq $((NER_WARMUP_EPOCHS + 1)) ] \
            && [ "$NER_WARMUP_EPOCHS" -gt 0 ]; then
-            echo "🚀 Fin warmup NER → démarrage multitask (niveau ${LEVEL_NAMES[$current_level]})" | tee -a $log_file
+            echo "🚀 Fin warmup NER → démarrage multitask avec rampup linéaire SVO" | tee -a $log_file
             # Réinitialiser stagnation/niveau pour repartir proprement en multitask
             stagnation_count=0
             epochs_at_level=0
             best_score=-1.0
         fi
-        svo_pct=${SVO_RAMP_PCT[$current_level]}
-        L_SVO_B_NOW=$(python3 -c "print(f'{$L_SVO_BOUNDARY * $svo_pct / 100:.4f}')")
-        L_SVO_NOW=$(python3   -c "print(f'{$L_SVO        * $svo_pct / 100:.4f}')")
-        L_ROLE_NOW=$(python3  -c "print(f'{$L_ROLE       * $svo_pct / 100:.4f}')")
-        L_VOICE_NOW=$(python3 -c "print(f'{$L_VOICE      * $svo_pct / 100:.4f}')")
-        L_CERTAINTY_NOW=$(python3 -c "print(f'{$L_CERTAINTY * $svo_pct / 100:.4f}')")
-        L_MORPHO_NOW=$(python3 -c "print(f'{$L_MORPHO    * $svo_pct / 100:.4f}')")
-        L_VPTR_NOW=$(python3  -c "print(f'{$L_VERB_PTR   * $svo_pct / 100:.4f}')")
-        echo "🎛️  Lambdas niveau ${LEVEL_NAMES[$current_level]} (SVO ramp=${svo_pct}%)" | tee -a $log_file
+
+        # Nouveau rampup linéaire v8.1 (remplace le rampup par niveau)
+        if [ $current_epoch -le $SVO_RAMPUP_START ]; then
+            # Warmup NER terminé mais pas encore rampup SVO (normalement pas possible)
+            svo_progress=0.0
+        elif [ $current_epoch -le $SVO_RAMPUP_END ]; then
+            # Rampup linéaire : epochs 7-20 → 0.0 à 1.0
+            svo_progress=$(python3 -c "print(min(1.0, max(0.0, ($current_epoch - $SVO_RAMPUP_START) / ($SVO_RAMPUP_END - $SVO_RAMPUP_START))))")
+        else
+            # Plein régime : epochs 21+
+            svo_progress=1.0
+        fi
+
+        svo_pct=$(python3 -c "print(int($svo_progress * 100))")
+        L_SVO_B_NOW=$(python3 -c "print(f'{$L_SVO_BOUNDARY * $svo_progress:.4f}')")
+        L_SVO_NOW=$(python3   -c "print(f'{$L_SVO        * $svo_progress:.4f}')")
+        L_ROLE_NOW=$(python3  -c "print(f'{$L_ROLE       * $svo_progress:.4f}')")
+        L_VOICE_NOW=$(python3 -c "print(f'{$L_VOICE      * $svo_progress:.4f}')")
+        L_CERTAINTY_NOW=$(python3 -c "print(f'{$L_CERTAINTY * $svo_progress:.4f}')")
+        L_MORPHO_NOW=$(python3 -c "print(f'{$L_MORPHO    * $svo_progress:.4f}')")
+        L_VPTR_NOW=$(python3  -c "print(f'{$L_VERB_PTR   * $svo_progress:.4f}')")
+
+        echo "🎛️  Lambdas multitask (SVO ramp linéaire: ${svo_pct}% — epoch $current_epoch)" | tee -a $log_file
         echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE  fine=$L_FINE" | tee -a $log_file
         echo "      SVO  : svo_boundary=$L_SVO_B_NOW  svo=$L_SVO_NOW  role=$L_ROLE_NOW  voice=$L_VOICE_NOW  certainty=$L_CERTAINTY_NOW  morpho=$L_MORPHO_NOW  verb_ptr=$L_VPTR_NOW" | tee -a $log_file
     fi

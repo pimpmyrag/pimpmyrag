@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════
-#  setup_runpod.sh — Setup RunPod pour training v8.0 (labels v8.0, dataset DVC)
+#  setup_runpod.sh — Setup RunPod pour training v8.1 (labels v8.1, dataset DVC)
 #
 #  Usage depuis RunPod (aprs git clone) :
 #    cd pimpmyrag/training/multi-head
@@ -16,7 +16,7 @@ set -e
 cd "$(dirname "$0")"
 REPO_ROOT="$(cd ../.. && pwd)"
 
-echo "📦 Setup RunPod v8.0 — $(date)"
+echo "📦 Setup RunPod v8.1 — $(date)"
 
 # ── 1. Dépendances ───────────────────────────────────────────────────────────
 echo ""
@@ -56,9 +56,9 @@ else
     export WANDB_MODE=offline
 fi
 
-# ── 3. DVC pull des datasets v8.0 ──────────────────────────────────────────────
+# ── 3. DVC pull des datasets v8.1 ──────────────────────────────────────────────
 echo ""
-echo "📥 DVC pull datasets v8.0..."
+echo "📥 DVC pull datasets v8.1..."
 cd "$REPO_ROOT"
 
 # Cloudflare R2 — injecte les credentials depuis les variables d'env RunPod
@@ -70,18 +70,18 @@ if [ -n "$AWS_ACCESS_KEY_ID" ]; then
     dvc remote modify --local r2remote secret_access_key "$AWS_SECRET_ACCESS_KEY"
 fi
 
-dvc pull training/multi-head/data/train_v8.0.jsonl \
-         training/multi-head/data/val_v8.0.jsonl \
-         training/multi-head/data/test_v8.0.jsonl
+dvc pull training/multi-head/data/train_v8.1.jsonl \
+         training/multi-head/data/val_v8.1.jsonl \
+         training/multi-head/data/test_v8.1.jsonl
 
 cd training/multi-head
 
-echo "✅ Datasets v8.0 présents :"
-wc -l data/train_v8.0.jsonl data/val_v8.0.jsonl data/test_v8.0.jsonl
+echo "✅ Datasets v8.1 présents :"
+wc -l data/train_v8.1.jsonl data/val_v8.1.jsonl data/test_v8.1.jsonl
 
-# ── 4. Vérification schéma labels v8.0 ─────────────────────────────────────────
+# ── 4. Vérification schéma labels v8.1 ─────────────────────────────────────────
 echo ""
-echo "🔍 Vérification labels v8.0 (NUM_FINE=38, NUM_COARSE=10)..."
+echo "🔍 Vérification labels v8.1 (NUM_FINE=38, NUM_COARSE=10)..."
 python3 - <<'PYEOF'
 import sys
 sys.path.insert(0, '.')
@@ -91,13 +91,13 @@ assert len(L.COARSE_LABELS) == 10, f"NUM_COARSE={len(L.COARSE_LABELS)} attendu 1
 assert 'hint_inst_name'     in L.FINE2ID, "hint_inst_name manquant"
 assert 'hint_inst_role'     in L.FINE2ID, "hint_inst_role manquant"
 assert 'hint_document'      in L.FINE2ID, "hint_document manquant"
-assert 'hint_notion'    in L.FINE2ID, "hint_notion manquant (v8.0)"
-assert 'hint_doctrine'  in L.FINE2ID, "hint_doctrine manquant (v8.0)"
-assert 'hint_process' not in L.FINE2ID, "hint_process encore present — labels.py pas mis a jour v8.0"
-assert 'hint_rule'    not in L.FINE2ID, "hint_rule encore present — labels.py pas mis a jour v8.0"
-assert 'hint_concept'  not in L.FINE2ID, "hint_concept encore present — labels.py pas mis a jour v8.0"
-assert 'hint_quantity' not in L.FINE2ID, "hint_quantity encore present — labels.py pas mis a jour v8.0"
-print(f"✅ labels.py v8.0 OK — NUM_FINE={L.NUM_FINE}  NUM_COARSE={len(L.COARSE_LABELS)}")
+assert 'hint_notion'    in L.FINE2ID, "hint_notion manquant (v8.1)"
+assert 'hint_doctrine'  in L.FINE2ID, "hint_doctrine manquant (v8.1)"
+assert 'hint_process' not in L.FINE2ID, "hint_process encore present — labels.py pas mis a jour"
+assert 'hint_rule'    not in L.FINE2ID, "hint_rule encore present — labels.py pas mis a jour"
+assert 'hint_concept'  not in L.FINE2ID, "hint_concept encore present — labels.py pas mis a jour"
+assert 'hint_quantity' not in L.FINE2ID, "hint_quantity encore present — labels.py pas mis a jour"
+print(f"✅ labels.py v8.1 OK — NUM_FINE={L.NUM_FINE}  NUM_COARSE={len(L.COARSE_LABELS)}")
 PYEOF
 
 # ── 5. Lancement du training ─────────────────────────────────────────────────
@@ -159,7 +159,7 @@ if run is None:
     print("⚠ Aucun run W&B trouvé — artifact non loggé")
 else:
     art = wandb.Artifact("pimpmyrag-ner-model", type="model",
-        description="checkpoint_best + best_model multitask v8.0")
+        description="checkpoint_best + best_model multitask v8.1")
     for fname in ("training/multi-head/checkpoint_best_multitask.pt",
                   "training/multi-head/best_model_multitask.pt"):
         if os.path.exists(fname):
