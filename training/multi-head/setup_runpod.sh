@@ -20,33 +20,25 @@ echo "📦 Setup RunPod v8.1 — $(date)"
 
 # ── 1. Dépendances ───────────────────────────────────────────────────────────
 echo ""
-echo "🐍 Installation des dépendances (venv isolé — pas de --system-site-packages)..."
-# Venv SANS --system-site-packages pour éviter les conflits transformers/sentencepiece
-# avec les packages système de l'image RunPod (cause du DebertaV2 ModuleNotFoundError)
-python3 -m venv venv 2>/dev/null || true
+echo "🐍 Installation des dépendances..."
+# --system-site-packages : hérite du torch CUDA de l'image de base (garanti GPU)
+# Sans ça, pip installe torch CPU depuis PyPI en fallback → DEVICE=cpu → scores ~0
+python3 -m venv venv --system-site-packages 2>/dev/null || true
 source venv/bin/activate
 
-# ── Torch : install depuis pytorch.org (CUDA auto-détecté) ───────────────────
-echo "   → Installation torch (depuis pytorch.org)..."
-CUDA_VER=$(nvidia-smi 2>/dev/null | grep -oP "CUDA Version: \K[0-9.]+" | head -1 || echo "")
-if [ -n "$CUDA_VER" ]; then
-    # Normalise : "12.4" → "cu124", "12.1" → "cu121"
-    CUDA_SHORT="cu$(echo "$CUDA_VER" | tr -d '.' | cut -c1-3)"
-    echo "      CUDA détecté : $CUDA_VER → index $CUDA_SHORT"
-    pip install -q "torch>=2.4.0" --index-url "https://download.pytorch.org/whl/${CUDA_SHORT}" \
-        || pip install -q "torch>=2.4.0" --index-url "https://download.pytorch.org/whl/cu121" \
-        || pip install -q "torch>=2.4.0"
-else
-    echo "      Pas de GPU détecté — install torch CPU"
-    pip install -q "torch>=2.4.0"
-fi
 TORCH_VER=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "inconnu")
-echo "   ✅ torch ${TORCH_VER} disponible"
+CUDA_OK=$(python3 -c "import torch; print('yes' if torch.cuda.is_available() else 'no')" 2>/dev/null || echo "no")
+echo "   ✅ torch ${TORCH_VER} (CUDA disponible: $CUDA_OK)"
 
-# ── sentencepiece + protobuf AVANT transformers (obligatoire pour DebertaV2) ─
-pip install -q "sentencepiece>=0.1.99" "protobuf>=4.0.0"
+# ── Fix DeBERTa-v2 : force-reinstall sentencepiece + protobuf dans le venv ──
+# Avec --system-site-packages, les versions système peuvent être incohérentes avec
+# la version de transformers qu'on installe → DebertaV2Model ModuleNotFoundError.
+# --force-reinstall garantit une version propre dans le venv qui prend la priorité.
+echo "   → Force-reinstall sentencepiece + protobuf + transformers (fix DebertaV2)..."
+pip install -q --force-reinstall "sentencepiece>=0.1.99" "protobuf>=4.0.0"
+pip install -q --force-reinstall "transformers>=4.40.0,<4.51.0" "tokenizers>=0.19.0"
 
-# ── Reste des dépendances (torch exclu du requirements.txt) ──────────────────
+# ── Reste des dépendances (torch exclu) ──────────────────────────────────────
 pip install -q -r requirements.txt
 
 # ── 2. W&B login ─────────────────────────────────────────────────────────────

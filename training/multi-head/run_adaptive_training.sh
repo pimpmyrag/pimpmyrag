@@ -352,7 +352,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --hn-max-weight 8.0 \
         --hn-min-weight 0.3 \
         --num-workers $NUM_WORKERS \
-        $( [ "$NER_ONLY_BENCH" = "1" ] && echo "--ner-only-score" ) \
+        $( [ "$NER_ONLY_BENCH" = "1" ] || [ "$in_warmup" = "1" ] && echo "--ner-only-score" ) \
         --wandb-run-name  "$WANDB_RUN_NAME" \
         --wandb-tags      "$WANDB_TAGS" \
         --wandb-id-file   "$WANDB_ID_FILE" \
@@ -387,11 +387,14 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         echo "✅ Amélioration! best_score=$best_score" | tee -a $log_file
     else
         stagnation_count=$((stagnation_count + 1))
-        echo "⏸️  Pas d'amélioration ($stagnation_count/$PATIENCE)" | tee -a $log_file
+        # Ne logguer la stagnation qu'en dehors du warmup (sinon message trompeur)
+        if [ "$in_warmup" != "1" ]; then
+            echo "⏸️  Pas d'amélioration ($stagnation_count/$PATIENCE)" | tee -a $log_file
+        fi
     fi
 
     # Pendant le warmup NER : ne pas toucher au niveau ni à la stagnation
-    # (le score NER-only ne reflète pas encore le régime multitask final)
+    # (score NER-only avec --ner-only-score, comparable epoch à epoch)
     if [ "$in_warmup" = "1" ]; then
         resume_arg=""
         [ -f checkpoint_best_multitask.pt ] && resume_arg="--resume checkpoint_best_multitask.pt"
