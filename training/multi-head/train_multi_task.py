@@ -1248,10 +1248,19 @@ def main():
 
     # LR scheduler basé sur les epochs
     warmup_epochs_count = min(args.warmup_epochs, total_epochs)
-    warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=warmup_epochs_count)
     cosine_scheduler = CosineAnnealingLR(optimizer, T_max=max(1, total_epochs - warmup_epochs_count))
-    scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
-                             milestones=[warmup_epochs_count])
+    if warmup_epochs_count > 0:
+        # LinearLR init modifie le LR immédiatement (start_factor appliqué à __init__).
+        # Ne créer le warmup que si total_iters > 0 pour éviter le LR × 0.1 au step 0.
+        warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=warmup_epochs_count)
+        scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
+                                 milestones=[warmup_epochs_count])
+    else:
+        # Pas de warmup : utiliser directement CosineAnneal sans SequentialLR.
+        # Note: le LR initial a été restauré par le bloc resume ci-dessus,
+        # scheduler.step() à la fin de l'epoch mettra le LR à 0/eta_min pour T_max=1.
+        # Cela est sans effet car la prochaine epoch restaure les initial_lrs depuis param_groups.
+        scheduler = cosine_scheduler
 
     # EMA
     use_ema = args.ema_decay > 0.0
@@ -1271,7 +1280,15 @@ def main():
 
             if "optim_state" in ckpt and ckpt["optim_state"] is not None:
                 try:
+                    # Sauvegarder les LR initiaux (définis dans param_groups par le script)
+                    # AVANT le load_state_dict qui peut restaurer des LR=0 (fin de CosineAnneal)
+                    initial_lrs = [pg['lr'] for pg in optimizer.param_groups]
                     optimizer.load_state_dict(ckpt["optim_state"])
+                    # Réinitialiser les LR aux valeurs voulues par le script (pas le LR du checkpoint)
+                    # Cela garantit un LR correct même si le checkpoint a LR=0 après scheduler.step()
+                    for pg, lr in zip(optimizer.param_groups, initial_lrs):
+                        pg['lr'] = lr
+                    print(f"   LR restaurés : {[f'{lr:.2e}' for lr in initial_lrs]}")
                 except Exception as e:
                     print(f"⚠️ Impossible de recharger l'optimizer state: {e}")
 

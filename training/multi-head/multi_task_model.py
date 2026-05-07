@@ -233,10 +233,17 @@ class SpanMultiTaskModel(nn.Module):
             loss_b_per = loss_b_per * (1.0 - p_t) ** focal_gamma
         loss_b = (loss_b_per * sample_weights).mean()
 
-        # ── 2) Coarse ──────────────────────────────────────────────────────
-        loss_c = (F.cross_entropy(c_logits, coarse_labels,
-                                  weight=coarse_class_weights, reduction="none")
-                  * sample_weights).mean()
+        # ── 2) Coarse (positive-only, comme fine) ─────────────────────────
+        # Positifs = boundary=1. Les négatifs ont tous coarse=NONE,
+        # et le HN mining les booste (FP×5), ce qui ferait dominer NONE.
+        coarse_pos_mask = (boundary_labels == 1)
+        if coarse_pos_mask.any():
+            _coarse_w = coarse_class_weights if coarse_class_weights is not None else None
+            loss_c = (F.cross_entropy(c_logits[coarse_pos_mask], coarse_labels[coarse_pos_mask],
+                                      weight=_coarse_w, reduction="none")
+                      * sample_weights[coarse_pos_mask]).mean()
+        else:
+            loss_c = torch.tensor(0.0, device=device)
 
         # ── 3) Fine (NER positifs) ─────────────────────────────────────────
         pos_mask = (boundary_labels == 1) & (fine_labels < f_logits.size(-1))
