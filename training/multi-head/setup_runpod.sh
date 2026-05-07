@@ -26,23 +26,11 @@ echo "🐍 Installation des dépendances..."
 python3 -m venv venv --system-site-packages 2>/dev/null || true
 source venv/bin/activate
 
-# Vérifie si torch >=2.6 est déjà dispo (hérité de l'image)
-TORCH_OK=$(python3 -c "import torch; v=tuple(int(x) for x in torch.__version__.split('.')[:2]); print('yes' if v>=(2,6) else 'no')" 2>/dev/null || echo "no")
-if [ "$TORCH_OK" = "no" ]; then
-    echo "   → torch <2.6 dans l'image, upgrade..."
-    CUDA_VER=$(nvidia-smi 2>/dev/null | grep -oP "CUDA Version: \K[0-9.]+" | head -1 || echo "")
-    if [ -n "$CUDA_VER" ]; then
-        CUDA_SHORT=$(echo "$CUDA_VER" | tr -d '.' | cut -c1-3)
-        pip install -q "torch>=2.6.0" --index-url "https://download.pytorch.org/whl/cu${CUDA_SHORT}" \
-            || pip install -q "torch>=2.6.0"
-    else
-        pip install -q "torch>=2.6.0"
-    fi
-else
-    echo "   ✅ torch $(python3 -c 'import torch; print(torch.__version__)') déjà installé (image de base)"
-fi
+# NE PAS upgrader torch : l'image fournit torch+torchvision compatibles.
+# Upgrader torch seul casse torchvision (operator torchvision::nms does not exist).
+TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "inconnu")
+echo "   ✅ torch ${TORCH_VERSION} (image de base, CUDA: $(python3 -c 'import torch; print(torch.cuda.is_available())'))"
 
-# Installe seulement requirements.txt (sans torch, déjà présent)
 pip install -q -r requirements.txt
 
 # ── 2. W&B login ─────────────────────────────────────────────────────────────
