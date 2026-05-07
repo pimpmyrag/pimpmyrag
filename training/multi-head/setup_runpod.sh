@@ -45,8 +45,11 @@ if [ "$TORCH_OK" = "no" ]; then
 fi
 echo "   ✅ torch ${TORCH_VER} disponible"
 
-# Installe seulement requirements.txt (sans torch, déjà présent)
-pip install -q -r requirements.txt
+# sentencepiece doit être installé AVANT transformers (requis par DebertaV2)
+pip install -q "sentencepiece>=0.1.99" "protobuf>=4.0.0"
+
+# Installe requirements.txt — force upgrade pour écraser les versions système héritées
+pip install -q --upgrade -r requirements.txt
 
 # ── 2. W&B login ─────────────────────────────────────────────────────────────
 echo ""
