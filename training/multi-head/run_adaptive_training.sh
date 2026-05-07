@@ -24,14 +24,7 @@ TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null 
 echo "✅ PyTorch $TORCH_VERSION"
 
 # ── Détection device & batch size ────────────────────────
-if [ "${FORCE_CPU:-0}" = "1" ]; then
-    DEVICE="cpu"
-    BS=8
-    ACCUM=4
-    AMP_FLAG=""
-    NUM_WORKERS=0
-    echo "💻 Device: CPU forcé (FORCE_CPU=1, BS=$BS×accum=$ACCUM)"
-elif python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
+if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     DEVICE="cuda"
     VRAM_GB=$(python3 -c "import torch; print(round(torch.cuda.get_device_properties(0).total_memory/1024**3))" 2>/dev/null || echo "24")
     # BF16 activé (stable sur Ampere+, contrairement à fp16+GradScaler)
@@ -47,7 +40,7 @@ elif python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; th
         BS=96
         ACCUM=1
     else
-        # RTX 3090 / 4090 24 GB — BF16 BS=48 accum=2 = batch effectif 96
+        # RTX 3090 / 4090 24 GB — BF16 permet BS=48 avec 2× accum = 96 effectif
         BS=48
         ACCUM=2
     fi
@@ -103,14 +96,16 @@ L_MORPHO=0.2         # Gender/Number/Person (silver)
 L_VERB_PTR=0.25      # Pointer head verbe gouverneur (silver)
 
 # ── Ramp SVO linéaire sur epochs (v8.1) ──────────────────────────────────────
-# Rampup accéléré v8.1b : NER warmup réduit (6→3 epochs), SVO démarre plus tôt.
-# Justification : NER boundary/coarse convergent dès ep 3-4, pas besoin d'attendre 6 epochs.
-#   Epochs 1-3   : warmup NER (λ_SVO = 0)
-#   Epochs 4-12  : rampup linéaire SVO (0 → 1.0)
-#   Epochs 13+   : plein régime (λ_SVO = 1.0)
+# CHANGEMENT v8.1 : Rampup linéaire fixe au lieu de rampup par phases/niveaux.
+# Justification : Le score NER est déjà bon à epoch 10-15, pas besoin d'attendre
+# 40+ epochs pour commencer SVO sérieusement. Rampup plus rapide = meilleur SVO.
+#   Epochs 1-6   : warmup NER (λ_SVO = 0)
+#   Epochs 7-20  : rampup linéaire SVO (0 → 1.0)
+#   Epochs 21+   : plein régime (λ_SVO = 1.0)
+# Cette logique remplace SVO_RAMP_PCT (désormais ignoré, gardé pour compatibilité)
 SVO_RAMP_PCT=(5 15 35 60 85 100)  # DEPRECATED v8.1 — ignoré, rampup linéaire utilisé
-SVO_RAMPUP_START=4    # Epoch de début du rampup (après warmup NER)
-SVO_RAMPUP_END=12     # Epoch où SVO atteint 100%
+SVO_RAMPUP_START=7    # Epoch de début du rampup (après warmup NER)
+SVO_RAMPUP_END=20     # Epoch où SVO atteint 100%
 
 # Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
 START_LEVEL=${START_LEVEL:-0}
@@ -122,7 +117,7 @@ NER_ONLY_BENCH=${NER_ONLY_BENCH:-0}
 # Empirique : les gains NER-only (+4 pts boundary sur ep 39) se forment surtout dans les
 # 5-10 premières epochs — après, le plateau NER est atteint.
 # Pendant le warmup : SVO=0, stagnation/level ignorés, checkpoint NER sauvegardé séparément.
-NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-3}
+NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-6}
 
 current_level=$START_LEVEL
 stagnation_count=0
@@ -392,13 +387,11 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         echo "✅ Amélioration! best_score=$best_score" | tee -a $log_file
     else
         stagnation_count=$((stagnation_count + 1))
-        # Ne logguer la stagnation qu'en dehors du warmup (sinon message trompeur)
-        if [ "$in_warmup" != "1" ]; then
-            echo "⏸️  Pas d'amélioration ($stagnation_count/$PATIENCE)" | tee -a $log_file
-        fi
+        echo "⏸️  Pas d'amélioration ($stagnation_count/$PATIENCE)" | tee -a $log_file
     fi
 
     # Pendant le warmup NER : ne pas toucher au niveau ni à la stagnation
+    # (le score NER-only ne reflète pas encore le régime multitask final)
     if [ "$in_warmup" = "1" ]; then
         resume_arg=""
         [ -f checkpoint_best_multitask.pt ] && resume_arg="--resume checkpoint_best_multitask.pt"
