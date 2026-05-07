@@ -40,9 +40,9 @@ if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
         BS=96
         ACCUM=1
     else
-        # RTX 3090 / 4090 24 GB — BF16 permet BS=48 avec 2× accum = 96 effectif
-        BS=48
-        ACCUM=2
+        # RTX 3090 / 4090 24 GB — BS=32 accum=3 = 96 effectif (plus stable qu'BS=48)
+        BS=32
+        ACCUM=3
     fi
     NUM_WORKERS=4
     export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
