@@ -788,10 +788,13 @@ def run_epoch(
             all_c_pred_pos,
             labels=list(range(len(COARSE_LABELS) - 1))  # excl. NONE
         ),
+        # Fine : macro sur classes PRÉSENTES seulement (v8.1 a retiré des labels rares
+        # comme hint_measure/-1901, hint_object_generic/-321 → leur absence ferait F1=0
+        # et diluerait le macro sur 38 classes)
         "fine_macro_f1": safe_macro_f1_local(
             all_f_true_pos,
             all_f_pred_pos,
-            labels=list(range(len(FINE_LABELS)))
+            labels=[l for l in range(len(FINE_LABELS)) if l in set(all_f_true_pos)]
         ),
         "svo_boundary_f1": safe_macro_f1_local(all_svob_true, all_svob_pred),
         "svo_macro_f1": safe_macro_f1_local(
@@ -799,17 +802,20 @@ def run_epoch(
             labels=[l for l in range(NUM_ROLE) if l in set(all_svo_true)]
         ) if all_svo_true else 0.0,
         "voice_macro_f1": safe_macro_f1_local(all_voice_true, all_voice_pred) if all_voice_true else 0.0,
+        # Morpho : seulement les classes PRÉSENTES dans les vrais labels
+        # (ex: N/neutre n'existe jamais dans les données → l'inclure donnerait F1_N=0
+        #  et diluerait le macro de 1/3)
         "gender_macro_f1": safe_macro_f1_local(
             all_gender_true, all_gender_pred,
-            labels=list(range(NUM_GENDER))
+            labels=[l for l in range(NUM_GENDER) if l in set(all_gender_true)]
         ) if all_gender_true else 0.0,
         "number_macro_f1": safe_macro_f1_local(
             all_number_true, all_number_pred,
-            labels=list(range(NUM_NUMBER))
+            labels=[l for l in range(NUM_NUMBER) if l in set(all_number_true)]
         ) if all_number_true else 0.0,
         "person_macro_f1": safe_macro_f1_local(
             all_person_true, all_person_pred,
-            labels=list(range(NUM_PERSON))
+            labels=[l for l in range(NUM_PERSON) if l in set(all_person_true)]
         ) if all_person_true else 0.0,
         "boundary_report": classification_report(
             all_b_true, all_b_pred, digits=3, zero_division=0
