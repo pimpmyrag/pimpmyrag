@@ -87,13 +87,14 @@ L_FINE=1.8        # Conseillé (vs 1.0 avant) — discrimine mieux les labels fi
 # Ces lambdas s'appliquent au PLEIN RÉGIME (niveau 5/full).
 # Budget SVO total = 1.95 vs budget NER = 5.3 → SVO = 27% du total.
 # Aux niveaux inférieurs, un facteur de montée multiplicatif est appliqué.
-L_SVO_BOUNDARY=0.7   # Boundary SVO (silver → moins critique)
-L_SVO=0.6            # Labels SVO (svo_verb/subject/object/iobj/tcomp/lcomp/cause/attr…)
-L_ROLE=0.6           # Rôles SVO
-L_VOICE=0.15         # Voix active/passive (très silver)
-L_CERTAINTY=0.4      # Certainty active/hypo/etc. (silver)
-L_MORPHO=0.2         # Gender/Number/Person (silver)
-L_VERB_PTR=0.25      # Pointer head verbe gouverneur (silver)
+# RETOUR AUX VALEURS v8.0 : les valeurs v8.1 (+17.6%) causaient régression SVO -13%
+L_SVO_BOUNDARY=0.595  # Boundary SVO (silver → moins critique) [v8.1: 0.7]
+L_SVO=0.51            # Labels SVO (svo_verb/subject/object/iobj/tcomp/lcomp/cause/attr…) [v8.1: 0.6]
+L_ROLE=0.6            # Rôles SVO (INCHANGÉ)
+L_VOICE=0.1275        # Voix active/passive (très silver) [v8.1: 0.15]
+L_CERTAINTY=0.4       # Certainty active/hypo/etc. (silver) (INCHANGÉ)
+L_MORPHO=0.17         # Gender/Number/Person (silver) [v8.1: 0.2]
+L_VERB_PTR=0.2125     # Pointer head verbe gouverneur (silver) [v8.1: 0.25]
 
 # ── Ramp SVO linéaire sur epochs (v8.1) ──────────────────────────────────────
 # CHANGEMENT v8.1 : Rampup linéaire fixe au lieu de rampup par phases/niveaux.
