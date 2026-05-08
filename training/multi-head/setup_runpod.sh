@@ -26,11 +26,21 @@ echo "🐍 Installation des dépendances..."
 python3 -m venv venv --system-site-packages 2>/dev/null || true
 source venv/bin/activate
 
-# NE PAS upgrader torch : l'upgrade vers 2.6+ cause incompatibilité torchvision
-# (crash: from torch._C import * fails)
-# Utiliser la version de l'image de base (2.4.0) qui est stable
-TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "unknown")
-echo "   ✅ torch ${TORCH_VERSION} (image de base, pas d'upgrade)"
+# Forcer torch 2.6 (torchvision n'est PAS utilisé dans le training code)
+# torch 2.4 de l'image de base cause une régression ~-7% sur Fine F1 (vs 2.6)
+CURRENT_TORCH=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "0.0")
+echo "   torch actuel: ${CURRENT_TORCH}"
+
+if python3 -c "import torch; v=torch.__version__; assert int(v.split('.')[0])>=2 and int(v.split('.')[1])>=6" 2>/dev/null; then
+    echo "   ✅ torch ${CURRENT_TORCH} >= 2.6 — OK, pas de réinstallation"
+else
+    echo "   ⬆️  Upgrade torch vers 2.6+ (CUDA 12.4)..."
+    # Désinstaller torchvision/torchaudio d'abord pour éviter les conflits
+    pip uninstall -q -y torchvision torchaudio 2>/dev/null || true
+    pip install -q "torch>=2.6.0" --index-url https://download.pytorch.org/whl/cu124
+    NEW_TORCH=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "unknown")
+    echo "   ✅ torch ${NEW_TORCH} installé"
+fi
 
 pip install -q -r requirements.txt
 
