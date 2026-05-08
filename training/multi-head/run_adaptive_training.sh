@@ -341,6 +341,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lambda-verb-ptr   $L_VPTR_NOW \
         --lambda-compat     $( [ "$NER_ONLY_BENCH" = "1" ] && echo "0.0" || echo "0.2" ) \
         --focal-gamma 0.5 \
+        --min-coarse-none-weight 0.0 \
         --device $DEVICE \
         --layer-lr-decay 0.9 \
         --ema-decay 0.999 \
