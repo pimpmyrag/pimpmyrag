@@ -254,11 +254,13 @@ class SpanMultiTaskModel(nn.Module):
 
         if coarse_neg_mask.any():
             # Poids cappé à 1.0 : empêche le HN boost (×3.5-5×) de dominer NONE
+            # Facteur 0.8 : compromis entre convergence rapide (0.2 trop faible)
+            # et prévention du collapse (1.0+ trop fort avec 8:1 négatifs)
             neg_w_capped = sample_weights[coarse_neg_mask].clamp(max=1.0)
             loss_c_none = (F.cross_entropy(c_logits[coarse_neg_mask], coarse_labels[coarse_neg_mask],
                                            reduction="none")
                            * neg_w_capped).mean()
-            loss_c = loss_c_pos + 0.2 * loss_c_none
+            loss_c = loss_c_pos + 0.8 * loss_c_none
         else:
             loss_c = loss_c_pos
 
