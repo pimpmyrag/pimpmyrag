@@ -233,17 +233,34 @@ class SpanMultiTaskModel(nn.Module):
             loss_b_per = loss_b_per * (1.0 - p_t) ** focal_gamma
         loss_b = (loss_b_per * sample_weights).mean()
 
-        # ── 2) Coarse (positive-only, comme fine) ─────────────────────────
-        # Positifs = boundary=1. Les négatifs ont tous coarse=NONE,
-        # et le HN mining les booste (FP×5), ce qui ferait dominer NONE.
+        # ── 2) Coarse (hybride : positifs plein poids + négatifs poids cappé) ────
+        # Problème v8.1 : HN mining booste FP_BOUNDARY à ×3.5-5×.
+        # Si on garde tous les négatifs (coarse=NONE) avec leur poids boost,
+        # NONE domine le gradient → coarse collapse (F1 → 0 epoch 3-4).
+        # Si on supprime totalement NONE (positive-only), l'encodeur perd
+        # le gradient "non-entité" → fine/ABSTRACT/ORG régressent de 7-12%.
+        # Solution hybride : positifs poids normal + négatifs cappés à 1.0
+        # avec facteur 0.2 → NONE contribue ~20% vs positifs, sans dominer.
         coarse_pos_mask = (boundary_labels == 1)
+        coarse_neg_mask = (boundary_labels == 0)
+        _coarse_w = coarse_class_weights if coarse_class_weights is not None else None
+
         if coarse_pos_mask.any():
-            _coarse_w = coarse_class_weights if coarse_class_weights is not None else None
-            loss_c = (F.cross_entropy(c_logits[coarse_pos_mask], coarse_labels[coarse_pos_mask],
-                                      weight=_coarse_w, reduction="none")
-                      * sample_weights[coarse_pos_mask]).mean()
+            loss_c_pos = (F.cross_entropy(c_logits[coarse_pos_mask], coarse_labels[coarse_pos_mask],
+                                          weight=_coarse_w, reduction="none")
+                          * sample_weights[coarse_pos_mask]).mean()
         else:
-            loss_c = torch.tensor(0.0, device=device)
+            loss_c_pos = torch.tensor(0.0, device=device)
+
+        if coarse_neg_mask.any():
+            # Poids cappé à 1.0 : empêche le HN boost (×3.5-5×) de dominer NONE
+            neg_w_capped = sample_weights[coarse_neg_mask].clamp(max=1.0)
+            loss_c_none = (F.cross_entropy(c_logits[coarse_neg_mask], coarse_labels[coarse_neg_mask],
+                                           reduction="none")
+                           * neg_w_capped).mean()
+            loss_c = loss_c_pos + 0.2 * loss_c_none
+        else:
+            loss_c = loss_c_pos
 
         # ── 3) Fine (NER positifs) ─────────────────────────────────────────
         pos_mask = (boundary_labels == 1) & (fine_labels < f_logits.size(-1))
