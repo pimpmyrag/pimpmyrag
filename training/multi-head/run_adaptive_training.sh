@@ -145,12 +145,15 @@ if [ "$NER_ONLY_BENCH" = "1" ]; then
     L_VERB_PTR=0.0
 fi
 
-# ── Sources gold v8.0 (TEMPORAIRE: test si dataset v8.1 cause régression) ──────
+# ── Sources gold v8.1 (TEST: torch 2.6+ avec dataset v8.1) ───────────────────
 # v8.0 : hint_quantity supprimé (→ hint_measure comme fallback), 38 fine labels
-# TEST: Utiliser v8.0 au lieu de v8.1 pour voir si morpho cause la régression -7%
-TRAIN_SILVER="$DATA/train_v8.0.jsonl"
-VAL_SILVER="$DATA/val_v8.0.jsonl"
-TEST_SILVER="$DATA/test_v8.0.jsonl"
+# v8.1 : morpho Stanza+gender_guesser sur tous les spans, re-annotation hint_person_name,
+#         nettoyage hint_measure/count/rate/percentage, fragments adjec. supprimés,
+#         hint_object_generic documents → hint_document
+# TEST: v8.1 dataset + torch 2.6+ (comme v8.0 réussi) pour isoler cause régression
+TRAIN_SILVER="$DATA/train_v8.1.jsonl"
+VAL_SILVER="$DATA/val_v8.1.jsonl"
+TEST_SILVER="$DATA/test_v8.1.jsonl"
 
 # Vérification présence des fichiers gold
 for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do
@@ -166,7 +169,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
-DATASET_VERSION="v8.0-dataset-test"  # TEST: v8.0 dataset pour isoler cause régression
+DATASET_VERSION="v8.1-torch26-test"  # TEST: v8.1 dataset + torch 2.6+ (hypothèse: torch 2.4→2.6 explique régression)
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
