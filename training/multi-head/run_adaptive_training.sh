@@ -93,7 +93,7 @@ L_SVO=0.51            # Labels SVO (svo_verb/subject/object/iobj/tcomp/lcomp/cau
 L_ROLE=0.6            # Rôles SVO (INCHANGÉ)
 L_VOICE=0.1275        # Voix active/passive (très silver) [v8.1: 0.15]
 L_CERTAINTY=0.4       # Certainty active/hypo/etc. (silver) (INCHANGÉ)
-L_MORPHO=0.10         # Gender/Number/Person (silver) [v8.0: 0.17, v8.1 FIX: 0.10 pour compenser coverage +76%]
+L_MORPHO=0.17         # Gender/Number/Person (silver) — valeur v8.0 référence pour isoler torch 2.6
 L_VERB_PTR=0.2125     # Pointer head verbe gouverneur (silver) [v8.1: 0.25]
 
 # ── Ramp SVO linéaire sur epochs (v8.1) ──────────────────────────────────────
@@ -170,7 +170,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="v8.1-morpho0.10-${TORCH_SHORT}"  # lambda_morpho 0.10 + version torch dynamique
+DATASET_VERSION="v8.1-${TORCH_SHORT}"  # dataset v8.1 + version torch dynamique (test isolation torch)
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
@@ -341,7 +341,6 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lambda-verb-ptr   $L_VPTR_NOW \
         --lambda-compat     $( [ "$NER_ONLY_BENCH" = "1" ] && echo "0.0" || echo "0.2" ) \
         --focal-gamma 0.5 \
-        --min-coarse-none-weight 0.0 \
         --device $DEVICE \
         --layer-lr-decay 0.9 \
         --ema-decay 0.999 \
