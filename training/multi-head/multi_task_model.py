@@ -233,37 +233,16 @@ class SpanMultiTaskModel(nn.Module):
             loss_b_per = loss_b_per * (1.0 - p_t) ** focal_gamma
         loss_b = (loss_b_per * sample_weights).mean()
 
-        # ── 2) Coarse (hybride : positifs plein poids + négatifs poids cappé) ────
-        # Problème v8.1 : HN mining booste FP_BOUNDARY à ×3.5-5×.
-        # Si on garde tous les négatifs (coarse=NONE) avec leur poids boost,
-        # NONE domine le gradient → coarse collapse (F1 → 0 epoch 3-4).
-        # Si on supprime totalement NONE (positive-only), l'encodeur perd
-        # le gradient "non-entité" → fine/ABSTRACT/ORG régressent de 7-12%.
-        # Solution hybride : positifs poids normal + négatifs cappés à 1.0
-        # avec facteur 0.2 → NONE contribue ~20% vs positifs, sans dominer.
-        coarse_pos_mask = (boundary_labels == 1)
-        coarse_neg_mask = (boundary_labels == 0)
-        _coarse_w = coarse_class_weights if coarse_class_weights is not None else None
-
-        if coarse_pos_mask.any():
-            loss_c_pos = (F.cross_entropy(c_logits[coarse_pos_mask], coarse_labels[coarse_pos_mask],
-                                          weight=_coarse_w, reduction="none")
-                          * sample_weights[coarse_pos_mask]).mean()
-        else:
-            loss_c_pos = torch.tensor(0.0, device=device)
-
-        if coarse_neg_mask.any():
-            # Poids cappé à 1.0 : empêche le HN boost (×3.5-5×) de dominer NONE
-            # Facteur 2.0 : signal NONE fort (proche v8.0) pour aider l'encodeur
-            # à distinguer entités/non-entités, mais cap=1.0 évite le collapse
-            # Avec 8 négatifs/positif : ratio NONE ~16:1 vs entity
-            neg_w_capped = sample_weights[coarse_neg_mask].clamp(max=1.0)
-            loss_c_none = (F.cross_entropy(c_logits[coarse_neg_mask], coarse_labels[coarse_neg_mask],
-                                           reduction="none")
-                           * neg_w_capped).mean()
-            loss_c = loss_c_pos + 2.0 * loss_c_none
-        else:
-            loss_c = loss_c_pos
+        # ── 2) Coarse (loss v8.0 standard avec NONE) ──────────────────────────────
+        # v8.0 utilisait NONE dans la loss et obtenait Fine=0.846, SVO=0.826.
+        # Le problème v8.1 était les LAMBDAS augmentés (+17.6%), pas le NONE.
+        # On restaure donc la loss v8.0 complète : tous les spans, y compris NONE.
+        loss_c_per = F.cross_entropy(c_logits, coarse_labels,
+                                     weight=coarse_class_weights, reduction="none")
+        if focal_gamma > 0.0:
+            p_t = F.softmax(c_logits.detach(), dim=-1).gather(1, coarse_labels.unsqueeze(1)).squeeze(1)
+            loss_c_per = loss_c_per * (1.0 - p_t) ** focal_gamma
+        loss_c = (loss_c_per * sample_weights).mean()
 
         # ── 3) Fine (NER positifs) ─────────────────────────────────────────
         pos_mask = (boundary_labels == 1) & (fine_labels < f_logits.size(-1))
