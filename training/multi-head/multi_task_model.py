@@ -233,16 +233,13 @@ class SpanMultiTaskModel(nn.Module):
             loss_b_per = loss_b_per * (1.0 - p_t) ** focal_gamma
         loss_b = (loss_b_per * sample_weights).mean()
 
-        # ── 2) Coarse (loss v8.0 standard avec NONE) ──────────────────────────────
+        # ── 2) Coarse (loss v8.0/v8.1 standard avec NONE, SANS focal) ────────────
         # v8.0 utilisait NONE dans la loss et obtenait Fine=0.846, SVO=0.826.
-        # Le problème v8.1 était les LAMBDAS augmentés (+17.6%), pas le NONE.
-        # On restaure donc la loss v8.0 complète : tous les spans, y compris NONE.
-        loss_c_per = F.cross_entropy(c_logits, coarse_labels,
-                                     weight=coarse_class_weights, reduction="none")
-        if focal_gamma > 0.0:
-            p_t = F.softmax(c_logits.detach(), dim=-1).gather(1, coarse_labels.unsqueeze(1)).squeeze(1)
-            loss_c_per = loss_c_per * (1.0 - p_t) ** focal_gamma
-        loss_c = (loss_c_per * sample_weights).mean()
+        # IMPORTANT: PAS de focal loss sur coarse (seulement sur boundary).
+        # Le focal loss sur coarse dégrade les performances.
+        loss_c = (F.cross_entropy(c_logits, coarse_labels,
+                                  weight=coarse_class_weights, reduction="none")
+                  * sample_weights).mean()
 
         # ── 3) Fine (NER positifs) ─────────────────────────────────────────
         pos_mask = (boundary_labels == 1) & (fine_labels < f_logits.size(-1))
