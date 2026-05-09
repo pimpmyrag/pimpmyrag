@@ -322,7 +322,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --accum-steps $ACCUM \
         --lr 8e-6 \
         --head-lr-multiplier 4.0 \
-        --warmup-epochs 1 \
+        --warmup-epochs $( [ "$current_epoch" -eq 1 ] && echo "1" || echo "0" ) \
         --max-grad-norm 1.0 \
         --lambda-boundary   $L_BOUNDARY \
         --lambda-coarse     $L_COARSE \
