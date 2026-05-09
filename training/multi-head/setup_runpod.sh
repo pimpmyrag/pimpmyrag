@@ -21,6 +21,14 @@ echo "📦 Setup RunPod v8.1 — $(date)"
 # ── 1. Dépendances ───────────────────────────────────────────────────────────
 echo ""
 echo "🐍 Installation des dépendances..."
+
+# ── cuDNN 9 — requis par torch 2.6+ (l'image de base runpod/pytorch:2.4 n'a que cuDNN 8)
+# Sans ça : ImportError libcudnn.so.9: cannot open shared object file
+echo "📦 Installation cuDNN 9 (requis torch 2.6+)..."
+apt-get install -y --no-install-recommends libcudnn9-cuda-12 2>/dev/null \
+    || apt-get install -y --no-install-recommends libcudnn9 2>/dev/null \
+    || echo "   ⚠️  libcudnn9 non dispo via apt — on continuera sans (torch bundled cuDNN)"
+
 # --system-site-packages : hérite torch/transformers de l'image de base
 # Évite de re-télécharger torch (2 GB) à chaque pod
 python3 -m venv venv --system-site-packages 2>/dev/null || true
@@ -40,6 +48,16 @@ else
     pip install -q "torch>=2.6.0" --index-url https://download.pytorch.org/whl/cu124
     NEW_TORCH=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "unknown")
     echo "   ✅ torch ${NEW_TORCH} installé"
+fi
+
+# Vérification que torch est importable (détection précoce des problèmes cuDNN)
+if python3 -c "import torch; torch.zeros(1).cuda() if torch.cuda.is_available() else None; print('✅ torch OK')" 2>/dev/null; then
+    true
+else
+    echo "   ⚠️  torch import ou CUDA échoue — tentative fallback torch 2.4 (system)..."
+    pip uninstall -q -y torch 2>/dev/null || true  # Retire le 2.6 cassé
+    # Le venv --system-site-packages reprendra le torch 2.4 system
+    python3 -c "import torch; print(f'   Fallback torch {torch.__version__}')" 2>/dev/null || true
 fi
 
 pip install -q -r requirements.txt
