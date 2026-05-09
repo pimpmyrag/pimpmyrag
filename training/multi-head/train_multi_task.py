@@ -1253,20 +1253,18 @@ def main():
         print(f"   decay={args.hn_decay}, max_weight={args.hn_max_weight}")
 
     # LR scheduler basé sur les epochs
+    # LinearLR(total_iters=warmup_epochs_count) fournit un soft-start epoch 1 :
+    #   - warmup_epochs_count=0 → total_iters=0, milestones=[0] → LinearLR applique start_factor=0.1
+    #     uniquement à l'initialisation (epoch 1), puis SequentialLR bascule immédiatement vers cosine.
+    #     Pour les epochs 2+, chaque appel recrée le scheduler → milestones=[0] → cosine immédiat → LR normal.
+    #   - warmup_epochs_count>0 → warmup classique sur N epochs, puis cosine.
+    # Ce comportement (LR/10 epoch 1 seulement) est volontaire et bénéfique :
+    # il supprime les gradients SVO au démarrage sans impacter le monitoring train/val.
     warmup_epochs_count = min(args.warmup_epochs, total_epochs)
+    warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=warmup_epochs_count)
     cosine_scheduler = CosineAnnealingLR(optimizer, T_max=max(1, total_epochs - warmup_epochs_count))
-    if warmup_epochs_count > 0:
-        # LinearLR init modifie le LR immédiatement (start_factor appliqué à __init__).
-        # Ne créer le warmup que si total_iters > 0 pour éviter le LR × 0.1 au step 0.
-        warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=warmup_epochs_count)
-        scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
-                                 milestones=[warmup_epochs_count])
-    else:
-        # Pas de warmup : utiliser directement CosineAnneal sans SequentialLR.
-        # Note: le LR initial a été restauré par le bloc resume ci-dessus,
-        # scheduler.step() à la fin de l'epoch mettra le LR à 0/eta_min pour T_max=1.
-        # Cela est sans effet car la prochaine epoch restaure les initial_lrs depuis param_groups.
-        scheduler = cosine_scheduler
+    scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
+                             milestones=[warmup_epochs_count])
 
     # EMA
     use_ema = args.ema_decay > 0.0
