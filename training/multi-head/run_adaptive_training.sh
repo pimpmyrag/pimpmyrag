@@ -100,7 +100,7 @@ L_VERB_PTR=0.2125     # Pointer head verbe gouverneur (silver) [v8.1: 0.25]
 # RETOUR v8.0 : Le rampup linéaire (v8.1) montait SVO trop vite (100% à epoch 20)
 # ce qui perturbait la consolidation NER entre epochs 8-20 → régression -0.05 Fine F1.
 # Solution : garder le rampup par niveau (SVO suit la difficulté des hard negatives).
-#   Level 0 easy   (dès epoch 1)  : SVO  5%   ← démarre dès epoch 1 (NER_WARMUP=0)
+#   Level 0 easy   (dès epoch 1)  : SVO  5%   ← mais LR/10 à epoch 1 (--warmup-epochs 1) → SVO effectif ~0.5%
 #   Level 1 easy+                 : SVO 15%
 #   Level 2 medium                : SVO 35%
 #   Level 3 med+                  : SVO 60%
@@ -173,7 +173,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="v8.1-svobylevel-morpho010-nowarmup-${TORCH_SHORT}"  # rampup SVO par niveau + morpho calibré + NER_WARMUP=0 (comportement v8.0)
+DATASET_VERSION="v8.1-svobylevel-morpho010-lrwarmup1-${TORCH_SHORT}"  # rampup SVO par niveau + morpho calibré + LR warmup 1 epoch (LR/10 ep1, reproduit comportement v8.0)
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
@@ -322,7 +322,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --accum-steps $ACCUM \
         --lr 8e-6 \
         --head-lr-multiplier 4.0 \
-        --warmup-epochs 0 \
+        --warmup-epochs 1 \
         --max-grad-norm 1.0 \
         --lambda-boundary   $L_BOUNDARY \
         --lambda-coarse     $L_COARSE \
