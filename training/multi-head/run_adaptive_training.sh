@@ -114,14 +114,14 @@ START_EPOCH=${START_EPOCH:-1}
 KEEP_CHECKPOINT=${KEEP_CHECKPOINT:-0}
 NER_ONLY_BENCH=${NER_ONLY_BENCH:-0}
 # Phase NER-only initiale : stabilise boundary/coarse/fine avant d'introduire les têtes SVO.
-# Mettre à 0 pour désactiver (multitask dès le début, comportement v8.0), ou >0 pour N epochs warmup.
-# Empirique : les gains NER-only (+4 pts boundary sur ep 39) se forment surtout dans les
-# 5-10 premières epochs — après, le plateau NER est atteint.
-# Pendant le warmup : SVO=0, stagnation/level ignorés, checkpoint NER sauvegardé séparément.
-# ⚠️  RETOUR v8.0 : 0 (pas de warmup) — le warmup (v8.1: 6) causait un gap train/val incohérent
-#    car val/loss incluait SVO alors que train/loss ne l'incluait pas (λ_SVO=0 en train),
-#    ce qui rendait le monitoring trompeur (train/loss epoch1=3.4 vs val/loss=5.7).
-NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-0}
+# Mettre à 0 pour désactiver (multitask dès le début), ou >0 pour N epochs warmup.
+# Empirique : sans warmup (nowarmup), fine_f1 plateau projeté ~0.76 (ratio décélération 0.67).
+#             avec warmup 6 (5l4g), fine_f1 plateau réel 0.828 (ratio 0.75).
+# Cause : sans warmup, SVO compète avec fine NER dès ep1 → modèle "brûle" sa capacité
+#         d'apprentissage fine trop tôt → plateau bas.
+# Note monitoring : pendant le warmup, train/loss < val/loss car λ_SVO=0 en train
+#                   mais val/loss inclut SVO. C'est un artefact cosmétique à ignorer.
+NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-3}
 
 current_level=$START_LEVEL
 stagnation_count=0
@@ -173,7 +173,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="v8.1-svobylevel-morpho010-lrsoft-${TORCH_SHORT}"  # LinearLR(total_iters=0) = soft start epoch 1 seulement (comportement original v8.0)
+DATASET_VERSION="v8.1-svobylevel-morpho010-nerwarmup3-${TORCH_SHORT}"  # NER warmup 3 epochs → fine_f1 plateau ~0.82 vs 0.76 sans warmup
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
