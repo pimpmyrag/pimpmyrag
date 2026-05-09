@@ -100,13 +100,12 @@ L_VERB_PTR=0.2125     # Pointer head verbe gouverneur (silver) [v8.1: 0.25]
 # RETOUR v8.0 : Le rampup linéaire (v8.1) montait SVO trop vite (100% à epoch 20)
 # ce qui perturbait la consolidation NER entre epochs 8-20 → régression -0.05 Fine F1.
 # Solution : garder le rampup par niveau (SVO suit la difficulté des hard negatives).
-#   Epochs 1-6   : warmup NER (λ_SVO = 0)
-#   Level 0 easy   (epochs 7-18)  : SVO  5%
-#   Level 1 easy+  (epochs 19-30) : SVO 15%
-#   Level 2 medium (epochs 31-42) : SVO 35%
-#   Level 3 med+   (epochs 43-54) : SVO 60%
-#   Level 4 hard   (epochs 55-58) : SVO 85%
-#   Level 5 full   (epochs 59+)   : SVO 100%
+#   Level 0 easy   (dès epoch 1)  : SVO  5%   ← démarre dès epoch 1 (NER_WARMUP=0)
+#   Level 1 easy+                 : SVO 15%
+#   Level 2 medium                : SVO 35%
+#   Level 3 med+                  : SVO 60%
+#   Level 4 hard                  : SVO 85%
+#   Level 5 full                  : SVO 100%
 SVO_RAMP_PCT=(5 15 35 60 85 100)  # % SVO par niveau de difficulté
 
 # Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
@@ -115,11 +114,14 @@ START_EPOCH=${START_EPOCH:-1}
 KEEP_CHECKPOINT=${KEEP_CHECKPOINT:-0}
 NER_ONLY_BENCH=${NER_ONLY_BENCH:-0}
 # Phase NER-only initiale : stabilise boundary/coarse/fine avant d'introduire les têtes SVO.
-# Mettre à 0 pour désactiver (multitask dès le début), ou >0 pour N epochs warmup.
+# Mettre à 0 pour désactiver (multitask dès le début, comportement v8.0), ou >0 pour N epochs warmup.
 # Empirique : les gains NER-only (+4 pts boundary sur ep 39) se forment surtout dans les
 # 5-10 premières epochs — après, le plateau NER est atteint.
 # Pendant le warmup : SVO=0, stagnation/level ignorés, checkpoint NER sauvegardé séparément.
-NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-6}
+# ⚠️  RETOUR v8.0 : 0 (pas de warmup) — le warmup (v8.1: 6) causait un gap train/val incohérent
+#    car val/loss incluait SVO alors que train/loss ne l'incluait pas (λ_SVO=0 en train),
+#    ce qui rendait le monitoring trompeur (train/loss epoch1=3.4 vs val/loss=5.7).
+NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-0}
 
 current_level=$START_LEVEL
 stagnation_count=0
@@ -171,7 +173,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="v8.1-svobylevel-morpho010-${TORCH_SHORT}"  # rampup SVO par niveau + morpho calibré pour coverage v8.1
+DATASET_VERSION="v8.1-svobylevel-morpho010-nowarmup-${TORCH_SHORT}"  # rampup SVO par niveau + morpho calibré + NER_WARMUP=0 (comportement v8.0)
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
