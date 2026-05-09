@@ -96,17 +96,18 @@ L_CERTAINTY=0.4       # Certainty active/hypo/etc. (silver) (INCHANGÉ)
 L_MORPHO=0.17         # Gender/Number/Person (silver) — valeur v8.0 référence pour isoler torch 2.6
 L_VERB_PTR=0.2125     # Pointer head verbe gouverneur (silver) [v8.1: 0.25]
 
-# ── Ramp SVO linéaire sur epochs (v8.1) ──────────────────────────────────────
-# CHANGEMENT v8.1 : Rampup linéaire fixe au lieu de rampup par phases/niveaux.
-# Justification : Le score NER est déjà bon à epoch 10-15, pas besoin d'attendre
-# 40+ epochs pour commencer SVO sérieusement. Rampup plus rapide = meilleur SVO.
+# ── Ramp SVO par niveau (comme v8.0) ─────────────────────────────────────────
+# RETOUR v8.0 : Le rampup linéaire (v8.1) montait SVO trop vite (100% à epoch 20)
+# ce qui perturbait la consolidation NER entre epochs 8-20 → régression -0.05 Fine F1.
+# Solution : garder le rampup par niveau (SVO suit la difficulté des hard negatives).
 #   Epochs 1-6   : warmup NER (λ_SVO = 0)
-#   Epochs 7-20  : rampup linéaire SVO (0 → 1.0)
-#   Epochs 21+   : plein régime (λ_SVO = 1.0)
-# Cette logique remplace SVO_RAMP_PCT (désormais ignoré, gardé pour compatibilité)
-SVO_RAMP_PCT=(5 15 35 60 85 100)  # DEPRECATED v8.1 — ignoré, rampup linéaire utilisé
-SVO_RAMPUP_START=7    # Epoch de début du rampup (après warmup NER)
-SVO_RAMPUP_END=20     # Epoch où SVO atteint 100%
+#   Level 0 easy   (epochs 7-18)  : SVO  5%
+#   Level 1 easy+  (epochs 19-30) : SVO 15%
+#   Level 2 medium (epochs 31-42) : SVO 35%
+#   Level 3 med+   (epochs 43-54) : SVO 60%
+#   Level 4 hard   (epochs 55-58) : SVO 85%
+#   Level 5 full   (epochs 59+)   : SVO 100%
+SVO_RAMP_PCT=(5 15 35 60 85 100)  # % SVO par niveau de difficulté
 
 # Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
 START_LEVEL=${START_LEVEL:-0}
@@ -170,7 +171,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="v8.1-${TORCH_SHORT}"  # dataset v8.1 + version torch dynamique (test isolation torch)
+DATASET_VERSION="v8.1-svobylevel-${TORCH_SHORT}"  # dataset v8.1 + rampup SVO par niveau (comme v8.0)
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
@@ -289,17 +290,9 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
             best_score=-1.0
         fi
 
-        # Nouveau rampup linéaire v8.1 (remplace le rampup par niveau)
-        if [ $current_epoch -le $SVO_RAMPUP_START ]; then
-            # Warmup NER terminé mais pas encore rampup SVO (normalement pas possible)
-            svo_progress=0.0
-        elif [ $current_epoch -le $SVO_RAMPUP_END ]; then
-            # Rampup linéaire : epochs 7-20 → 0.0 à 1.0
-            svo_progress=$(python3 -c "print(min(1.0, max(0.0, ($current_epoch - $SVO_RAMPUP_START) / ($SVO_RAMPUP_END - $SVO_RAMPUP_START))))")
-        else
-            # Plein régime : epochs 21+
-            svo_progress=1.0
-        fi
+        # Rampup SVO par niveau (comme v8.0) — suit la difficulté des hard negatives
+        svo_pct=${SVO_RAMP_PCT[$current_level]}
+        svo_progress=$(python3 -c "print($svo_pct / 100.0)")
 
         svo_pct=$(python3 -c "print(int($svo_progress * 100))")
         L_SVO_B_NOW=$(python3 -c "print(f'{$L_SVO_BOUNDARY * $svo_progress:.4f}')")
