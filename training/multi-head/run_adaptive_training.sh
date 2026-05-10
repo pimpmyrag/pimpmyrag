@@ -82,9 +82,11 @@ SOFT_FACTORS=( 1.0  1.5    2.0     2.0      2.0    2.0)
 L_BOUNDARY=2.5    # Restauré haut (1.0 avait causé -0.70 de F1 boundary)
 L_COARSE=1.0
 L_FINE=2.2        # Augmenté 1.8→2.2 : donne plus de budget à la tête fine pour rares classes
-# FOCAL_FINE_GAMMA=1.5 : focal loss sur tête fine — down-weight easy (person_name@98%)
-# up-weight hard (hint_doctrine@60%). Combiné avec L_FINE=2.2 → vise à atteindre 0.87.
-FOCAL_FINE_GAMMA=1.5
+# FOCAL_FINE_GAMMA=1.0 : focal loss sur tête fine — down-weight easy (person_name@98%)
+# up-weight hard (hint_doctrine@60%). 1.0 au lieu de 1.5 : down-weight moins agressif,
+# les classes faciles contribuent encore à la moyenne → convergence plus rapide.
+# 1.5 → convergence lente (−8pts à ep14 vs v8.0), 1.0 → meilleur équilibre.
+FOCAL_FINE_GAMMA=1.0
 # FOCAL_COARSE_GAMMA=1.0 : focal loss sur coarse positifs uniquement (≠NONE).
 # Down-weight PERSON/LOC déjà bien appris, up-weight OBJECT/EVENT qui ont moins bien appris.
 # N'affecte pas NONE → évite la régression observée avec focal global sur coarse.
