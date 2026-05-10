@@ -174,7 +174,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="v8.1-svobylevel-morpho010-nerwarmup6-${TORCH_SHORT}"  # NER warmup 6 epochs (= v8.0) — fine_f1 plateau ~0.82+ (bug LR fixé)
+DATASET_VERSION="v8.1-svobylevel-morpho010-nerwarmup6-cwp075-${TORCH_SHORT}"  # class_weight_power=0.75 + hn-fine=3.0 → boost classes rares v8.1
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
@@ -341,10 +341,11 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --layer-lr-decay 0.9 \
         --ema-decay 0.999 \
         --hn-every 1 \
+        --class-weight-power 0.75 \
         --hn-boost-fp 5.0 \
         --hn-boost-fn 2.0 \
         --hn-boost-coarse 2.5 \
-        --hn-boost-fine 2.0 \
+        --hn-boost-fine 3.0 \
         --hn-boost-fp-svo $( [ "$NER_ONLY_BENCH" = "1" ] || [ "$in_warmup" = "1" ] && echo "0.0" || echo "3.0" ) \
         --hn-boost-fn-svo $( [ "$NER_ONLY_BENCH" = "1" ] || [ "$in_warmup" = "1" ] && echo "0.0" || echo "2.0" ) \
         --hn-decay 0.85 \
