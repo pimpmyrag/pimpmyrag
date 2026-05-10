@@ -81,16 +81,15 @@ SOFT_FACTORS=( 1.0  1.5    2.0     2.0      2.0    2.0)
 # lambda_fine=1.8 identifié empiriquement comme bon compromis fine vs coarse.
 L_BOUNDARY=2.5    # Restauré haut (1.0 avait causé -0.70 de F1 boundary)
 L_COARSE=1.0
-L_FINE=2.2        # Augmenté 1.8→2.2 : donne plus de budget à la tête fine pour rares classes
+L_FINE=1.8        # Retour valeur v8.0 — 2.2 + focal_fine volait du budget à boundary
 # FOCAL_FINE_GAMMA=1.0 : focal loss sur tête fine — down-weight easy (person_name@98%)
 # up-weight hard (hint_doctrine@60%). 1.0 au lieu de 1.5 : down-weight moins agressif,
 # les classes faciles contribuent encore à la moyenne → convergence plus rapide.
 # 1.5 → convergence lente (−8pts à ep14 vs v8.0), 1.0 → meilleur équilibre.
 FOCAL_FINE_GAMMA=1.0
-# FOCAL_COARSE_GAMMA=1.0 : focal loss sur coarse positifs uniquement (≠NONE).
-# Down-weight PERSON/LOC déjà bien appris, up-weight OBJECT/EVENT qui ont moins bien appris.
-# N'affecte pas NONE → évite la régression observée avec focal global sur coarse.
-FOCAL_COARSE_GAMMA=1.0
+# FOCAL_COARSE_GAMMA=0.0 : désactivé — causait régression boundary -5pts via encodeur partagé
+# (EVENT/OBJECT bénéficiaient mais boundary payait le prix → net négatif)
+FOCAL_COARSE_GAMMA=0.0
 
 # ── Lambdas SVO cibles (têtes secondaires, labels silver Stanza) ─────────────
 # Ces lambdas s'appliquent au PLEIN RÉGIME (niveau 5/full).
