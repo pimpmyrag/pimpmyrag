@@ -329,7 +329,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --patience 0 \
         --batch-size $BS \
         --accum-steps $ACCUM \
-        --lr 8e-6 \
+        --lr 1.5e-5 \
         --head-lr-multiplier 4.0 \
         --warmup-epochs 0 \
         --max-grad-norm 1.0 \
