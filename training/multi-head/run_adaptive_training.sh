@@ -116,12 +116,13 @@ NER_ONLY_BENCH=${NER_ONLY_BENCH:-0}
 # Phase NER-only initiale : stabilise boundary/coarse/fine avant d'introduire les têtes SVO.
 # Mettre à 0 pour désactiver (multitask dès le début), ou >0 pour N epochs warmup.
 # Empirique : sans warmup (nowarmup), fine_f1 plateau projeté ~0.76 (ratio décélération 0.67).
-#             avec warmup 6 (5l4g), fine_f1 plateau réel 0.828 (ratio 0.75).
-# Cause : sans warmup, SVO compète avec fine NER dès ep1 → modèle "brûle" sa capacité
-#         d'apprentissage fine trop tôt → plateau bas.
+#             avec warmup 6 (5l4g et v8.0), fine_f1 plateau réel 0.828+ (ratio 0.75).
+# RETOUR à 6 (valeur v8.0) : le bug LR (fine→0) est corrigé (commit a496192).
+# Le bug était : LinearLR(total_iters=0) appliquait LR×0.1 à toutes les epochs.
+# Maintenant : --warmup-epochs 0 → cosine direct → LR plein → fine monte normalement.
 # Note monitoring : pendant le warmup, train/loss < val/loss car λ_SVO=0 en train
 #                   mais val/loss inclut SVO. C'est un artefact cosmétique à ignorer.
-NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-3}
+NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-6}
 
 current_level=$START_LEVEL
 stagnation_count=0
@@ -173,7 +174,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="v8.1-svobylevel-morpho010-nerwarmup3-${TORCH_SHORT}"  # NER warmup 3 epochs → fine_f1 plateau ~0.82 vs 0.76 sans warmup
+DATASET_VERSION="v8.1-svobylevel-morpho010-nerwarmup6-${TORCH_SHORT}"  # NER warmup 6 epochs (= v8.0) — fine_f1 plateau ~0.82+ (bug LR fixé)
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
