@@ -130,7 +130,7 @@ NER_ONLY_BENCH=${NER_ONLY_BENCH:-0}
 # Maintenant : --warmup-epochs 0 → cosine direct → LR plein → fine monte normalement.
 # Note monitoring : pendant le warmup, train/loss < val/loss car λ_SVO=0 en train
 #                   mais val/loss inclut SVO. C'est un artefact cosmétique à ignorer.
-NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-6}
+NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-0}   # 0 = pas de warmup NER — identique v8.0 (warmup=6 retardait boundary de 12 epochs)
 
 current_level=$START_LEVEL
 stagnation_count=0

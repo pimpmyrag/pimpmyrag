@@ -143,3 +143,4 @@ debertav3-ner/*.onnx.data
 .env.local
 training/multi-head/.secrets.env
 launch_pod.py
+training/multi-head/launch_runpod_v8.py
