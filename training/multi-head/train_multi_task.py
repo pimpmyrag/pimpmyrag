@@ -1253,18 +1253,19 @@ def main():
         print(f"   decay={args.hn_decay}, max_weight={args.hn_max_weight}")
 
     # LR scheduler basé sur les epochs
-    # LinearLR(total_iters=warmup_epochs_count) fournit un soft-start epoch 1 :
-    #   - warmup_epochs_count=0 → total_iters=0, milestones=[0] → LinearLR applique start_factor=0.1
-    #     uniquement à l'initialisation (epoch 1), puis SequentialLR bascule immédiatement vers cosine.
-    #     Pour les epochs 2+, chaque appel recrée le scheduler → milestones=[0] → cosine immédiat → LR normal.
-    #   - warmup_epochs_count>0 → warmup classique sur N epochs, puis cosine.
-    # Ce comportement (LR/10 epoch 1 seulement) est volontaire et bénéfique :
-    # il supprime les gradients SVO au démarrage sans impacter le monitoring train/val.
+    # - warmup_epochs_count>0 : LinearLR (LR/10 → LR plein) sur N epochs, puis CosineAnnealingLR.
+    # - warmup_epochs_count=0 : CosineAnnealingLR directement (LR plein dès le départ).
+    # NOTE : le pattern LinearLR(total_iters=0) + SequentialLR(milestones=[0]) appliquait LR×0.1
+    # à TOUTES les epochs (nouveau process à chaque epoch) → fine_f1→0 quand NER_WARMUP actif.
+    # La garde ci-dessous évite ce comportement pathologique.
     warmup_epochs_count = min(args.warmup_epochs, total_epochs)
-    warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=warmup_epochs_count)
     cosine_scheduler = CosineAnnealingLR(optimizer, T_max=max(1, total_epochs - warmup_epochs_count))
-    scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
-                             milestones=[warmup_epochs_count])
+    if warmup_epochs_count > 0:
+        warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=warmup_epochs_count)
+        scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
+                                 milestones=[warmup_epochs_count])
+    else:
+        scheduler = cosine_scheduler
 
     # EMA
     use_ema = args.ema_decay > 0.0
