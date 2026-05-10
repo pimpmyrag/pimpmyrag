@@ -344,6 +344,8 @@ def run_epoch(
         collect_hn: bool = False,
         scaler=None,           # torch.GradScaler pour AMP (None = FP32)
         eval_split: str | None = None,
+        focal_fine_gamma: float = 0.0,   # Focal loss sur tête fine
+        focal_coarse_gamma: float = 0.0, # Focal loss sur tête coarse (positifs seulement)
 ):
     """
     Version adaptée à l'architecture :
@@ -600,6 +602,8 @@ def run_epoch(
                     lambda_verb_ptr=lambda_verb_ptr,
                     lambda_compat=lambda_compat,
                     focal_gamma=focal_gamma,
+                    focal_coarse_gamma=focal_coarse_gamma,
+                    focal_fine_gamma=focal_fine_gamma,
                 )
 
                 loss = loss_dict["loss"] / accum_steps
@@ -951,6 +955,10 @@ def main():
                              "(B) alignement soft boundary↔coarse. Défaut=0.2")
     parser.add_argument("--focal-gamma", type=float, default=0.0,
                         help="Focal loss gamma pour boundary (0=CE, 2.0=focal)")
+    parser.add_argument("--focal-fine-gamma", type=float, default=0.0,
+                        help="Focal loss gamma pour tête fine (0=CE, 1.5=recommandé pour classes rares)")
+    parser.add_argument("--focal-coarse-gamma", type=float, default=0.0,
+                        help="Focal loss gamma sur coarse positifs uniquement (0=CE, 1.0=recommandé OBJECT/EVENT)")
     parser.add_argument("--head-lr-multiplier", type=float, default=5.0,
                         help="Multiplicateur LR pour les heads vs encoder")
     parser.add_argument("--layer-lr-decay", type=float, default=0.9,
@@ -1348,6 +1356,8 @@ def main():
             ema=ema,
             collect_hn=use_inline_hn and (epoch % args.hn_every == 0),
             scaler=scaler,
+            focal_fine_gamma=args.focal_fine_gamma,
+            focal_coarse_gamma=args.focal_coarse_gamma,
         )
 
         # ── Inline HN mining — mise à jour des poids in-memory ────────────────
@@ -1393,6 +1403,8 @@ def main():
             focal_gamma=args.focal_gamma,
             max_grad_norm=0.0,   # pas de clipping en eval
             eval_split="val",
+            focal_fine_gamma=args.focal_fine_gamma,
+            focal_coarse_gamma=args.focal_coarse_gamma,
         )
 
         if use_ema:
@@ -1579,6 +1591,8 @@ def main():
         log_every=args.log_every,
         focal_gamma=args.focal_gamma,
         eval_split="test",
+        focal_fine_gamma=args.focal_fine_gamma,
+        focal_coarse_gamma=args.focal_coarse_gamma,
     )
 
     print("\n🎯 TEST")

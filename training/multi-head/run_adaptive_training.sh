@@ -81,7 +81,14 @@ SOFT_FACTORS=( 1.0  1.5    2.0     2.0      2.0    2.0)
 # lambda_fine=1.8 identifié empiriquement comme bon compromis fine vs coarse.
 L_BOUNDARY=2.5    # Restauré haut (1.0 avait causé -0.70 de F1 boundary)
 L_COARSE=1.0
-L_FINE=1.8        # Conseillé (vs 1.0 avant) — discrimine mieux les labels fins
+L_FINE=2.2        # Augmenté 1.8→2.2 : donne plus de budget à la tête fine pour rares classes
+# FOCAL_FINE_GAMMA=1.5 : focal loss sur tête fine — down-weight easy (person_name@98%)
+# up-weight hard (hint_doctrine@60%). Combiné avec L_FINE=2.2 → vise à atteindre 0.87.
+FOCAL_FINE_GAMMA=1.5
+# FOCAL_COARSE_GAMMA=1.0 : focal loss sur coarse positifs uniquement (≠NONE).
+# Down-weight PERSON/LOC déjà bien appris, up-weight OBJECT/EVENT qui ont moins bien appris.
+# N'affecte pas NONE → évite la régression observée avec focal global sur coarse.
+FOCAL_COARSE_GAMMA=1.0
 
 # ── Lambdas SVO cibles (têtes secondaires, labels silver Stanza) ─────────────
 # Ces lambdas s'appliquent au PLEIN RÉGIME (niveau 5/full).
@@ -337,6 +344,8 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lambda-verb-ptr   $L_VPTR_NOW \
         --lambda-compat     $( [ "$NER_ONLY_BENCH" = "1" ] && echo "0.0" || echo "0.2" ) \
         --focal-gamma 0.5 \
+        --focal-fine-gamma $FOCAL_FINE_GAMMA \
+        --focal-coarse-gamma $FOCAL_COARSE_GAMMA \
         --device $DEVICE \
         --layer-lr-decay 0.9 \
         --ema-decay 0.999 \
