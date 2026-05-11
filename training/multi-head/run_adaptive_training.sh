@@ -451,8 +451,13 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
             echo "🚀 ADVANCE to level ${LEVEL_NAMES[$current_level]}" | tee -a $log_file
             rebuild_dataset $current_level
         else
-            echo "🏁 EARLY STOP at max level ${LEVEL_NAMES[$current_level]}" | tee -a $log_file
-            break
+            # Au niveau max : pas d'early stop si on a démarré directement ici (START_LEVEL=max)
+            # On remet les compteurs à zéro et on continue jusqu'à MAX_EPOCHS.
+            # L'early stop naturel est MAX_EPOCHS lui-même.
+            stagnation_count=0
+            boundary_stagnation=0
+            epochs_at_level=0
+            echo "🔄 Niveau max ${LEVEL_NAMES[$current_level]} — reset compteurs, on continue (ep $current_epoch/$MAX_EPOCHS)" | tee -a $log_file
         fi
     fi
 
