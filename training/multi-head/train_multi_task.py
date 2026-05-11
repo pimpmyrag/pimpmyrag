@@ -346,6 +346,7 @@ def run_epoch(
         eval_split: str | None = None,
         focal_fine_gamma: float = 0.0,   # Focal loss sur tête fine
         focal_coarse_gamma: float = 0.0, # Focal loss sur tête coarse (positifs seulement)
+        ignore_coarse_none: bool = False, # Si True, exclut spans NONE de la loss coarse
 ):
     """
     Version adaptée à l'architecture :
@@ -604,6 +605,7 @@ def run_epoch(
                     focal_gamma=focal_gamma,
                     focal_coarse_gamma=focal_coarse_gamma,
                     focal_fine_gamma=focal_fine_gamma,
+                    ignore_coarse_none=ignore_coarse_none,
                 )
 
                 loss = loss_dict["loss"] / accum_steps
@@ -995,6 +997,13 @@ def main():
         help="Poids minimum autorisé pour la classe NONE de la tête coarse."
     )
     parser.add_argument(
+        "--ignore-coarse-none",
+        action="store_true",
+        default=False,
+        help="Si activé, exclut les spans NONE de la loss coarse (positive-only coarse). "
+             "La tête boundary gère déjà entité/non-entité → signal redondant supprimé."
+    )
+    parser.add_argument(
         "--min-fine-none-weight",
         type=float,
         default=0.05,
@@ -1225,6 +1234,7 @@ def main():
         print("⚖️ class weights auto activés")
         print(f"   class_weight_power       = {args.class_weight_power}")
         print(f"   min_coarse_none_weight   = {args.min_coarse_none_weight}")
+        print(f"   ignore_coarse_none       = {args.ignore_coarse_none}")
         print(f"   min_fine_none_weight     = {args.min_fine_none_weight}")
 
         print("\n[boundary counts / weights]")
@@ -1358,6 +1368,7 @@ def main():
             scaler=scaler,
             focal_fine_gamma=args.focal_fine_gamma,
             focal_coarse_gamma=args.focal_coarse_gamma,
+            ignore_coarse_none=args.ignore_coarse_none,
         )
 
         # ── Inline HN mining — mise à jour des poids in-memory ────────────────
@@ -1405,6 +1416,7 @@ def main():
             eval_split="val",
             focal_fine_gamma=args.focal_fine_gamma,
             focal_coarse_gamma=args.focal_coarse_gamma,
+            ignore_coarse_none=args.ignore_coarse_none,
         )
 
         if use_ema:
@@ -1593,6 +1605,7 @@ def main():
         eval_split="test",
         focal_fine_gamma=args.focal_fine_gamma,
         focal_coarse_gamma=args.focal_coarse_gamma,
+        ignore_coarse_none=args.ignore_coarse_none,
     )
 
     print("\n🎯 TEST")

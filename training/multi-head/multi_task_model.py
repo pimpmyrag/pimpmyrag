@@ -190,6 +190,7 @@ class SpanMultiTaskModel(nn.Module):
             focal_gamma=0.0,
             focal_coarse_gamma=0.0, # Focal loss sur tête coarse — positifs seulement (≠NONE)
             focal_fine_gamma=0.0,   # Focal loss sur tête fine (séparé de boundary)
+            ignore_coarse_none=False,  # Si True, exclut spans NONE de la loss coarse (positifs only)
     ):
         device = outputs["boundary_logits"].device
 
@@ -239,16 +240,33 @@ class SpanMultiTaskModel(nn.Module):
         # focal_coarse_gamma appliqué UNIQUEMENT sur spans positifs (coarse≠NONE)
         # pour down-weighter PERSON/LOC déjà bien appris et up-weighter OBJECT/EVENT.
         # Le focal global coarse (incluant NONE) dégradait les perfs → évité ici.
-        loss_c_per = F.cross_entropy(c_logits, coarse_labels,
-                                     weight=coarse_class_weights, reduction="none")
-        if focal_coarse_gamma > 0.0:
-            pos_coarse_mask = (coarse_labels != COARSE_NONE_ID)
-            if pos_coarse_mask.any():
-                p_t_c = F.softmax(c_logits[pos_coarse_mask].detach(), dim=-1).gather(
-                    1, coarse_labels[pos_coarse_mask].unsqueeze(1)).squeeze(1)
-                loss_c_per = loss_c_per.clone()
-                loss_c_per[pos_coarse_mask] = loss_c_per[pos_coarse_mask] * (1.0 - p_t_c) ** focal_coarse_gamma
-        loss_c = (loss_c_per * sample_weights).mean()
+        # ignore_coarse_none=True : loss coarse calculée uniquement sur spans positifs (boundary=1).
+        # Raisonnement : boundary head gère déjà la détection entité/non-entité.
+        # La tête coarse n'a pas besoin d'apprendre à prédire NONE → signal redondant + bruit.
+        if ignore_coarse_none:
+            pos_mask_c = (coarse_labels != COARSE_NONE_ID)
+            if pos_mask_c.any():
+                loss_c_per_pos = F.cross_entropy(
+                    c_logits[pos_mask_c], coarse_labels[pos_mask_c],
+                    weight=coarse_class_weights, reduction="none")
+                if focal_coarse_gamma > 0.0:
+                    p_t_c = F.softmax(c_logits[pos_mask_c].detach(), dim=-1).gather(
+                        1, coarse_labels[pos_mask_c].unsqueeze(1)).squeeze(1)
+                    loss_c_per_pos = loss_c_per_pos * (1.0 - p_t_c) ** focal_coarse_gamma
+                loss_c = (loss_c_per_pos * sample_weights[pos_mask_c]).mean()
+            else:
+                loss_c = torch.tensor(0.0, device=device)
+        else:
+            loss_c_per = F.cross_entropy(c_logits, coarse_labels,
+                                         weight=coarse_class_weights, reduction="none")
+            if focal_coarse_gamma > 0.0:
+                pos_coarse_mask = (coarse_labels != COARSE_NONE_ID)
+                if pos_coarse_mask.any():
+                    p_t_c = F.softmax(c_logits[pos_coarse_mask].detach(), dim=-1).gather(
+                        1, coarse_labels[pos_coarse_mask].unsqueeze(1)).squeeze(1)
+                    loss_c_per = loss_c_per.clone()
+                    loss_c_per[pos_coarse_mask] = loss_c_per[pos_coarse_mask] * (1.0 - p_t_c) ** focal_coarse_gamma
+            loss_c = (loss_c_per * sample_weights).mean()
 
         # ── 3) Fine (NER positifs) ─────────────────────────────────────────
         # Focal loss optionnel sur fine : down-weight les classes faciles (person_name,

@@ -134,8 +134,10 @@ NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-0}   # 0 = pas de warmup NER — identiqu
 
 current_level=$START_LEVEL
 stagnation_count=0
+boundary_stagnation=0
 epochs_at_level=0
 best_score=-1.0
+best_boundary=-1.0
 current_epoch=$START_EPOCH
 resume_arg=""
 
@@ -182,7 +184,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="v8.1-svobylevel-morpho010-nerwarmup0-cwp0-${TORCH_SHORT}"  # class_weight_power=0 (v8.0) — focal_fine=1.0 gère l'équilibre seul
+DATASET_VERSION="v8.1-svobylevel-morpho010-nerwarmup0-cwp0-nocoarsenone-${TORCH_SHORT}"  # class_weight_power=0, ignore_coarse_none=True
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
@@ -251,7 +253,9 @@ print(sd[k[0]].shape[0] if k else 0)
         else
             resume_arg="--resume checkpoint_best_multitask.pt"
             best_score=$(python3 -c "import torch; c=torch.load('checkpoint_best_multitask.pt',map_location='cpu'); print(f\"{c.get('best_score',-1.0):.4f}\")" 2>/dev/null || echo "-1.0")
+            best_boundary=$(python3 -c "import torch; c=torch.load('checkpoint_best_multitask.pt',map_location='cpu'); print(f\"{c.get('best_boundary',-1.0):.4f}\")" 2>/dev/null || echo "-1.0")
             echo "best_score checkpoint: $best_score" | tee -a $log_file
+            echo "best_boundary checkpoint: $best_boundary" | tee -a $log_file
         fi
     fi
 elif [ -f checkpoint_best_multitask.pt ] || [ -f checkpoint_last_multitask.pt ]; then
@@ -329,7 +333,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --patience 0 \
         --batch-size $BS \
         --accum-steps $ACCUM \
-        --lr 1.5e-5 \
+        --lr 8e-6 \
         --head-lr-multiplier 4.0 \
         --warmup-epochs 0 \
         --max-grad-norm 1.0 \
@@ -352,6 +356,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --ema-decay 0.999 \
         --hn-every 1 \
         --class-weight-power 0.0 \
+        --ignore-coarse-none \
         --hn-boost-fp 5.0 \
         --hn-boost-fn 2.0 \
         --hn-boost-coarse 2.5 \
@@ -382,14 +387,16 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
     fi
 
     # Log résumé SVO depuis le log epoch
+    boundary_f1=$(grep "Boundary F1=" $epoch_log | tail -1 | grep -oE "Boundary F1=[0-9.]+" | cut -d= -f2 || echo "?")
     svo_f1=$(grep "SVO F1=" $epoch_log | tail -1 | grep -oE "SVO F1=[0-9.]+" | cut -d= -f2 || echo "?")
     voice_f1=$(grep "Voice F1=" $epoch_log | tail -1 | grep -oE "Voice F1=[0-9.]+" | head -1 | cut -d= -f2 || echo "?")
     gender_f1=$(grep "Gender F1=" $epoch_log | tail -1 | grep -oE "Gender F1=[0-9.]+" | cut -d= -f2 || echo "?")
     number_f1=$(grep "Number F1=" $epoch_log | tail -1 | grep -oE "Number F1=[0-9.]+" | cut -d= -f2 || echo "?")
     person_f1=$(grep "Person F1=" $epoch_log | tail -1 | grep -oE "Person F1=[0-9.]+" | cut -d= -f2 || echo "?")
-    echo "📊 Epoch $current_epoch — Val Score=$val_score SVO_F1=$svo_f1 Voice_F1=$voice_f1 Gender_F1=$gender_f1 Number_F1=$number_f1 Person_F1=$person_f1 (best=$best_score)" | tee -a $log_file
+    echo "📊 Epoch $current_epoch — Val Score=$val_score Boundary=$boundary_f1 SVO_F1=$svo_f1 Voice_F1=$voice_f1 Gender_F1=$gender_f1 Number_F1=$number_f1 Person_F1=$person_f1 (best=$best_score)" | tee -a $log_file
 
     improved=$(python3 -c "print('yes' if float('$val_score') > float('$best_score') + $MIN_DELTA else 'no')")
+    boundary_improved=$(python3 -c "print('yes' if '$boundary_f1' != '?' and float('$boundary_f1') > float('$best_boundary') + $MIN_DELTA else 'no')" 2>/dev/null || echo "no")
 
     if [ "$improved" = "yes" ]; then
         best_score=$val_score
@@ -398,6 +405,15 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
     else
         stagnation_count=$((stagnation_count + 1))
         echo "⏸️  Pas d'amélioration ($stagnation_count/$PATIENCE)" | tee -a $log_file
+    fi
+
+    if [ "$boundary_improved" = "yes" ]; then
+        best_boundary=$boundary_f1
+        boundary_stagnation=0
+        echo "✅ Boundary amélioré! best_boundary=$best_boundary" | tee -a $log_file
+    else
+        boundary_stagnation=$((boundary_stagnation + 1))
+        echo "⏸️  Boundary stagne ($boundary_stagnation/$PATIENCE)" | tee -a $log_file
     fi
 
     # Pendant le warmup NER : ne pas toucher au niveau ni à la stagnation
@@ -414,11 +430,15 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
 
     should_advance=0
     if [ $stagnation_count -ge $PATIENCE ]; then
-        echo "PLATEAU ($stagnation_count epochs)" | tee -a $log_file
+        echo "⏩ PLATEAU score global ($stagnation_count epochs) → advance" | tee -a $log_file
+        should_advance=1
+    fi
+    if [ $boundary_stagnation -ge $PATIENCE ]; then
+        echo "⏩ BOUNDARY STAGNE ($boundary_stagnation epochs) → advance hard negatives" | tee -a $log_file
         should_advance=1
     fi
     if [ $epochs_at_level -ge $MAX_EPOCHS_PER_LEVEL ]; then
-        echo "MAX epochs/level ($epochs_at_level/$MAX_EPOCHS_PER_LEVEL) -> advance" | tee -a $log_file
+        echo "⏩ MAX epochs/level ($epochs_at_level/$MAX_EPOCHS_PER_LEVEL) → advance" | tee -a $log_file
         should_advance=1
     fi
 
@@ -426,11 +446,12 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         if [ $current_level -lt $max_level ]; then
             current_level=$((current_level + 1))
             stagnation_count=0
+            boundary_stagnation=0
             epochs_at_level=0
-            echo "ADVANCE to level ${LEVEL_NAMES[$current_level]}" | tee -a $log_file
+            echo "🚀 ADVANCE to level ${LEVEL_NAMES[$current_level]}" | tee -a $log_file
             rebuild_dataset $current_level
         else
-            echo "EARLY STOP at max level ${LEVEL_NAMES[$current_level]}" | tee -a $log_file
+            echo "🏁 EARLY STOP at max level ${LEVEL_NAMES[$current_level]}" | tee -a $log_file
             break
         fi
     fi
