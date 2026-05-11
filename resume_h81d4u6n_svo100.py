@@ -35,6 +35,7 @@ for p in runpod.get_pods():
 start_cmd = (
     "bash -c '"
     "cd /workspace && "
+    "rm -rf pimpmyrag && "
     "git clone https://github.com/pimpmyrag/pimpmyrag.git pimpmyrag 2>&1 | tail -3 && "
     "cd pimpmyrag/training/multi-head && "
     "chmod +x download_and_resume.sh && "

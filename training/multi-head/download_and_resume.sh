@@ -1,5 +1,10 @@
 #!/bin/bash
 set -e
+
+# Install boto3 si manquant
+echo "📦 Vérification dépendances..."
+python3 -c "import boto3" 2>/dev/null || pip install -q boto3
+
 echo "📥 Téléchargement checkpoint R2 depuis run précédent..."
 R2_CKPT="models/v8.1-svobylevel-morpho010-nerwarmup0-cwp0-nocoarsenone-t24-deberta-bs48-RTX_3090-0511-0652/checkpoint_best_multitask.pt"
 
