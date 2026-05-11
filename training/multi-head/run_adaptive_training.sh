@@ -66,7 +66,7 @@ fi
 
 MODEL="microsoft/deberta-v3-base"
 DATA="data"
-MAX_EPOCHS=${MAX_EPOCHS:-60}
+MAX_EPOCHS=${MAX_EPOCHS:-80}
 PATIENCE=${PATIENCE:-5}
 MAX_EPOCHS_PER_LEVEL=${MAX_EPOCHS_PER_LEVEL:-12}
 MIN_DELTA=${MIN_DELTA:-0.0003}
@@ -117,7 +117,7 @@ L_VERB_PTR=0.2125     # Pointer head verbe gouverneur (silver) [v8.1: 0.25]
 SVO_RAMP_PCT=(5 15 35 60 85 100)  # % SVO par niveau de difficulté
 
 # Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
-START_LEVEL=${START_LEVEL:-0}
+START_LEVEL=${START_LEVEL:-5}    # 5=full (SVO 100%, hard=6) — rampup remplacé par full direct
 START_EPOCH=${START_EPOCH:-1}
 KEEP_CHECKPOINT=${KEEP_CHECKPOINT:-0}
 NER_ONLY_BENCH=${NER_ONLY_BENCH:-0}
@@ -184,7 +184,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="v8.1-svobylevel-morpho010-nerwarmup0-cwp0-nocoarsenone-${TORCH_SHORT}"  # class_weight_power=0, ignore_coarse_none=True
+DATASET_VERSION="v8.1-svo100-hard-nerwarmup0-cwp0-nocoarsenone-${TORCH_SHORT}"  # SVO 100% + hard=6 direct, class_weight_power=0, ignore_coarse_none=True
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
