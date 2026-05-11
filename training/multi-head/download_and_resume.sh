@@ -7,10 +7,13 @@ python3 -c "import boto3" 2>/dev/null || pip install -q boto3
 
 echo "📥 Téléchargement checkpoint R2 depuis run précédent..."
 R2_CKPT="models/v8.1-svobylevel-morpho010-nerwarmup0-cwp0-nocoarsenone-t24-deberta-bs48-RTX_3090-0511-0652/checkpoint_best_multitask.pt"
+export R2_CKPT
 
-python3 - <<'PYEOF'
-import os, boto3, sys
-R2_CKPT = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("R2_CKPT")
+python3 - <<PYEOF
+import os, boto3
+R2_CKPT = os.environ.get("R2_CKPT")
+if not R2_CKPT:
+    raise ValueError("R2_CKPT env var not set")
 s3 = boto3.client("s3",
     endpoint_url=os.environ["DVC_R2_ENDPOINT"],
     aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
