@@ -73,9 +73,9 @@ else
     export WANDB_MODE=offline
 fi
 
-# ── 3. DVC pull des datasets v8.1 ──────────────────────────────────────────────
+# ── 3. DVC pull des datasets v8.2 ──────────────────────────────────────────────
 echo ""
-echo "📥 DVC pull datasets v8.1..."
+echo "📥 DVC pull datasets v8.2..."
 cd "$REPO_ROOT"
 
 # Cloudflare R2 — injecte les credentials depuis les variables d'env RunPod
@@ -87,14 +87,14 @@ if [ -n "$AWS_ACCESS_KEY_ID" ]; then
     dvc remote modify --local r2remote secret_access_key "$AWS_SECRET_ACCESS_KEY"
 fi
 
-dvc pull training/multi-head/data/train_v8.1.jsonl \
-         training/multi-head/data/val_v8.1.jsonl \
-         training/multi-head/data/test_v8.1.jsonl
+dvc pull training/multi-head/data/train_v8.2.jsonl \
+         training/multi-head/data/val_v8.2.jsonl \
+         training/multi-head/data/test_v8.2.jsonl
 
 cd training/multi-head
 
-echo "✅ Datasets v8.1 présents :"
-wc -l data/train_v8.1.jsonl data/val_v8.1.jsonl data/test_v8.1.jsonl
+echo "✅ Datasets v8.2 présents :"
+wc -l data/train_v8.2.jsonl data/val_v8.2.jsonl data/test_v8.2.jsonl
 
 # ── 4. Vérification schéma labels v8.1 ─────────────────────────────────────────
 echo ""
