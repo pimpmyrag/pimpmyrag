@@ -68,8 +68,9 @@ MODEL="microsoft/deberta-v3-base"
 DATA="data"
 MAX_EPOCHS=${MAX_EPOCHS:-80}
 PATIENCE=${PATIENCE:-5}
-MAX_EPOCHS_PER_LEVEL=${MAX_EPOCHS_PER_LEVEL:-12}
+MAX_EPOCHS_PER_LEVEL=${MAX_EPOCHS_PER_LEVEL:-12}   # hard negatives : adaptatif (boundary-driven)
 MIN_DELTA=${MIN_DELTA:-0.0003}
+SVO_RAMP_EPOCHS=${SVO_RAMP_EPOCHS:-25}             # SVO : 100% atteint à cette epoch (fixe, découplé des HN)
 
 # Niveaux de difficulté progressifs (6 niveaux)
 LEVEL_NAMES=("easy" "easy+" "medium" "medium+" "hard" "full")
@@ -102,7 +103,7 @@ L_ROLE=0.6            # Rôles SVO (INCHANGÉ)
 L_VOICE=0.1275        # Voix active/passive (très silver) [v8.1: 0.15]
 L_CERTAINTY=0.4       # Certainty active/hypo/etc. (silver) (INCHANGÉ)
 L_MORPHO=0.10         # Gender/Number/Person — calibré pour coverage v8.1 (77% vs 43% v8.0 → gradient ×1.8x)
-L_VERB_PTR=0.2125     # Pointer head verbe gouverneur (silver) [v8.1: 0.25]
+L_VERB_PTR=0.5        # Pointer head verbe gouverneur — supervisé sur 91% SVO (v8.2) [v8.1: 0.25]
 
 # ── Ramp SVO par niveau (comme v8.0) ─────────────────────────────────────────
 # RETOUR v8.0 : Le rampup linéaire (v8.1) montait SVO trop vite (100% à epoch 20)
@@ -117,7 +118,7 @@ L_VERB_PTR=0.2125     # Pointer head verbe gouverneur (silver) [v8.1: 0.25]
 SVO_RAMP_PCT=(5 15 35 60 85 100)  # % SVO par niveau de difficulté
 
 # Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
-START_LEVEL=${START_LEVEL:-5}    # 5=full (SVO 100%, hard=6) — rampup remplacé par full direct
+START_LEVEL=${START_LEVEL:-0}    # 0=easy — ramp SVO progressif par niveau (5%→15%→35%→60%→85%→100%)
 START_EPOCH=${START_EPOCH:-1}
 KEEP_CHECKPOINT=${KEEP_CHECKPOINT:-0}
 NER_ONLY_BENCH=${NER_ONLY_BENCH:-0}
@@ -159,15 +160,10 @@ if [ "$NER_ONLY_BENCH" = "1" ]; then
     L_VERB_PTR=0.0
 fi
 
-# ── Sources gold v8.1 (TEST: torch 2.6+ avec dataset v8.1) ───────────────────
-# v8.0 : hint_quantity supprimé (→ hint_measure comme fallback), 38 fine labels
-# v8.1 : morpho Stanza+gender_guesser sur tous les spans, re-annotation hint_person_name,
-#         nettoyage hint_measure/count/rate/percentage, fragments adjec. supprimés,
-#         hint_object_generic documents → hint_document
-# TEST: v8.1 dataset + torch 2.6+ (comme v8.0 réussi) pour isoler cause régression
-TRAIN_SILVER="$DATA/train_v8.1.jsonl"
-VAL_SILVER="$DATA/val_v8.1.jsonl"
-TEST_SILVER="$DATA/test_v8.1.jsonl"
+# ── Sources gold v8.2 (gov_verb_start Stanza + Claude 6k phrases) ────────────
+TRAIN_SILVER="$DATA/train_v8.2.jsonl"
+VAL_SILVER="$DATA/val_v8.2.jsonl"
+TEST_SILVER="$DATA/test_v8.2.jsonl"
 
 # Vérification présence des fichiers gold
 for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do
@@ -184,7 +180,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="v8.1-svo100-hard-nerwarmup0-cwp0-nocoarsenone-${TORCH_SHORT}"  # SVO 100% + hard=6 direct, class_weight_power=0, ignore_coarse_none=True
+DATASET_VERSION="v8.2-svoramp25ep-hnadapt-nerwarmup0-cwp0-nocoarsenone-${TORCH_SHORT}"  # v8.2: SVO ramp fixe 25ep + HN adaptatif boundary-driven
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
@@ -305,20 +301,19 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
             best_score=-1.0
         fi
 
-        # Rampup SVO par niveau (comme v8.0) — suit la difficulté des hard negatives
-        svo_pct=${SVO_RAMP_PCT[$current_level]}
-        svo_progress=$(python3 -c "print($svo_pct / 100.0)")
-
+        # Ramp SVO linéaire sur le temps (indépendant des hard negatives)
+        # epoch 1 → 4%, epoch SVO_RAMP_EPOCHS → 100%, après → stable 100%
+        svo_progress=$(python3 -c "print(min(1.0, $current_epoch / $SVO_RAMP_EPOCHS))")
         svo_pct=$(python3 -c "print(int($svo_progress * 100))")
         L_SVO_B_NOW=$(python3 -c "print(f'{$L_SVO_BOUNDARY * $svo_progress:.4f}')")
         L_SVO_NOW=$(python3   -c "print(f'{$L_SVO        * $svo_progress:.4f}')")
         L_ROLE_NOW=$(python3  -c "print(f'{$L_ROLE       * $svo_progress:.4f}')")
         L_VOICE_NOW=$(python3 -c "print(f'{$L_VOICE      * $svo_progress:.4f}')")
         L_CERTAINTY_NOW=$(python3 -c "print(f'{$L_CERTAINTY * $svo_progress:.4f}')")
-        L_MORPHO_NOW=$(python3 -c "print(f'{$L_MORPHO    * $svo_progress:.4f}')")
+        L_MORPHO_NOW=$L_MORPHO   # morpho full dès ep1 : silver fiable, lambda=0.10, pas de risque
         L_VPTR_NOW=$(python3  -c "print(f'{$L_VERB_PTR   * $svo_progress:.4f}')")
 
-        echo "🎛️  Lambdas multitask (SVO ramp linéaire: ${svo_pct}% — epoch $current_epoch)" | tee -a $log_file
+        echo "🎛️  Lambdas multitask (SVO ramp fixe: ${svo_pct}% ep${current_epoch}/${SVO_RAMP_EPOCHS} | HN level=${LEVEL_NAMES[$current_level]})" | tee -a $log_file
         echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE  fine=$L_FINE" | tee -a $log_file
         echo "      SVO  : svo_boundary=$L_SVO_B_NOW  svo=$L_SVO_NOW  role=$L_ROLE_NOW  voice=$L_VOICE_NOW  certainty=$L_CERTAINTY_NOW  morpho=$L_MORPHO_NOW  verb_ptr=$L_VPTR_NOW" | tee -a $log_file
     fi

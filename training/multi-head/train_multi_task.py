@@ -447,6 +447,8 @@ def run_epoch(
     all_gender_true, all_gender_pred = [], []
     all_number_true, all_number_pred = [], []
     all_person_true, all_person_pred = [], []
+    # verb pointer : accuracy sur spans avec gov_verb_labels >= 0
+    all_ptr_true, all_ptr_pred = [], []
 
     # inline HN mining : id → list[(err_type|None, pred_coarse, pred_fine)]
     hn_results_by_id: dict[str, list] = {} if collect_hn else None
@@ -658,6 +660,9 @@ def run_epoch(
         gender_pred_raw = outputs["gender_logits"].argmax(dim=-1).detach().cpu().tolist()
         number_pred_raw = outputs["number_logits"].argmax(dim=-1).detach().cpu().tolist()
         person_pred_raw = outputs["person_logits"].argmax(dim=-1).detach().cpu().tolist()
+        # verb pointer : argmax sur la dim seq pour chaque span
+        vptr_logits_cpu = outputs["verb_ptr_logits"].detach().cpu()  # [N, seq]
+        ptr_pred_raw = vptr_logits_cpu.argmax(dim=-1).tolist()       # [N]
 
         # Vérité terrain alignée sur les spans scorés
         if span_indices is not None:
@@ -671,6 +676,7 @@ def run_epoch(
             gender_true  = gender_labels.detach().cpu()[si_cpu].tolist()
             number_true  = number_labels.detach().cpu()[si_cpu].tolist()
             person_true  = person_labels.detach().cpu()[si_cpu].tolist()
+            gov_verb_true = gov_verb_labels.detach().cpu()[si_cpu].tolist()
         else:
             b_true    = boundary_labels.detach().cpu().tolist()
             c_true    = coarse_labels.detach().cpu().tolist()
@@ -681,6 +687,7 @@ def run_epoch(
             gender_true  = gender_labels.detach().cpu().tolist()
             number_true  = number_labels.detach().cpu().tolist()
             person_true  = person_labels.detach().cpu().tolist()
+            gov_verb_true = gov_verb_labels.detach().cpu().tolist()
 
 
         # Accumulate boundary / coarse
@@ -730,6 +737,13 @@ def run_epoch(
             if pt < NUM_PERSON:
                 all_person_true.append(pt)
                 all_person_pred.append(pp)
+
+        # verb pointer accuracy : spans avec gov_verb_labels >= 0
+        seq_len_ptr = vptr_logits_cpu.size(1)
+        for gvt, gvp in zip(gov_verb_true, ptr_pred_raw):
+            if gvt >= 0 and gvt < seq_len_ptr:
+                all_ptr_true.append(gvt)
+                all_ptr_pred.append(gvp)
 
         # ── Inline HN mining : collecter erreurs par candidat ────────────────
         if collect_hn:
@@ -823,6 +837,12 @@ def run_epoch(
             all_person_true, all_person_pred,
             labels=[l for l in range(NUM_PERSON) if l in set(all_person_true)]
         ) if all_person_true else 0.0,
+        # verb pointer : accuracy (exact token match)
+        "verb_ptr_acc": (
+            sum(t == p for t, p in zip(all_ptr_true, all_ptr_pred)) / len(all_ptr_true)
+            if all_ptr_true else 0.0
+        ),
+        "verb_ptr_n": len(all_ptr_true),
         "boundary_report": classification_report(
             all_b_true, all_b_pred, digits=3, zero_division=0
         ) if all_b_true else "N/A",
@@ -950,7 +970,7 @@ def main():
                         help="Pondération de la loss svo_boundary (détection verbes/pronoms, défaut=0.9)")
     parser.add_argument("--lambda-morpho", type=float, default=0.3,
                         help="Pondération de la loss morpho gender+number+person (défaut=0.3)")
-    parser.add_argument("--lambda-verb-ptr", type=float, default=0.25,
+    parser.add_argument("--lambda-verb-ptr", type=float, default=0.5,
                         help="Pondération de la loss verb-pointer arg→verb (défaut=0.5)")
     parser.add_argument("--lambda-compat", type=float, default=0.2,
                         help="Pondération loss compat inter-têtes : (A) role→boundary pour participants eventlets, "
@@ -1461,6 +1481,7 @@ def main():
             f"Gender F1={val_metrics['gender_macro_f1']:.4f} | "
             f"Number F1={val_metrics['number_macro_f1']:.4f} | "
             f"Person F1={val_metrics['person_macro_f1']:.4f} | "
+            f"VerbPtr Acc={val_metrics['verb_ptr_acc']:.4f} (n={val_metrics['verb_ptr_n']})"
             f"Score={score:.4f}"
         )
 
@@ -1485,6 +1506,8 @@ def main():
                 "val/voice_f1":         val_metrics["voice_macro_f1"],
                 "val/gender_f1":        val_metrics["gender_macro_f1"],
                 "val/number_f1":        val_metrics["number_macro_f1"],
+                "val/verb_ptr_acc":     val_metrics["verb_ptr_acc"],
+                "val/verb_ptr_n":       val_metrics["verb_ptr_n"],
             }
             # Per-label F1 depuis le classification_report (val fine + coarse)
             import re as _re
