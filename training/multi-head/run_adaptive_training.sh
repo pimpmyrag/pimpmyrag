@@ -94,11 +94,12 @@ FOCAL_COARSE_GAMMA=0.0
 
 # ── Lambdas SVO cibles (têtes secondaires, labels silver Stanza) ─────────────
 # Ces lambdas s'appliquent au PLEIN RÉGIME (niveau 5/full).
-# Budget SVO total = 1.95 vs budget NER = 5.3 → SVO = 27% du total.
-# Aux niveaux inférieurs, un facteur de montée multiplicatif est appliqué.
-# RETOUR AUX VALEURS v8.0 : les valeurs v8.1 (+17.6%) causaient régression SVO -13%
-L_SVO_BOUNDARY=0.595  # Boundary SVO (silver → moins critique) [v8.1: 0.7]
-L_SVO=0.51            # Labels SVO (svo_verb/subject/object/iobj/tcomp/lcomp/cause/attr…) [v8.1: 0.6]
+# v8.3 : réduction SVO vs v8.2 pour équilibre NER/SVO après analyse v8.2.
+# v8.2 (L_SVO=0.51, L_SVO_BOUNDARY=0.595) → SVO=0.813 mais NER plafonne à 0.827.
+# v8.3 : L_SVO=0.40 (-22%), L_SVO_BOUNDARY=0.45 (-24%) → cible SVO ~0.75-0.78, NER ~0.845+
+# Budget SVO total = 1.50 vs budget NER = 5.3 → SVO = 22% du total (vs 27% en v8.2).
+L_SVO_BOUNDARY=0.45   # Boundary SVO (silver) — réduit vs v8.2 (0.595) pour ne pas écraser NER
+L_SVO=0.40            # Labels SVO (syn labels) — réduit vs v8.2 (0.51) pour équilibre NER/SVO
 L_ROLE=0.6            # Rôles SVO (INCHANGÉ)
 L_VOICE=0.1275        # Voix active/passive (très silver) [v8.1: 0.15]
 L_CERTAINTY=0.4       # Certainty active/hypo/etc. (silver) (INCHANGÉ)
