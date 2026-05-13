@@ -28,13 +28,13 @@ if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     DEVICE="cuda"
     VRAM_GB=$(python3 -c "import torch; print(round(torch.cuda.get_device_properties(0).total_memory/1024**3))" 2>/dev/null || echo "24")
     # BF16 activé (stable sur Ampere+, contrairement à fp16+GradScaler)
-    # Batch effectif cible ~96 :
-    #   40GB+ (A100)      → BS=128 accum=1  (BF16)
+    # Batch effectif cible ~96, optimizer steps/epoch cible ~312 :
+    #   40GB+ (A100/A40)  → BS=96  accum=1  (BF16) → 312 steps/ep  (was BS=128 → 234 steps, -25%)
     #   28-40GB (5090/32) → BS=96  accum=1  (BF16)
-    #   <28GB  (3090/24)  → BS=48  accum=2  (BF16) → batch effectif=96
+    #   <28GB  (3090/24)  → BS=48  accum=2  (BF16) → batch effectif=96, 312 steps/ep
     AMP_FLAG="--amp"
     if [ "$VRAM_GB" -ge 40 ] 2>/dev/null; then
-        BS=128
+        BS=96
         ACCUM=1
     elif [ "$VRAM_GB" -ge 28 ] 2>/dev/null; then
         BS=96
