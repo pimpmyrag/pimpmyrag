@@ -126,12 +126,15 @@ NER_ONLY_BENCH=${NER_ONLY_BENCH:-0}
 # Mettre à 0 pour désactiver (multitask dès le début), ou >0 pour N epochs warmup.
 # Empirique : sans warmup (nowarmup), fine_f1 plateau projeté ~0.76 (ratio décélération 0.67).
 #             avec warmup 6 (5l4g et v8.0), fine_f1 plateau réel 0.828+ (ratio 0.75).
-# RETOUR à 6 (valeur v8.0) : le bug LR (fine→0) est corrigé (commit a496192).
-# Le bug était : LinearLR(total_iters=0) appliquait LR×0.1 à toutes les epochs.
-# Maintenant : --warmup-epochs 0 → cosine direct → LR plein → fine monte normalement.
+#             v8.2 (warmup=0 + svoramp25) : SVO=0.813 mais NER plafonne à 0.827 dès ep 27.
+#             Analyse v8.2 : la ramp SVO agressive dès ep 1 vole le budget gradient NER
+#             pendant sa phase rapide (Δ>0.01/ep jusqu'à ep 12) → NER bloqué à 0.83.
+# v8.3 → warmup=12 : couvre toute la phase NER rapide (Δ>0.01/ep), NER atteint ~0.75
+#         avant que SVO démarre. Pas 15 (NER déjà ralenti) ni 6 (trop court).
+#         SVO ramp : ep 13 → ep 37 (100%), run se termine ep 60 → 23 ep post-ramp.
 # Note monitoring : pendant le warmup, train/loss < val/loss car λ_SVO=0 en train
 #                   mais val/loss inclut SVO. C'est un artefact cosmétique à ignorer.
-NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-0}   # 0 = pas de warmup NER — identique v8.0 (warmup=6 retardait boundary de 12 epochs)
+NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-12}  # v8.3 : 12 epochs NER-only avant SVO ramp
 
 current_level=$START_LEVEL
 stagnation_count=0
@@ -180,7 +183,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="v8.2-svoramp25ep-hnadapt-nerwarmup0-cwp0-nocoarsenone-${TORCH_SHORT}"  # v8.2: SVO ramp fixe 25ep + HN adaptatif boundary-driven
+DATASET_VERSION="v8.3-svoramp25ep-hnadapt-nerwarmup12-cwp0-nocoarsenone-${TORCH_SHORT}"  # v8.3: warmup NER 12ep + SVO ramp fixe 25ep + HN adaptatif boundary-driven
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
