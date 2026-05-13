@@ -33,7 +33,12 @@ PERSON_MAP  = {"1": "1", "2": "2", "3": "3"}
 PROPN_LABELS = {"hint_person_name"}
 
 # Labels pour lesquels on ne cherche pas de gender
-SKIP_LABELS = {"verb_trigger"}
+# hint_time_date : les années/dates n'ont pas de genre sémantique utile ;
+# Stanza retourne Neut→'N' sur les tokens numériques, ce qui crée une 3e
+# classe gender artificielle et dégrade le gender_f1 (v8.2 regression -0.147).
+SKIP_LABELS = {"verb_trigger", "hint_time_date", "hint_time_duration",
+               "hint_count", "hint_percentage", "hint_rate", "hint_measure",
+               "hint_money"}
 
 # gender_guesser: résultats fiables
 GG_TO_DATASET = {
