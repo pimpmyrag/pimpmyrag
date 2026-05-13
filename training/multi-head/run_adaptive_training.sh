@@ -70,7 +70,9 @@ MAX_EPOCHS=${MAX_EPOCHS:-80}
 PATIENCE=${PATIENCE:-5}
 MAX_EPOCHS_PER_LEVEL=${MAX_EPOCHS_PER_LEVEL:-12}   # hard negatives : adaptatif (boundary-driven)
 MIN_DELTA=${MIN_DELTA:-0.0003}
-SVO_RAMP_EPOCHS=${SVO_RAMP_EPOCHS:-25}             # SVO : 100% atteint à cette epoch (fixe, découplé des HN)
+SVO_RAMP_EPOCHS=${SVO_RAMP_EPOCHS:-35}             # SVO : 100% atteint après N epochs MULTITASK (relatif fin warmup) — v8.3: 35
+MORPHO_RAMP_EPOCHS=${MORPHO_RAMP_EPOCHS:-25}       # Morpho : même principe, ramp sur 25 epochs multitask
+MORPHO_DELAY=${MORPHO_DELAY:-8}                    # Morpho démarre 8 epochs après la fin du warmup NER
 
 # Niveaux de difficulté progressifs (6 niveaux)
 LEVEL_NAMES=("easy" "easy+" "medium" "medium+" "hard" "full")
@@ -132,7 +134,9 @@ NER_ONLY_BENCH=${NER_ONLY_BENCH:-0}
 #             pendant sa phase rapide (Δ>0.01/ep jusqu'à ep 12) → NER bloqué à 0.83.
 # v8.3 → warmup=12 : couvre toute la phase NER rapide (Δ>0.01/ep), NER atteint ~0.75
 #         avant que SVO démarre. Pas 15 (NER déjà ralenti) ni 6 (trop court).
-#         SVO ramp : ep 13 → ep 37 (100%), run se termine ep 60 → 23 ep post-ramp.
+#         SVO ramp RELATIVE warmup : ep 13 → 0%, ep 48 (13+35) → 100% — adouci vs avant (52% à ep13 !)
+#         Morpho ramp : ep 21 (13+8) → 0%,  ep 46 (21+25) → 100%
+#         Run se termine ep 80 → 32 ep post-ramp SVO, 34 ep post-ramp morpho.
 # Note monitoring : pendant le warmup, train/loss < val/loss car λ_SVO=0 en train
 #                   mais val/loss inclut SVO. C'est un artefact cosmétique à ignorer.
 NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-12}  # v8.3 : 12 epochs NER-only avant SVO ramp
@@ -164,10 +168,10 @@ if [ "$NER_ONLY_BENCH" = "1" ]; then
     L_VERB_PTR=0.0
 fi
 
-# ── Sources gold v8.2 (gov_verb_start Stanza + Claude 6k phrases) ────────────
-TRAIN_SILVER="$DATA/train_v8.2.jsonl"
-VAL_SILVER="$DATA/val_v8.2.jsonl"
-TEST_SILVER="$DATA/test_v8.2.jsonl"
+# ── Sources gold v8.3 (pronoms + certainty/voice verb_trigger complétés) ─────
+TRAIN_SILVER="$DATA/train_v8.3.jsonl"
+VAL_SILVER="$DATA/val_v8.3.jsonl"
+TEST_SILVER="$DATA/test_v8.3.jsonl"
 
 # Vérification présence des fichiers gold
 for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do
@@ -305,16 +309,21 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
             best_score=-1.0
         fi
 
-        # Ramp SVO linéaire sur le temps (indépendant des hard negatives)
-        # epoch 1 → 4%, epoch SVO_RAMP_EPOCHS → 100%, après → stable 100%
-        svo_progress=$(python3 -c "print(min(1.0, $current_epoch / $SVO_RAMP_EPOCHS))")
+        # Ramp SVO linéaire RELATIVE à la fin du warmup NER
+        # ep NER_WARMUP_EPOCHS+1 → 0%, ep NER_WARMUP_EPOCHS+SVO_RAMP_EPOCHS → 100%
+        # (fix v8.3 : l'ancienne formule utilisait current_epoch brut → saut 0%→52% à ep13)
+        ramp_epoch=$((current_epoch - NER_WARMUP_EPOCHS))
+        svo_progress=$(python3 -c "print(min(1.0, max(0.0, $ramp_epoch / $SVO_RAMP_EPOCHS)))")
         svo_pct=$(python3 -c "print(int($svo_progress * 100))")
         L_SVO_B_NOW=$(python3 -c "print(f'{$L_SVO_BOUNDARY * $svo_progress:.4f}')")
         L_SVO_NOW=$(python3   -c "print(f'{$L_SVO        * $svo_progress:.4f}')")
         L_ROLE_NOW=$(python3  -c "print(f'{$L_ROLE       * $svo_progress:.4f}')")
         L_VOICE_NOW=$(python3 -c "print(f'{$L_VOICE      * $svo_progress:.4f}')")
         L_CERTAINTY_NOW=$(python3 -c "print(f'{$L_CERTAINTY * $svo_progress:.4f}')")
-        L_MORPHO_NOW=$L_MORPHO   # morpho full dès ep1 : silver fiable, lambda=0.10, pas de risque
+        # Morpho ramp : démarre MORPHO_DELAY epochs après la fin du warmup, même logique
+        morpho_ramp_epoch=$((ramp_epoch - MORPHO_DELAY))
+        morpho_progress=$(python3 -c "print(min(1.0, max(0.0, $morpho_ramp_epoch / $MORPHO_RAMP_EPOCHS)))")
+        L_MORPHO_NOW=$(python3 -c "print(f'{$L_MORPHO * $morpho_progress:.4f}')")
         L_VPTR_NOW=$(python3  -c "print(f'{$L_VERB_PTR   * $svo_progress:.4f}')")
 
         echo "🎛️  Lambdas multitask (SVO ramp fixe: ${svo_pct}% ep${current_epoch}/${SVO_RAMP_EPOCHS} | HN level=${LEVEL_NAMES[$current_level]})" | tee -a $log_file
