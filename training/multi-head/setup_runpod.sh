@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════
-#  setup_runpod.sh — Setup RunPod pour training v8.1 (labels v8.1, dataset DVC)
+#  setup_runpod.sh — Setup RunPod pour training v8.3 (dataset v8.2 nettoyé)
 #
 #  Usage depuis RunPod (aprs git clone) :
 #    cd pimpmyrag/training/multi-head
@@ -16,7 +16,7 @@ set -e
 cd "$(dirname "$0")"
 REPO_ROOT="$(cd ../.. && pwd)"
 
-echo "📦 Setup RunPod v8.1 — $(date)"
+echo "📦 Setup RunPod v8.3 — $(date)"
 
 # ── 1. Dépendances ───────────────────────────────────────────────────────────
 echo ""
@@ -110,11 +110,12 @@ assert 'hint_inst_role'     in L.FINE2ID, "hint_inst_role manquant"
 assert 'hint_document'      in L.FINE2ID, "hint_document manquant"
 assert 'hint_notion'    in L.FINE2ID, "hint_notion manquant (v8.1)"
 assert 'hint_doctrine'  in L.FINE2ID, "hint_doctrine manquant (v8.1)"
-assert 'hint_process' not in L.FINE2ID, "hint_process encore present — labels.py pas mis a jour"
-assert 'hint_rule'    not in L.FINE2ID, "hint_rule encore present — labels.py pas mis a jour"
-assert 'hint_concept'  not in L.FINE2ID, "hint_concept encore present — labels.py pas mis a jour"
-assert 'hint_quantity' not in L.FINE2ID, "hint_quantity encore present — labels.py pas mis a jour"
+assert 'hint_process' not in L.FINE2ID, "hint_process encore present"
+assert 'hint_rule'    not in L.FINE2ID, "hint_rule encore present"
+assert 'hint_concept'  not in L.FINE2ID, "hint_concept encore present"
+assert 'hint_quantity' not in L.FINE2ID, "hint_quantity encore present"
 print(f"✅ labels.py v8.1 OK — NUM_FINE={L.NUM_FINE}  NUM_COARSE={len(L.COARSE_LABELS)}")
+print(f"   v8.3 training : warmup NER 12ep + SVO ramp 25ep + dataset v8.2 (gender fix)")
 PYEOF
 
 # ── 5. Lancement du training ─────────────────────────────────────────────────
