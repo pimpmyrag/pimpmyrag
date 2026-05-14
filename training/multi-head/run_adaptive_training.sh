@@ -76,8 +76,12 @@ MORPHO_DELAY=${MORPHO_DELAY:-8}                    # Morpho démarre 8 epochs ap
 
 # Niveaux de difficulté progressifs (6 niveaux)
 LEVEL_NAMES=("easy" "easy+" "medium" "medium+" "hard" "full")
-HARD_PER_GOLD=(2    3      4       5        6      6)
-SOFT_FACTORS=( 1.0  1.5    2.0     2.0      2.0    2.0)
+HARD_PER_GOLD=(2    2      3       4        5      6)
+# v8.3 : soft_factor réduit aux niveaux bas pour compenser l'augmentation
+# des candidats SYN (pron_subj/pron_obj) — niveau easy passe de 1.0 à 0.5
+# ce qui ramène ~70 candidats/phrase vers ~50 (niveau v8.2) pour limiter
+# le coût compute pendant le warmup NER (12 epochs où SVO lambda=0)
+SOFT_FACTORS=( 0.5  1.0    1.5     2.0      2.0    2.0)
 
 # ── Lambdas NER (têtes principales, labels gold) ─────────────────────────────
 # lambda_boundary élevé = priorité absolue : c'est la tête la plus fragile.
@@ -217,7 +221,7 @@ rebuild_dataset() {
         --model-name $MODEL \
         --hard-per-gold $hard \
         --soft-factor $soft \
-        --max-span-len 12
+        --max-span-len 8
 }
 
 # Build val/test une seule fois
@@ -228,7 +232,7 @@ python3 build_multitask_dataset.py \
     --model-name $MODEL \
     --hard-per-gold 6 \
     --soft-factor 2.0 \
-    --max-span-len 12
+    --max-span-len 8
 
 python3 build_multitask_dataset.py \
     --input  $TEST_SILVER \
@@ -236,7 +240,7 @@ python3 build_multitask_dataset.py \
     --model-name $MODEL \
     --hard-per-gold 6 \
     --soft-factor 2.0 \
-    --max-span-len 12
+    --max-span-len 8
 
 # Checkpoints
 if [ "$KEEP_CHECKPOINT" = "1" ]; then
