@@ -308,9 +308,12 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
            && [ "$NER_WARMUP_EPOCHS" -gt 0 ]; then
             echo "🚀 Fin warmup NER → démarrage multitask avec rampup linéaire SVO" | tee -a $log_file
             # Réinitialiser stagnation/niveau pour repartir proprement en multitask
+            # (les compteurs boundary/score du warmup ne reflètent pas le régime multitask)
             stagnation_count=0
+            boundary_stagnation=0
             epochs_at_level=0
             best_score=-1.0
+            best_boundary=-1.0
         fi
 
         # Ramp SVO linéaire RELATIVE à la fin du warmup NER
