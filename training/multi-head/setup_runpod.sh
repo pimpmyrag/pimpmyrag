@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════
-#  setup_runpod.sh — Setup RunPod pour training v8.3 (dataset v8.2 nettoyé)
+#  setup_runpod.sh — Setup RunPod pour training v8.4
 #
 #  Usage depuis RunPod (aprs git clone) :
 #    cd pimpmyrag/training/multi-head
@@ -16,7 +16,7 @@ set -e
 cd "$(dirname "$0")"
 REPO_ROOT="$(cd ../.. && pwd)"
 
-echo "📦 Setup RunPod v8.3 — $(date)"
+echo "📦 Setup RunPod v8.4 — $(date)"
 
 # ── 1. Dépendances ───────────────────────────────────────────────────────────
 echo ""
@@ -73,9 +73,9 @@ else
     export WANDB_MODE=offline
 fi
 
-# ── 3. DVC pull des datasets v8.3 ──────────────────────────────────────────────
+# ── 3. DVC pull des datasets v8.4 ──────────────────────────────────────────────
 echo ""
-echo "📥 DVC pull datasets v8.3..."
+echo "📥 DVC pull datasets v8.4..."
 cd "$REPO_ROOT"
 
 # Cloudflare R2 — injecte les credentials depuis les variables d'env RunPod
@@ -87,35 +87,33 @@ if [ -n "$AWS_ACCESS_KEY_ID" ]; then
     dvc remote modify --local r2remote secret_access_key "$AWS_SECRET_ACCESS_KEY"
 fi
 
-dvc pull training/multi-head/data/train_v8.3.jsonl \
-         training/multi-head/data/val_v8.3.jsonl \
-         training/multi-head/data/test_v8.3.jsonl
+dvc pull training/multi-head/data/train_v8.4.jsonl \
+         training/multi-head/data/val_v8.4.jsonl \
+         training/multi-head/data/test_v8.4.jsonl
 
 cd training/multi-head
 
-echo "✅ Datasets v8.3 présents :"
-wc -l data/train_v8.3.jsonl data/val_v8.3.jsonl data/test_v8.3.jsonl
+echo "✅ Datasets v8.4 présents :"
+wc -l data/train_v8.4.jsonl data/val_v8.4.jsonl data/test_v8.4.jsonl
 
-# ── 4. Vérification schéma labels v8.1 ─────────────────────────────────────────
+# ── 4. Vérification schéma labels v8.4 ─────────────────────────────────────────
 echo ""
-echo "🔍 Vérification labels v8.1 (NUM_FINE=38, NUM_COARSE=10)..."
+echo "🔍 Vérification labels v8.4 (NUM_FINE=38, NUM_COARSE=10, NUM_GENDER=2)..."
 python3 - <<'PYEOF'
 import sys
 sys.path.insert(0, '.')
 import labels as L
 assert L.NUM_FINE == 38, f"NUM_FINE={L.NUM_FINE} attendu 38"
 assert len(L.COARSE_LABELS) == 10, f"NUM_COARSE={len(L.COARSE_LABELS)} attendu 10"
-assert 'hint_inst_name'     in L.FINE2ID, "hint_inst_name manquant"
-assert 'hint_inst_role'     in L.FINE2ID, "hint_inst_role manquant"
-assert 'hint_document'      in L.FINE2ID, "hint_document manquant"
-assert 'hint_notion'    in L.FINE2ID, "hint_notion manquant (v8.1)"
-assert 'hint_doctrine'  in L.FINE2ID, "hint_doctrine manquant (v8.1)"
+assert L.NUM_GENDER == 2, f"NUM_GENDER={L.NUM_GENDER} attendu 2 (N supprime v8.4)"
+assert 'hint_inst_name'  in L.FINE2ID, "hint_inst_name manquant"
+assert 'hint_inst_role'  in L.FINE2ID, "hint_inst_role manquant"
+assert 'hint_notion'     in L.FINE2ID, "hint_notion manquant"
+assert 'hint_doctrine'   in L.FINE2ID, "hint_doctrine manquant"
 assert 'hint_process' not in L.FINE2ID, "hint_process encore present"
-assert 'hint_rule'    not in L.FINE2ID, "hint_rule encore present"
-assert 'hint_concept'  not in L.FINE2ID, "hint_concept encore present"
 assert 'hint_quantity' not in L.FINE2ID, "hint_quantity encore present"
-print(f"✅ labels.py v8.1 OK — NUM_FINE={L.NUM_FINE}  NUM_COARSE={len(L.COARSE_LABELS)}")
-print(f"   v8.3 training : warmup NER 12ep + SVO ramp 25ep + dataset v8.2 (gender fix)")
+print(f"✅ labels.py v8.4 OK — NUM_FINE={L.NUM_FINE} NUM_COARSE={len(L.COARSE_LABELS)} NUM_GENDER={L.NUM_GENDER}")
+print(f"   v8.4: cwp=0.5 + SVO ramp 20ep + morpho des ep13 + dataset corrige inst/org/doctrine")
 PYEOF
 
 # ── 5. Lancement du training ─────────────────────────────────────────────────
