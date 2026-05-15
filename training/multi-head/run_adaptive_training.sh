@@ -70,9 +70,9 @@ MAX_EPOCHS=${MAX_EPOCHS:-80}
 PATIENCE=${PATIENCE:-5}
 MAX_EPOCHS_PER_LEVEL=${MAX_EPOCHS_PER_LEVEL:-12}   # hard negatives : adaptatif (boundary-driven)
 MIN_DELTA=${MIN_DELTA:-0.0003}
-SVO_RAMP_EPOCHS=${SVO_RAMP_EPOCHS:-35}             # SVO : 100% atteint après N epochs MULTITASK (relatif fin warmup) — v8.3: 35
-MORPHO_RAMP_EPOCHS=${MORPHO_RAMP_EPOCHS:-25}       # Morpho : même principe, ramp sur 25 epochs multitask
-MORPHO_DELAY=${MORPHO_DELAY:-8}                    # Morpho démarre 8 epochs après la fin du warmup NER
+SVO_RAMP_EPOCHS=${SVO_RAMP_EPOCHS:-20}             # SVO : 100% atteint après N epochs MULTITASK — v8.4: 20 (vs 35 en v8.3, convergence plus rapide)
+MORPHO_RAMP_EPOCHS=${MORPHO_RAMP_EPOCHS:-20}       # Morpho : même principe, ramp sur 20 epochs multitask
+MORPHO_DELAY=${MORPHO_DELAY:-0}                    # Morpho démarre dès la fin du warmup NER (v8.4: 0, vs 8 en v8.3)
 
 # Niveaux de difficulté progressifs (6 niveaux)
 LEVEL_NAMES=("easy" "easy+" "medium" "medium+" "hard" "full")
@@ -172,10 +172,10 @@ if [ "$NER_ONLY_BENCH" = "1" ]; then
     L_VERB_PTR=0.0
 fi
 
-# ── Sources gold v8.3 (pronoms + certainty/voice verb_trigger complétés) ─────
-TRAIN_SILVER="$DATA/train_v8.3.jsonl"
-VAL_SILVER="$DATA/val_v8.3.jsonl"
-TEST_SILVER="$DATA/test_v8.3.jsonl"
+# ── Sources gold v8.4 (inst/org/role corrigés par Claude Batch API + doctrine/notion nettoyé) ─────
+TRAIN_SILVER="$DATA/train_v8.4.jsonl"
+VAL_SILVER="$DATA/val_v8.4.jsonl"
+TEST_SILVER="$DATA/test_v8.4.jsonl"
 
 # Vérification présence des fichiers gold
 for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do
@@ -192,7 +192,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="v8.3-svoramp25ep-hnadapt-nerwarmup12-cwp0-nocoarsenone-${TORCH_SHORT}"  # v8.3: warmup NER 12ep + SVO ramp fixe 25ep + HN adaptatif boundary-driven
+DATASET_VERSION="v8.4-svoramp20ep-hnadapt-nerwarmup12-cwp05-nocoarsenone-${TORCH_SHORT}"  # v8.4: cwp=0.5 restauré + SVO ramp 20ep + morpho dès fin warmup + corrections inst/org/doctrine
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
@@ -367,7 +367,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --layer-lr-decay 0.9 \
         --ema-decay 0.999 \
         --hn-every 1 \
-        --class-weight-power 0.0 \
+        --class-weight-power 0.5 \
         --ignore-coarse-none \
         --hn-boost-fp 5.0 \
         --hn-boost-fn 2.0 \

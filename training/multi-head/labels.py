@@ -237,14 +237,16 @@ CERTAINTY_NONE_ID = NUM_CERTAINTY   # sentinel
 # person        : sur pronoms uniquement
 # ─────────────────────────────────────────────────────────────
 
-GENDER_LABELS  = ["M", "F", "N"]    # 0 Masc, 1 Fem, 2 Neutre
+GENDER_LABELS  = ["M", "F"]         # 0 Masc, 1 Fem  (N supprimé : <0.1% du dataset, impossble à apprendre)
 GENDER2ID      = {x: i for i, x in enumerate(GENDER_LABELS)}
 # Compat anciens labels Stanza
 GENDER2ID["Masc"] = GENDER2ID["M"]
 GENDER2ID["Fem"]  = GENDER2ID["F"]
-ID2GENDER      = {0: "M", 1: "F", 2: "N"}
-NUM_GENDER     = 3
-GENDER_NONE_ID = NUM_GENDER   # sentinel = 3
+# N=Neutre → NONE (exclu de la loss et du scorer)
+GENDER2ID["N"]    = len(GENDER_LABELS)   # sera mappé à NONE_ID
+ID2GENDER      = {0: "M", 1: "F"}
+NUM_GENDER     = 2
+GENDER_NONE_ID = NUM_GENDER   # sentinel = 2
 
 NUMBER_LABELS  = ["SG", "PL"]
 NUMBER2ID      = {x: i for i, x in enumerate(NUMBER_LABELS)}
