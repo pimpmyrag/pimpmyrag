@@ -299,7 +299,7 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
         make_weights(boundary_counts, 2, power=power),
         make_weights(coarse_counts, len(COARSE_LABELS), power=0.0),  # cwp=0 sur coarse : NONE majoritaire perturbe boundary via encodeur partagé
         make_weights(fine_counts, len(FINE_LABELS), power=power),
-        make_weights(role_counts, NUM_ROLE, power=power),  # cwp sur role pour équilibrer APPOS/OBLIQUE_*
+        make_weights(role_counts, NUM_ROLE, power=0.0),  # cwp=0 sur role : APPOS/OBLIQUE rares → gradient trop fort via encodeur partagé → régression boundary
         boundary_counts,
         coarse_counts,
         fine_counts,

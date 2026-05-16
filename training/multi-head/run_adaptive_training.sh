@@ -109,11 +109,12 @@ FOCAL_COARSE_GAMMA=0.0
 # Budget SVO total = 1.50 vs budget NER = 5.3 → SVO = 22% du total (vs 27% en v8.2).
 L_SVO_BOUNDARY=0.45   # Boundary SVO (silver) — réduit vs v8.2 (0.595) pour ne pas écraser NER
 L_SVO=0.40            # Labels SVO (syn labels) — réduit vs v8.2 (0.51) pour équilibre NER/SVO
-L_ROLE=0.6            # Rôles SVO (INCHANGÉ)
+L_ROLE=0.25           # Rôles SVO — réduit 0.6→0.25 : role fix (ffc3210) a ajouté ~200k spans/ep, gradient trop fort → régression boundary
 L_VOICE=0.1275        # Voix active/passive (très silver) [v8.1: 0.15]
 L_CERTAINTY=0.4       # Certainty active/hypo/etc. (silver) (INCHANGÉ)
 L_MORPHO=0.10         # Gender/Number/Person — calibré pour coverage v8.1 (77% vs 43% v8.0 → gradient ×1.8x)
 L_VERB_PTR=0.5        # Pointer head verbe gouverneur — supervisé sur 91% SVO (v8.2) [v8.1: 0.25]
+ROLE_DELAY=${ROLE_DELAY:-8}  # Role démarre 8 epochs après fin warmup NER (comme morpho en v8.3)
 
 # ── Ramp SVO par niveau (comme v8.0) ─────────────────────────────────────────
 # RETOUR v8.0 : Le rampup linéaire (v8.1) montait SVO trop vite (100% à epoch 20)
@@ -196,7 +197,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="v8.4-svoramp20ep-hnadapt-nerwarmup6-cwp05-nocoarsenone-${TORCH_SHORT}"  # v8.4b: nerwarmup=6 (sweet spot boundary) + cwp=0 coarse + SVO ramp 20ep + corrections inst/org/doctrine
+DATASET_VERSION="v8.4-svoramp20ep-hnadapt-nerwarmup6-cwp0role-roledelay8-lrole025-${TORCH_SHORT}"  # v8.4c: cwp=0 role + L_ROLE 0.6→0.25 + ROLE_DELAY=8 pour corriger régression boundary
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
@@ -328,7 +329,11 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         svo_pct=$(python3 -c "print(int($svo_progress * 100))")
         L_SVO_B_NOW=$(python3 -c "print(f'{$L_SVO_BOUNDARY * $svo_progress:.4f}')")
         L_SVO_NOW=$(python3   -c "print(f'{$L_SVO        * $svo_progress:.4f}')")
-        L_ROLE_NOW=$(python3  -c "print(f'{$L_ROLE       * $svo_progress:.4f}')")
+        # Role ramp : démarre ROLE_DELAY epochs après fin warmup NER (même logique que morpho)
+        # cwp=0 sur role : APPOS/OBLIQUE rares (~1%) boostaient trop → régression boundary via encodeur partagé
+        role_ramp_epoch=$((ramp_epoch - ROLE_DELAY))
+        role_progress=$(python3 -c "print(min(1.0, max(0.0, $role_ramp_epoch / $SVO_RAMP_EPOCHS)))")
+        L_ROLE_NOW=$(python3  -c "print(f'{$L_ROLE * $role_progress:.4f}')")
         L_VOICE_NOW=$(python3 -c "print(f'{$L_VOICE      * $svo_progress:.4f}')")
         L_CERTAINTY_NOW=$(python3 -c "print(f'{$L_CERTAINTY * $svo_progress:.4f}')")
         # Morpho ramp : démarre MORPHO_DELAY epochs après la fin du warmup, même logique
