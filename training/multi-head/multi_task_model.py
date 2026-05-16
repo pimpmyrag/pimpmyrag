@@ -300,7 +300,7 @@ class SpanMultiTaskModel(nn.Module):
             loss_syn = torch.tensor(0.0, device=device)
 
         # ── 6) Role (sur NER spans + pronoms qui ont un rôle != NONE) ─────
-        role_mask = (role_labels < ROLE_NONE_ID)   # exclut NONE (=6)
+        role_mask = (role_labels >= 0) & (role_labels < ROLE_NONE_ID)   # exclut NONE (=6) et sentinelles <0
         if role_mask.any():
             loss_role = (F.cross_entropy(role_logits[role_mask], role_labels[role_mask],
                                          weight=role_class_weights, reduction="none")
@@ -338,7 +338,7 @@ class SpanMultiTaskModel(nn.Module):
 
         # ── 10) Verb pointer (spans avec gov_verb_labels != -1) ────────────
         seq_len  = vptr_logits.size(1)
-        ptr_mask = (gov_verb_labels >= 0) & (gov_verb_labels < seq_len) & (role_labels < ROLE_NONE_ID)
+        ptr_mask = (gov_verb_labels >= 0) & (gov_verb_labels < seq_len) & (role_labels >= 0) & (role_labels < ROLE_NONE_ID)
         if ptr_mask.any() and vptr_logits.size(0) > 0:
             loss_verb_ptr = (F.cross_entropy(vptr_logits[ptr_mask], gov_verb_labels[ptr_mask], reduction="none")
                              * sample_weights[ptr_mask]).mean()
@@ -350,7 +350,7 @@ class SpanMultiTaskModel(nn.Module):
         # A) role → boundary :
         #    Un span participant (role != NONE) est forcément un span NER (boundary=1).
         #    Si boundary manque ce span, l'eventlet est cassé.
-        role_active_mask = (role_labels < ROLE_NONE_ID)
+        role_active_mask = (role_labels >= 0) & (role_labels < ROLE_NONE_ID)
         if lambda_compat > 0.0 and role_active_mask.any():
             forced_boundary = torch.ones(
                 role_active_mask.sum(), device=device, dtype=torch.long
