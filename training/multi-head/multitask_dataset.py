@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset
 
-from labels import SVO_NONE_ID, SYN_NONE_ID, ROLE_NONE_ID, VOICE_NONE_ID, CERTAINTY_NONE_ID, GENDER_NONE_ID, NUMBER_NONE_ID, PERSON_NONE_ID
+from labels import SVO_NONE_ID, SYN_NONE_ID, ROLE_NONE_ID, ROLE2ID, VOICE_NONE_ID, CERTAINTY_NONE_ID, GENDER_NONE_ID, NUMBER_NONE_ID, PERSON_NONE_ID
 
 
 class MultiTaskSpanDataset(Dataset):
@@ -77,7 +77,8 @@ class MultiTaskSpanDataset(Dataset):
                 "coarse_label_id":     c["coarse_label_id"],
                 "fine_label_id":       c["fine_label_id"],
                 "syn_label_id":        c.get("syn_label_id", c.get("svo_label_id", SYN_NONE_ID)),
-                "role_label_id":       c.get("role_label_id", ROLE_NONE_ID),
+                "role_label_id":       c.get("role_label_id",
+                                           ROLE2ID.get(c.get("svo_role", ""), ROLE_NONE_ID)),
                 "voice_label_id":      c.get("voice_label_id", VOICE_NONE_ID),
                 "certainty_label_id":  c.get("certainty_label_id", CERTAINTY_NONE_ID),
                 "gender_label_id":     c.get("gender_label_id", GENDER_NONE_ID),
