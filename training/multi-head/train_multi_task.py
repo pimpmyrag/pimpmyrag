@@ -443,6 +443,8 @@ def run_epoch(
     all_svo_true, all_svo_pred = [], []
     # voice positive-only (spans avec voice_label != VOICE_NONE_ID)
     all_voice_true, all_voice_pred = [], []
+    # certainty positive-only (spans avec certainty_label != CERTAINTY_NONE_ID)
+    all_certainty_true, all_certainty_pred = [], []
     # morpho positive-only (spans SVO actifs)
     all_gender_true, all_gender_pred = [], []
     all_number_true, all_number_pred = [], []
@@ -657,6 +659,7 @@ def run_epoch(
         svob_pred    = outputs["svo_boundary_logits"].argmax(dim=-1).detach().cpu().tolist()
         role_pred_raw  = outputs["role_logits"].argmax(dim=-1).detach().cpu().tolist()
         voice_pred_raw = outputs["voice_logits"].argmax(dim=-1).detach().cpu().tolist()
+        certainty_pred_raw = outputs["certainty_logits"].argmax(dim=-1).detach().cpu().tolist()
         gender_pred_raw = outputs["gender_logits"].argmax(dim=-1).detach().cpu().tolist()
         number_pred_raw = outputs["number_logits"].argmax(dim=-1).detach().cpu().tolist()
         person_pred_raw = outputs["person_logits"].argmax(dim=-1).detach().cpu().tolist()
@@ -673,6 +676,7 @@ def run_epoch(
             svob_true = svo_boundary_labels.detach().cpu()[si_cpu].tolist()
             role_true = role_labels.detach().cpu()[si_cpu].tolist()
             voice_true   = voice_labels.detach().cpu()[si_cpu].tolist()
+            certainty_true = certainty_labels.detach().cpu()[si_cpu].tolist()
             gender_true  = gender_labels.detach().cpu()[si_cpu].tolist()
             number_true  = number_labels.detach().cpu()[si_cpu].tolist()
             person_true  = person_labels.detach().cpu()[si_cpu].tolist()
@@ -684,6 +688,7 @@ def run_epoch(
             svob_true = svo_boundary_labels.detach().cpu().tolist()
             role_true = role_labels.detach().cpu().tolist()
             voice_true   = voice_labels.detach().cpu().tolist()
+            certainty_true = certainty_labels.detach().cpu().tolist()
             gender_true  = gender_labels.detach().cpu().tolist()
             number_true  = number_labels.detach().cpu().tolist()
             person_true  = person_labels.detach().cpu().tolist()
@@ -722,6 +727,11 @@ def run_epoch(
             if vt < NUM_VOICE:
                 all_voice_true.append(vt)
                 all_voice_pred.append(vp)
+        # Certainty : spans avec certainty annoté (label != CERTAINTY_NONE_ID)
+        for ct, cp in zip(certainty_true, certainty_pred_raw):
+            if ct < NUM_CERTAINTY:
+                all_certainty_true.append(ct)
+                all_certainty_pred.append(cp)
         # Morpho : sur spans avec gender/number/person annotés
         for rt, gt, gp, nt, np_, pt, pp in zip(
             role_true, gender_true, gender_pred_raw,
@@ -822,6 +832,10 @@ def run_epoch(
             labels=[l for l in range(NUM_ROLE) if l in set(all_svo_true)]
         ) if all_svo_true else 0.0,
         "voice_macro_f1": safe_macro_f1_local(all_voice_true, all_voice_pred) if all_voice_true else 0.0,
+        "certainty_macro_f1": safe_macro_f1_local(
+            all_certainty_true, all_certainty_pred,
+            labels=[l for l in range(NUM_CERTAINTY) if l in set(all_certainty_true)]
+        ) if all_certainty_true else 0.0,
         # Morpho : seulement les classes PRÉSENTES dans les vrais labels
         # (ex: N/neutre n'existe jamais dans les données → l'inclure donnerait F1_N=0
         #  et diluerait le macro de 1/3)
@@ -1467,6 +1481,7 @@ def main():
             f"Fine F1={train_metrics['fine_macro_f1']:.4f} | "
             f"SVO F1={train_metrics['svo_macro_f1']:.4f} | "
             f"Voice F1={train_metrics['voice_macro_f1']:.4f} | "
+            f"Certainty F1={train_metrics['certainty_macro_f1']:.4f} | "
             f"Gender F1={train_metrics['gender_macro_f1']:.4f} | "
             f"Number F1={train_metrics['number_macro_f1']:.4f} | "
             f"Person F1={train_metrics['person_macro_f1']:.4f}"
@@ -1478,6 +1493,7 @@ def main():
             f"Fine F1={val_metrics['fine_macro_f1']:.4f} | "
             f"SVO F1={val_metrics['svo_macro_f1']:.4f} | "
             f"Voice F1={val_metrics['voice_macro_f1']:.4f} | "
+            f"Certainty F1={val_metrics['certainty_macro_f1']:.4f} | "
             f"Gender F1={val_metrics['gender_macro_f1']:.4f} | "
             f"Number F1={val_metrics['number_macro_f1']:.4f} | "
             f"Person F1={val_metrics['person_macro_f1']:.4f} | "
@@ -1496,6 +1512,7 @@ def main():
                 "train/fine_f1":        train_metrics["fine_macro_f1"],
                 "train/svo_f1":         train_metrics["svo_macro_f1"],
                 "train/voice_f1":       train_metrics["voice_macro_f1"],
+                "train/certainty_f1":   train_metrics["certainty_macro_f1"],
                 "train/gender_f1":      train_metrics["gender_macro_f1"],
                 "train/number_f1":      train_metrics["number_macro_f1"],
                 "val/loss":             val_metrics["loss"],
@@ -1504,6 +1521,7 @@ def main():
                 "val/fine_f1":          val_metrics["fine_macro_f1"],
                 "val/svo_f1":           val_metrics["svo_macro_f1"],
                 "val/voice_f1":         val_metrics["voice_macro_f1"],
+                "val/certainty_f1":     val_metrics["certainty_macro_f1"],
                 "val/gender_f1":        val_metrics["gender_macro_f1"],
                 "val/number_f1":        val_metrics["number_macro_f1"],
                 "val/verb_ptr_acc":     val_metrics["verb_ptr_acc"],
@@ -1638,6 +1656,7 @@ def main():
     print(f"Fine     F1={test_metrics['fine_macro_f1']:.4f}")
     print(f"SVO      F1={test_metrics['svo_macro_f1']:.4f}")
     print(f"Voice    F1={test_metrics['voice_macro_f1']:.4f}")
+    print(f"Certainty F1={test_metrics['certainty_macro_f1']:.4f}")
     print(f"Gender   F1={test_metrics['gender_macro_f1']:.4f}")
     print(f"Number   F1={test_metrics['number_macro_f1']:.4f}")
     print(f"Person   F1={test_metrics['person_macro_f1']:.4f}")
@@ -1671,6 +1690,7 @@ def main():
             "test/fine_f1":      test_metrics["fine_macro_f1"],
             "test/svo_f1":       test_metrics["svo_macro_f1"],
             "test/voice_f1":     test_metrics["voice_macro_f1"],
+            "test/certainty_f1": test_metrics["certainty_macro_f1"],
             "test/gender_f1":    test_metrics["gender_macro_f1"],
             "test/number_f1":    test_metrics["number_macro_f1"],
             "test/loss":         test_metrics["loss"],
