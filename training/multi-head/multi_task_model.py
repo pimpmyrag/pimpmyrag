@@ -176,6 +176,7 @@ class SpanMultiTaskModel(nn.Module):
             boundary_class_weights=None,
             coarse_class_weights=None,
             fine_class_weights=None,
+            role_class_weights=None,
             lambda_boundary=1.0,
             lambda_coarse=1.0,
             lambda_fine=1.2,
@@ -301,7 +302,8 @@ class SpanMultiTaskModel(nn.Module):
         # ── 6) Role (sur NER spans + pronoms qui ont un rôle != NONE) ─────
         role_mask = (role_labels < ROLE_NONE_ID)   # exclut NONE (=6)
         if role_mask.any():
-            loss_role = (F.cross_entropy(role_logits[role_mask], role_labels[role_mask], reduction="none")
+            loss_role = (F.cross_entropy(role_logits[role_mask], role_labels[role_mask],
+                                         weight=role_class_weights, reduction="none")
                          * sample_weights[role_mask]).mean()
         else:
             loss_role = torch.tensor(0.0, device=device)

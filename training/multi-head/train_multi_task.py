@@ -259,11 +259,12 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
     - power=0.0  -> tous les poids = 1.0
 
     Retourne:
-      boundary_w, coarse_w, fine_w, boundary_counts, coarse_counts, fine_counts
+      boundary_w, coarse_w, fine_w, role_w, boundary_counts, coarse_counts, fine_counts, role_counts
     """
     boundary_counts = Counter()
     coarse_counts = Counter()
     fine_counts = Counter()
+    role_counts = Counter()
 
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -272,6 +273,7 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
                 boundary_counts[c["boundary_label"]] += 1
                 coarse_counts[c["coarse_label_id"]] += 1
                 fine_counts[c["fine_label_id"]] += 1
+                role_counts[c["role_label_id"]] += 1
 
     def make_weights(counts, num_classes, power=0.5):
         total = sum(counts.values())
@@ -295,11 +297,13 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
 
     return (
         make_weights(boundary_counts, 2, power=power),
-        make_weights(coarse_counts, len(COARSE_LABELS), power=0.0),  # cwp=0 sur coarse : classes trop déséquilibrées (NONE majoritaire) → perturbation boundary via encodeur partagé
+        make_weights(coarse_counts, len(COARSE_LABELS), power=0.0),  # cwp=0 sur coarse : NONE majoritaire perturbe boundary via encodeur partagé
         make_weights(fine_counts, len(FINE_LABELS), power=power),
+        make_weights(role_counts, NUM_ROLE, power=power),  # cwp sur role pour équilibrer APPOS/OBLIQUE_*
         boundary_counts,
         coarse_counts,
         fine_counts,
+        role_counts,
     )
 
 
@@ -325,6 +329,7 @@ def run_epoch(
         boundary_class_weights=None,
         coarse_class_weights=None,
         fine_class_weights=None,
+        role_class_weights=None,
         lambda_boundary=2.5,
         lambda_coarse=1.0,
         lambda_fine=1.8,
@@ -595,6 +600,7 @@ def run_epoch(
                     boundary_class_weights=boundary_class_weights,
                     coarse_class_weights=coarse_class_weights,
                     fine_class_weights=fine_class_weights,
+                    role_class_weights=role_class_weights,
                     lambda_boundary=lambda_boundary,
                     lambda_coarse=lambda_coarse,
                     lambda_fine=lambda_fine,
@@ -1243,9 +1249,11 @@ def main():
             boundary_w,
             coarse_w,
             fine_w,
+            role_w,
             boundary_counts,
             coarse_counts,
             fine_counts,
+            role_counts,
         ) = compute_class_weights_from_multitask_jsonl(
             args.train,
             power=args.class_weight_power,
@@ -1282,8 +1290,16 @@ def main():
         print("\n[fine counts / weights]")
         for i, name in enumerate(FINE_LABELS):
             print(f"  {name:<22} count={fine_counts.get(i, 0):>8} weight={fine_w[i].item():.6f}")
+
+        print("\n[role counts / weights]")
+        for i, name in enumerate(ROLE_LABELS):
+            print(f"  {name:<15} count={role_counts.get(i, 0):>8} weight={role_w[i].item():.6f}")
     else:
         print("⚖️ class weights désactivés")
+        boundary_w = None
+        coarse_w = None
+        fine_w = None
+        role_w = None
 
     best_score = -1.0
     start_epoch = 1
@@ -1382,6 +1398,7 @@ def main():
             boundary_class_weights=boundary_w,
             coarse_class_weights=coarse_w,
             fine_class_weights=fine_w,
+            role_class_weights=role_w,
             lambda_boundary=args.lambda_boundary,
             lambda_coarse=args.lambda_coarse,
             lambda_fine=args.lambda_fine,
@@ -1432,6 +1449,7 @@ def main():
             boundary_class_weights=boundary_w,
             coarse_class_weights=coarse_w,
             fine_class_weights=fine_w,
+            role_class_weights=role_w,
             lambda_boundary=args.lambda_boundary,
             lambda_coarse=args.lambda_coarse,
             lambda_fine=args.lambda_fine,
@@ -1629,6 +1647,7 @@ def main():
         boundary_class_weights=boundary_w,
         coarse_class_weights=coarse_w,
         fine_class_weights=fine_w,
+        role_class_weights=role_w,
         lambda_boundary=args.lambda_boundary,
         lambda_coarse=args.lambda_coarse,
         lambda_fine=args.lambda_fine,
