@@ -228,6 +228,8 @@ class SpanMultiTaskModel(nn.Module):
             coarse_class_weights = coarse_class_weights.to(device=device, dtype=torch.float32)
         if fine_class_weights is not None:
             fine_class_weights = fine_class_weights.to(device=device, dtype=torch.float32)
+        if role_class_weights is not None:
+            role_class_weights = role_class_weights.to(device=device, dtype=torch.float32)
 
         # ── 1) NER Boundary ────────────────────────────────────────────────
         loss_b_per = F.cross_entropy(b_logits, boundary_labels,
@@ -274,7 +276,7 @@ class SpanMultiTaskModel(nn.Module):
         # location) qui sont déjà bien apprises, up-weight les classes rares/difficiles
         # (hint_state/doctrine/notion) où le modèle hésite encore.
         # focal_fine_gamma=1.5 : (1-p_correct)^1.5 × CE
-        pos_mask = (boundary_labels == 1) & (fine_labels < f_logits.size(-1))
+        pos_mask = (boundary_labels == 1) & (fine_labels >= 0) & (fine_labels < f_logits.size(-1))
         if pos_mask.any():
             _fine_w = fine_class_weights if fine_class_weights is not None else None
             loss_f_per = F.cross_entropy(f_logits[pos_mask], fine_labels[pos_mask],
@@ -292,7 +294,7 @@ class SpanMultiTaskModel(nn.Module):
                       * sample_weights).mean()
 
         # ── 5) Syn type (verb_trigger=0 / pron_subj=1 / pron_obj=2) ───────
-        syn_mask = (syn_labels < syn_logits.size(-1))
+        syn_mask = (syn_labels >= 0) & (syn_labels < syn_logits.size(-1))
         if syn_mask.any():
             loss_syn = (F.cross_entropy(syn_logits[syn_mask], syn_labels[syn_mask], reduction="none")
                         * sample_weights[syn_mask]).mean()
@@ -309,7 +311,7 @@ class SpanMultiTaskModel(nn.Module):
             loss_role = torch.tensor(0.0, device=device)
 
         # ── 7) Voice (sur verb_trigger uniquement) ─────────────────────────
-        voice_mask = (voice_labels < voice_logits.size(-1))
+        voice_mask = (voice_labels >= 0) & (voice_labels < voice_logits.size(-1))
         if voice_mask.any():
             loss_voice = (F.cross_entropy(voice_logits[voice_mask], voice_labels[voice_mask], reduction="none")
                           * sample_weights[voice_mask]).mean()
@@ -317,7 +319,7 @@ class SpanMultiTaskModel(nn.Module):
             loss_voice = torch.tensor(0.0, device=device)
 
         # ── 8) Certainty (sur verb_trigger uniquement) ─────────────────────
-        cert_mask = (certainty_labels < cert_logits.size(-1))
+        cert_mask = (certainty_labels >= 0) & (certainty_labels < cert_logits.size(-1))
         if cert_mask.any():
             loss_cert = (F.cross_entropy(cert_logits[cert_mask], certainty_labels[cert_mask], reduction="none")
                          * sample_weights[cert_mask]).mean()
@@ -326,9 +328,9 @@ class SpanMultiTaskModel(nn.Module):
 
         # ── 9) Morpho : gender + number + person ───────────────────────────
         # Supervisés sur NER spans + syntactic spans qui ont les champs annotés
-        gender_mask = (gender_labels < g_logits.size(-1))
-        number_mask = (number_labels < n_logits.size(-1))
-        person_mask = (person_labels < p_logits.size(-1))
+        gender_mask = (gender_labels >= 0) & (gender_labels < g_logits.size(-1))
+        number_mask = (number_labels >= 0) & (number_labels < n_logits.size(-1))
+        person_mask = (person_labels >= 0) & (person_labels < p_logits.size(-1))
         loss_gender = (F.cross_entropy(g_logits[gender_mask], gender_labels[gender_mask], reduction="none")
                        * sample_weights[gender_mask]).mean() if gender_mask.any() else torch.tensor(0.0, device=device)
         loss_number = (F.cross_entropy(n_logits[number_mask], number_labels[number_mask], reduction="none")
