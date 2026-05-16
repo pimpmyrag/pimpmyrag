@@ -66,10 +66,13 @@ fi
 
 MODEL="microsoft/deberta-v3-base"
 DATA="data"
-MAX_EPOCHS=${MAX_EPOCHS:-80}
+MAX_EPOCHS=${MAX_EPOCHS:-60}
 PATIENCE=${PATIENCE:-5}
 MAX_EPOCHS_PER_LEVEL=${MAX_EPOCHS_PER_LEVEL:-12}   # hard negatives : adaptatif (boundary-driven)
 MIN_DELTA=${MIN_DELTA:-0.0003}
+# Détection plateau boundary par fenêtre glissante (évite les faux-reset par micro-améliorations)
+BOUNDARY_WINDOW=${BOUNDARY_WINDOW:-5}              # nb epochs de la fenêtre glissante boundary
+BOUNDARY_WINDOW_DELTA=${BOUNDARY_WINDOW_DELTA:-0.005}  # progrès net minimal requis sur la fenêtre (0.5%)
 SVO_RAMP_EPOCHS=${SVO_RAMP_EPOCHS:-20}             # SVO : 100% atteint après N epochs MULTITASK — v8.4: 20 (vs 35 en v8.3, convergence plus rapide)
 MORPHO_RAMP_EPOCHS=${MORPHO_RAMP_EPOCHS:-20}       # Morpho : même principe, ramp sur 20 epochs multitask
 MORPHO_DELAY=${MORPHO_DELAY:-0}                    # Morpho démarre dès la fin du warmup NER (v8.4: 0, vs 8 en v8.3)
@@ -151,6 +154,7 @@ boundary_stagnation=0
 epochs_at_level=0
 best_score=-1.0
 best_boundary=-1.0
+boundary_f1_window=()   # buffer fenêtre glissante pour détection plateau boundary
 current_epoch=$START_EPOCH
 resume_arg=""
 
@@ -422,13 +426,39 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         echo "⏸️  Pas d'amélioration ($stagnation_count/$PATIENCE)" | tee -a $log_file
     fi
 
+    # Mise à jour best_boundary (pour affichage)
     if [ "$boundary_improved" = "yes" ]; then
         best_boundary=$boundary_f1
-        boundary_stagnation=0
-        echo "✅ Boundary amélioré! best_boundary=$best_boundary" | tee -a $log_file
+    fi
+
+    # Fenêtre glissante boundary — détecte le plateau même si micro-améliorations consécutives
+    if [ "$boundary_f1" != "?" ]; then
+        boundary_f1_window+=("$boundary_f1")
+        # Trim au max BOUNDARY_WINDOW éléments
+        while [ ${#boundary_f1_window[@]} -gt $BOUNDARY_WINDOW ]; do
+            boundary_f1_window=("${boundary_f1_window[@]:1}")
+        done
+    fi
+
+    # Vérifier le progrès net sur la fenêtre (seulement quand fenêtre pleine)
+    if [ ${#boundary_f1_window[@]} -ge $BOUNDARY_WINDOW ] && [ "$boundary_f1" != "?" ]; then
+        window_oldest="${boundary_f1_window[0]}"
+        boundary_window_progress=$(python3 -c "
+try:
+    gain = float('$boundary_f1') - float('$window_oldest')
+    print('yes' if gain >= $BOUNDARY_WINDOW_DELTA else 'no')
+except:
+    print('yes')
+" 2>/dev/null || echo "yes")
+        if [ "$boundary_window_progress" = "no" ]; then
+            boundary_stagnation=$((boundary_stagnation + 1))
+            echo "⏸️  Boundary plateau sur ${BOUNDARY_WINDOW}ep: $window_oldest → $boundary_f1 (+$(python3 -c "print(f'{float(\"$boundary_f1\")-float(\"$window_oldest\"):.4f}')" 2>/dev/null)) (stagnation=$boundary_stagnation/$PATIENCE)" | tee -a $log_file
+        else
+            boundary_stagnation=0
+            echo "✅ Boundary progresse sur fenêtre ${BOUNDARY_WINDOW}ep: $window_oldest → $boundary_f1 (best=$best_boundary)" | tee -a $log_file
+        fi
     else
-        boundary_stagnation=$((boundary_stagnation + 1))
-        echo "⏸️  Boundary stagne ($boundary_stagnation/$PATIENCE)" | tee -a $log_file
+        echo "✅ Boundary: $boundary_f1 (fenêtre ${#boundary_f1_window[@]}/$BOUNDARY_WINDOW, best=$best_boundary)" | tee -a $log_file
     fi
 
     # Pendant le warmup NER : ne pas toucher au niveau ni à la stagnation
@@ -463,15 +493,14 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
             stagnation_count=0
             boundary_stagnation=0
             epochs_at_level=0
+            boundary_f1_window=()
             echo "🚀 ADVANCE to level ${LEVEL_NAMES[$current_level]}" | tee -a $log_file
             rebuild_dataset $current_level
         else
-            # Au niveau max : pas d'early stop si on a démarré directement ici (START_LEVEL=max)
-            # On remet les compteurs à zéro et on continue jusqu'à MAX_EPOCHS.
-            # L'early stop naturel est MAX_EPOCHS lui-même.
             stagnation_count=0
             boundary_stagnation=0
             epochs_at_level=0
+            boundary_f1_window=()
             echo "🔄 Niveau max ${LEVEL_NAMES[$current_level]} — reset compteurs, on continue (ep $current_epoch/$MAX_EPOCHS)" | tee -a $log_file
         fi
     fi
