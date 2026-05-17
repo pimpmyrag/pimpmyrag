@@ -47,3 +47,6 @@
 /train_v8.6.jsonl
 /val_v8.6.jsonl
 /test_v8.6.jsonl
+/train_v8.7.jsonl
+/val_v8.7.jsonl
+/test_v8.7.jsonl
