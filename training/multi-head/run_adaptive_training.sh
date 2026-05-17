@@ -153,7 +153,9 @@ NER_ONLY_BENCH=${NER_ONLY_BENCH:-0}
 #         Run se termine ep 80 → 32 ep post-ramp SVO, 34 ep post-ramp morpho.
 # Note monitoring : pendant le warmup, train/loss < val/loss car λ_SVO=0 en train
 #                   mais val/loss inclut SVO. C'est un artefact cosmétique à ignorer.
-NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-6}   # v8.6 : retour à 6 (nerwarmup=0 régresse dès que SVO démarre — les gains v8.1 étaient avec une config cwp=0/svobylevel différente)
+NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-0}   # v8.6 fix : retour à 0 comme v8.0/v8.1 (meilleurs scores : 0.918-0.926 boundary)
+# nerwarmup=6 causait régression boundary (0.768 vs 0.918 en v8.0). La régression
+# "SVO démarre trop tôt" était due au ramp linéaire, maintenant corrigé en svobylevel.
 
 current_level=$START_LEVEL
 stagnation_count=0
@@ -203,7 +205,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="${GOLD_VERSION}-nw6-md8-rd12-svobl-${TORCH_SHORT}"  # v8.6: nerwarmup6, morpho_delay8, role_delay12, svo-by-level
+DATASET_VERSION="${GOLD_VERSION}-nw0-md8-rd12-svobl-${TORCH_SHORT}"  # v8.6: nerwarmup0, morpho_delay8, role_delay12, svo-by-level
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
