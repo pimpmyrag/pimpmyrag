@@ -81,6 +81,7 @@ BOUNDARY_WINDOW_DELTA=${BOUNDARY_WINDOW_DELTA:-0.005}  # progrès net minimal re
 SVO_RAMP_EPOCHS=${SVO_RAMP_EPOCHS:-20}             # SVO : 100% atteint après N epochs MULTITASK — v8.4: 20 (vs 35 en v8.3, convergence plus rapide)
 MORPHO_RAMP_EPOCHS=${MORPHO_RAMP_EPOCHS:-20}       # Morpho : même principe, ramp sur 20 epochs multitask
 MORPHO_DELAY=${MORPHO_DELAY:-8}                    # Morpho démarre 8 epochs après fin warmup NER — REVERT v8.3 (v8.4 avait 0 → régression boundary)
+SVO_DELAY=${SVO_DELAY:-0}                          # SVO démarre N epochs après fin warmup NER (0 = dès le début du multitask, comme avant)
 
 # Niveaux de difficulté progressifs (6 niveaux)
 LEVEL_NAMES=("easy" "easy+" "medium" "medium+" "hard" "full")
@@ -202,7 +203,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="${GOLD_VERSION}-nw6-md8-rd12-${TORCH_SHORT}"  # v8.6: nerwarmup6, morpho_delay8, role_delay12
+DATASET_VERSION="${GOLD_VERSION}-nw6-md8-rd12-svobl-${TORCH_SHORT}"  # v8.6: nerwarmup6, morpho_delay8, role_delay12, svo-by-level
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
@@ -326,28 +327,31 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
             best_boundary=-1.0
         fi
 
-        # Ramp SVO linéaire RELATIVE à la fin du warmup NER
-        # ep NER_WARMUP_EPOCHS+1 → 0%, ep NER_WARMUP_EPOCHS+SVO_RAMP_EPOCHS → 100%
-        # (fix v8.3 : l'ancienne formule utilisait current_epoch brut → saut 0%→52% à ep13)
+        # Ramp SVO PAR NIVEAU (v8.0) — plus de ramp linéaire epoch-based
+        # Le delay masquait les premières epochs de ramp → SVO sautait à un niveau élevé
+        # au lieu de ramper depuis 0. Ici SVO suit directement le niveau de difficulté HN.
+        #   Level 0 easy   : SVO  5%   Level 3 med+  : SVO 60%
+        #   Level 1 easy+  : SVO 15%   Level 4 hard  : SVO 85%
+        #   Level 2 medium : SVO 35%   Level 5 full  : SVO 100%
         ramp_epoch=$((current_epoch - NER_WARMUP_EPOCHS))
-        svo_progress=$(python3 -c "print(min(1.0, max(0.0, $ramp_epoch / $SVO_RAMP_EPOCHS)))")
-        svo_pct=$(python3 -c "print(int($svo_progress * 100))")
+        svo_pct=${SVO_RAMP_PCT[$current_level]}
+        svo_progress=$(python3 -c "print($svo_pct / 100.0)")
         L_SVO_B_NOW=$(python3 -c "print(f'{$L_SVO_BOUNDARY * $svo_progress:.4f}')")
         L_SVO_NOW=$(python3   -c "print(f'{$L_SVO        * $svo_progress:.4f}')")
-        # Role ramp : démarre ROLE_DELAY epochs après fin warmup NER (même logique que morpho)
+        # Role ramp : démarre ROLE_DELAY epochs après fin warmup NER (epoch-based, retard intentionnel)
         # cwp=0 sur role : APPOS/OBLIQUE rares (~1%) boostaient trop → régression boundary via encodeur partagé
         role_ramp_epoch=$((ramp_epoch - ROLE_DELAY))
         role_progress=$(python3 -c "print(min(1.0, max(0.0, $role_ramp_epoch / $SVO_RAMP_EPOCHS)))")
         L_ROLE_NOW=$(python3  -c "print(f'{$L_ROLE * $role_progress:.4f}')")
         L_VOICE_NOW=$(python3 -c "print(f'{$L_VOICE      * $svo_progress:.4f}')")
         L_CERTAINTY_NOW=$(python3 -c "print(f'{$L_CERTAINTY * $svo_progress:.4f}')")
-        # Morpho ramp : démarre MORPHO_DELAY epochs après la fin du warmup, même logique
+        # Morpho ramp : démarre MORPHO_DELAY epochs après la fin du warmup, epoch-based
         morpho_ramp_epoch=$((ramp_epoch - MORPHO_DELAY))
         morpho_progress=$(python3 -c "print(min(1.0, max(0.0, $morpho_ramp_epoch / $MORPHO_RAMP_EPOCHS)))")
         L_MORPHO_NOW=$(python3 -c "print(f'{$L_MORPHO * $morpho_progress:.4f}')")
         L_VPTR_NOW=$(python3  -c "print(f'{$L_VERB_PTR   * $svo_progress:.4f}')")
 
-        echo "🎛️  Lambdas multitask (SVO ramp fixe: ${svo_pct}% ep${current_epoch}/${SVO_RAMP_EPOCHS} | HN level=${LEVEL_NAMES[$current_level]})" | tee -a $log_file
+        echo "🎛️  Lambdas multitask (SVO ramp: ${svo_pct}% [by-level=${LEVEL_NAMES[$current_level]}] morpho=${morpho_ramp_epoch}/${MORPHO_RAMP_EPOCHS} role=${role_ramp_epoch}/${SVO_RAMP_EPOCHS})" | tee -a $log_file
         echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE  fine=$L_FINE" | tee -a $log_file
         echo "      SVO  : svo_boundary=$L_SVO_B_NOW  svo=$L_SVO_NOW  role=$L_ROLE_NOW  voice=$L_VOICE_NOW  certainty=$L_CERTAINTY_NOW  morpho=$L_MORPHO_NOW  verb_ptr=$L_VPTR_NOW" | tee -a $log_file
     fi
