@@ -8,6 +8,11 @@ set -e
 cd "$(dirname "$0")"
 export PYTHONPATH="$(pwd):$PYTHONPATH"
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🔑  SEUL ENDROIT À CHANGER POUR UPGRADER LE DATASET
+GOLD_VERSION="${GOLD_VERSION:-v8.6}"
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 # ── Environnement Python ──────────────────────────────────
 if [ -f venv/bin/activate ]; then
     echo "🐍 Activation venv local"
@@ -147,7 +152,7 @@ NER_ONLY_BENCH=${NER_ONLY_BENCH:-0}
 #         Run se termine ep 80 → 32 ep post-ramp SVO, 34 ep post-ramp morpho.
 # Note monitoring : pendant le warmup, train/loss < val/loss car λ_SVO=0 en train
 #                   mais val/loss inclut SVO. C'est un artefact cosmétique à ignorer.
-NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-6}   # v8.4 : 6 epochs NER-only (sweet spot : boundary ~0.92 comme v8.0, vs 0.88 avec 12)
+NER_WARMUP_EPOCHS=${NER_WARMUP_EPOCHS:-0}   # v8.6 : 0 (data propre → nerwarmup0 = meilleur boundary en v8.1 : 0.9267 vs 0.8265 avec warmup6)
 
 current_level=$START_LEVEL
 stagnation_count=0
@@ -177,10 +182,10 @@ if [ "$NER_ONLY_BENCH" = "1" ]; then
     L_VERB_PTR=0.0
 fi
 
-# ── Sources gold v8.5 (APPOS/OBL_AGENT/OBL_CAUSE enrichis + verb_trigger certainty) ─────
-TRAIN_SILVER="$DATA/train_v8.5.jsonl"
-VAL_SILVER="$DATA/val_v8.5.jsonl"
-TEST_SILVER="$DATA/test_v8.5.jsonl"
+# ── Sources gold — dérivées de GOLD_VERSION (changer la var en tête de fichier) ─────
+TRAIN_SILVER="$DATA/train_${GOLD_VERSION}.jsonl"
+VAL_SILVER="$DATA/val_${GOLD_VERSION}.jsonl"
+TEST_SILVER="$DATA/test_${GOLD_VERSION}.jsonl"
 
 # Vérification présence des fichiers gold
 for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do
@@ -197,7 +202,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="v8.5-svoramp20ep-hnadapt-nerwarmup6-morphodelay8-roledelay12-lrole025-${TORCH_SHORT}"  # v8.5: MORPHO_DELAY reverted to 8 (fix boundary regression) + ROLE_DELAY=12 (APPOS×6)
+DATASET_VERSION="${GOLD_VERSION}-svoramp20ep-hnadapt-nerwarmup0-morphodelay8-roledelay12-lrole025-${TORCH_SHORT}"  # v8.6: data clean (64 offset errs), nerwarmup=0 (best boundary en v8.1)
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
