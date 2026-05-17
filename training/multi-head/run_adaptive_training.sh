@@ -202,7 +202,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="${GOLD_VERSION}-svoramp20ep-hnadapt-nerwarmup0-morphodelay8-roledelay12-lrole025-${TORCH_SHORT}"  # v8.6: data clean (64 offset errs), nerwarmup=0 (best boundary en v8.1)
+DATASET_VERSION="${GOLD_VERSION}-nw0-md8-rd12-${TORCH_SHORT}"  # v8.6: nerwarmup0, morpho_delay8, role_delay12
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
