@@ -75,7 +75,7 @@ BOUNDARY_WINDOW=${BOUNDARY_WINDOW:-5}              # nb epochs de la fenêtre gl
 BOUNDARY_WINDOW_DELTA=${BOUNDARY_WINDOW_DELTA:-0.005}  # progrès net minimal requis sur la fenêtre (0.5%)
 SVO_RAMP_EPOCHS=${SVO_RAMP_EPOCHS:-20}             # SVO : 100% atteint après N epochs MULTITASK — v8.4: 20 (vs 35 en v8.3, convergence plus rapide)
 MORPHO_RAMP_EPOCHS=${MORPHO_RAMP_EPOCHS:-20}       # Morpho : même principe, ramp sur 20 epochs multitask
-MORPHO_DELAY=${MORPHO_DELAY:-0}                    # Morpho démarre dès la fin du warmup NER (v8.4: 0, vs 8 en v8.3)
+MORPHO_DELAY=${MORPHO_DELAY:-8}                    # Morpho démarre 8 epochs après fin warmup NER — REVERT v8.3 (v8.4 avait 0 → régression boundary)
 
 # Niveaux de difficulté progressifs (6 niveaux)
 LEVEL_NAMES=("easy" "easy+" "medium" "medium+" "hard" "full")
@@ -114,7 +114,7 @@ L_VOICE=0.1275        # Voix active/passive (très silver) [v8.1: 0.15]
 L_CERTAINTY=0.4       # Certainty active/hypo/etc. (silver) (INCHANGÉ)
 L_MORPHO=0.10         # Gender/Number/Person — calibré pour coverage v8.1 (77% vs 43% v8.0 → gradient ×1.8x)
 L_VERB_PTR=0.5        # Pointer head verbe gouverneur — supervisé sur 91% SVO (v8.2) [v8.1: 0.25]
-ROLE_DELAY=${ROLE_DELAY:-8}  # Role démarre 8 epochs après fin warmup NER (comme morpho en v8.3)
+ROLE_DELAY=${ROLE_DELAY:-12}  # Role démarre 12 epochs après fin warmup NER (v8.5: +4 vs v8.4c=8 car APPOS ×6 → gradient rôle fort)
 
 # ── Ramp SVO par niveau (comme v8.0) ─────────────────────────────────────────
 # RETOUR v8.0 : Le rampup linéaire (v8.1) montait SVO trop vite (100% à epoch 20)
@@ -177,10 +177,10 @@ if [ "$NER_ONLY_BENCH" = "1" ]; then
     L_VERB_PTR=0.0
 fi
 
-# ── Sources gold v8.4 (inst/org/role corrigés par Claude Batch API + doctrine/notion nettoyé) ─────
-TRAIN_SILVER="$DATA/train_v8.4.jsonl"
-VAL_SILVER="$DATA/val_v8.4.jsonl"
-TEST_SILVER="$DATA/test_v8.4.jsonl"
+# ── Sources gold v8.5 (APPOS/OBL_AGENT/OBL_CAUSE enrichis + verb_trigger certainty) ─────
+TRAIN_SILVER="$DATA/train_v8.5.jsonl"
+VAL_SILVER="$DATA/val_v8.5.jsonl"
+TEST_SILVER="$DATA/test_v8.5.jsonl"
 
 # Vérification présence des fichiers gold
 for f in "$TRAIN_SILVER" "$VAL_SILVER" "$TEST_SILVER"; do
@@ -197,7 +197,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="v8.4-svoramp20ep-hnadapt-nerwarmup6-cwp0role-roledelay8-lrole025-${TORCH_SHORT}"  # v8.4c: cwp=0 role + L_ROLE 0.6→0.25 + ROLE_DELAY=8 pour corriger régression boundary
+DATASET_VERSION="v8.5-svoramp20ep-hnadapt-nerwarmup6-morphodelay8-roledelay12-lrole025-${TORCH_SHORT}"  # v8.5: MORPHO_DELAY reverted to 8 (fix boundary regression) + ROLE_DELAY=12 (APPOS×6)
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"

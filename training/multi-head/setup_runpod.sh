@@ -16,7 +16,7 @@ set -e
 cd "$(dirname "$0")"
 REPO_ROOT="$(cd ../.. && pwd)"
 
-echo "📦 Setup RunPod v8.4 — $(date)"
+echo "📦 Setup RunPod v8.5 — $(date)"
 
 # ── 1. Dépendances ───────────────────────────────────────────────────────────
 echo ""
@@ -87,18 +87,18 @@ if [ -n "$AWS_ACCESS_KEY_ID" ]; then
     dvc remote modify --local r2remote secret_access_key "$AWS_SECRET_ACCESS_KEY"
 fi
 
-dvc pull training/multi-head/data/train_v8.4.jsonl \
-         training/multi-head/data/val_v8.4.jsonl \
-         training/multi-head/data/test_v8.4.jsonl
+dvc pull training/multi-head/data/train_v8.5.jsonl \
+         training/multi-head/data/val_v8.5.jsonl \
+         training/multi-head/data/test_v8.5.jsonl
 
 cd training/multi-head
 
-echo "✅ Datasets v8.4 présents :"
-wc -l data/train_v8.4.jsonl data/val_v8.4.jsonl data/test_v8.4.jsonl
+echo "✅ Datasets v8.5 présents :"
+wc -l data/train_v8.5.jsonl data/val_v8.5.jsonl data/test_v8.5.jsonl
 
 # ── 4. Vérification schéma labels v8.4 ─────────────────────────────────────────
 echo ""
-echo "🔍 Vérification labels v8.4 (NUM_FINE=38, NUM_COARSE=10, NUM_GENDER=2)..."
+echo "🔍 Vérification labels v8.5 (NUM_FINE=38, NUM_COARSE=10, NUM_GENDER=2)..."
 python3 - <<'PYEOF'
 import sys
 sys.path.insert(0, '.')
@@ -112,8 +112,8 @@ assert 'hint_notion'     in L.FINE2ID, "hint_notion manquant"
 assert 'hint_doctrine'   in L.FINE2ID, "hint_doctrine manquant"
 assert 'hint_process' not in L.FINE2ID, "hint_process encore present"
 assert 'hint_quantity' not in L.FINE2ID, "hint_quantity encore present"
-print(f"✅ labels.py v8.4 OK — NUM_FINE={L.NUM_FINE} NUM_COARSE={len(L.COARSE_LABELS)} NUM_GENDER={L.NUM_GENDER}")
-print(f"   v8.4: cwp=0.5 + SVO ramp 20ep + morpho des ep13 + dataset corrige inst/org/doctrine")
+print(f"✅ labels.py v8.5 OK — NUM_FINE={L.NUM_FINE} NUM_COARSE={len(L.COARSE_LABELS)} NUM_GENDER={L.NUM_GENDER}")
+print(f"   v8.5: MORPHO_DELAY=8 (revert fix boundary regression) + ROLE_DELAY=12 (APPOS×6) + APPOS/OBL_AGENT/OBL_CAUSE enrichis")
 PYEOF
 
 # ── 5. Lancement du training ─────────────────────────────────────────────────
