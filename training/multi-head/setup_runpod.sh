@@ -105,8 +105,8 @@ wc -l data/train_${GOLD_VERSION}.jsonl data/val_${GOLD_VERSION}.jsonl data/test_
 echo ""
 echo "🔍 Vérification labels ${GOLD_VERSION} (NUM_FINE=38, NUM_COARSE=10, NUM_GENDER=2)..."
 python3 - <<'PYEOF'
-import sys
-sys.path.insert(0, '.')
+import sys, os
+sys.path.insert(0, ".")
 import labels as L
 assert L.NUM_FINE == 38, f"NUM_FINE={L.NUM_FINE} attendu 38"
 assert len(L.COARSE_LABELS) == 10, f"NUM_COARSE={len(L.COARSE_LABELS)} attendu 10"
