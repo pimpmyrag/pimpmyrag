@@ -65,6 +65,7 @@ def main():
     parser.add_argument("--gold-version", default=DEFAULT_GOLD_VERSION, help=f"Version dataset gold (défaut: {DEFAULT_GOLD_VERSION})")
     parser.add_argument("--gpu",          default=None,                 help="GPU à mettre en tête de liste (ex: 'RTX 4090')")
     parser.add_argument("--dry-run",      action="store_true",          help="Affiche la config sans lancer le pod")
+    parser.add_argument("--no-kill",      action="store_true",          help="Ne PAS tuer les pods existants (runs parallèles)")
     args = parser.parse_args()
 
     load_secrets()
@@ -101,23 +102,30 @@ def main():
         print(f"   {start_cmd}")
         return
 
-    # Kill les pods en cours
+    # Kill les pods en cours (sauf si --no-kill)
     print("\n🔍 Vérification des pods en cours...")
     existing = runpod.get_pods()
     killed = []
-    for p in existing:
-        if p.get("desiredStatus") in ("RUNNING", "PENDING"):
-            print(f"  🛑 Kill {p['id']} ({p.get('name', '?')})...")
-            try:
-                runpod.terminate_pod(p["id"])
-                killed.append(p["id"])
-            except Exception as e:
-                print(f"     ⚠️  {e}")
-    if killed:
-        print(f"  ✅ {len(killed)} pod(s) terminé(s), attente 5s...")
-        time.sleep(5)
+    if args.no_kill:
+        active = [p for p in existing if p.get("desiredStatus") in ("RUNNING", "PENDING")]
+        if active:
+            print(f"  ℹ️  --no-kill : {len(active)} pod(s) conservé(s) ({', '.join(p['id'] for p in active)})")
+        else:
+            print("  ✅ Aucun pod actif.")
     else:
-        print("  ✅ Aucun pod actif.")
+        for p in existing:
+            if p.get("desiredStatus") in ("RUNNING", "PENDING"):
+                print(f"  🛑 Kill {p['id']} ({p.get('name', '?')})...")
+                try:
+                    runpod.terminate_pod(p["id"])
+                    killed.append(p["id"])
+                except Exception as e:
+                    print(f"     ⚠️  {e}")
+        if killed:
+            print(f"  ✅ {len(killed)} pod(s) terminé(s), attente 5s...")
+            time.sleep(5)
+        else:
+            print("  ✅ Aucun pod actif.")
 
     # Création du pod
     pod = None
