@@ -48,15 +48,29 @@ run_in_terminal("cd .../multi-head && source venv/bin/activate && python3 /tmp/c
 
 **Types :** `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`
 
-### W&B / Analyse de runs
+### W&B / Monitoring de runs
 
-**✅ Scripts d'analyse :**
-- Créer dans `/tmp/check_*.py`
-- Charger les credentials via `dotenv` depuis `.secrets.env`
-- Project W&B : `pimpmyrag-pimpmyrag/pimpmyrag-ner`
-- Métriques clés : `val/boundary_f1`, `val/fine_f1`, `test/boundary_f1`, `test/fine_f1`
-- Grouper par epoch avec `history.groupby('epoch')`
-- Toujours vérifier que les colonnes existent avant d'y accéder
+**✅ TOUJOURS utiliser `monitor_run.py` (script permanent, ne PAS créer de nouveaux scripts) :**
+```bash
+cd /Users/simon_longuet/IdeaProjects/pimpmyrag
+python3 monitor_run.py                    # dernier run actif — toutes métriques
+python3 monitor_run.py --compare 6        # comparaison des 6 derniers runs (boundary/epoch)
+python3 monitor_run.py --run <id_ou_nom>  # run spécifique
+python3 monitor_run.py --watch 120        # refresh auto toutes les 120s
+python3 monitor_run.py --epochs 10        # afficher seulement les 10 dernières epochs
+```
+
+**Affiche :** NER core (boundary+Δ+trend), TIME labels, INST labels, SVO, Loss, état SVO trigger.
+
+**❌ NE PAS créer de nouveaux `/tmp/check_wandb_*.py`** pour des analyses standard de métriques — utiliser `monitor_run.py` ou l'enrichir si une nouvelle métrique est manquante.
+
+**Pour des analyses ponctuelles spécifiques** (distribution dataset, offsets, etc.) → `/tmp/check_*.py` reste OK.
+
+**Project W&B :** `pimpmyrag-pimpmyrag/pimpmyrag-ner`
+**Métriques clés :** `val/boundary_f1` (cible >0.92), `val/fine_f1` (cible >0.84)
+**SVO trigger :** `bnd > 0.77 AND coarse > 0.87` (variables `SVO_TRIGGER_BND` / `SVO_TRIGGER_COARSE`)
+
+**Si `r.history()` retourne vide :** NE PAS filtrer avec `keys=` — utiliser `r.history(samples=500, pandas=True)` sans filtre puis filtrer les colonnes en Python.
 
 ### Données & DVC
 
@@ -99,6 +113,7 @@ python3 launch_training.py --dry-run                # vérifier sans lancer
 ```
 pimpmyrag/
 ├── launch_training.py              ← SCRIPT DE LANCEMENT STABLE (référence)
+├── monitor_run.py                  ← SCRIPT DE MONITORING W&B (référence)
 ├── training/multi-head/
 │   ├── setup_runpod.sh             ← Setup pod : deps + DVC pull + labels check
 │   ├── run_adaptive_training.sh    ← Training adaptatif (hard negatives, ramp SVO)
@@ -226,6 +241,6 @@ Le script `/tmp/fix_all_errors_v86.py` est la référence pour corriger :
 - [ ] Besoin venv ? → `source venv/bin/activate`
 - [ ] zsh friendly ? → Pas de heredoc, pas de `-c` complexe
 - [ ] Commit dataset ? → `dvc add` → `dvc push` → `git add *.dvc` → `git commit`
-- [ ] Analyser W&B ? → Script temporaire + `dotenv` depuis `.secrets.env`
+- [ ] Monitorer / analyser W&B ? → `python3 monitor_run.py` (PAS de nouveau script `/tmp/check_wandb_*.py`)
 - [ ] Lancer training ? → `python3 launch_training.py` (PAS de nouveau launch_vX.Y.py)
 - [ ] Changer version dataset ? → 1 ligne dans `launch_training.py` + `GOLD_VERSION` dans les 2 scripts sh
