@@ -120,13 +120,13 @@ FOCAL_COARSE_GAMMA=0.0
 # v8.2 (L_SVO=0.51, L_SVO_BOUNDARY=0.595) → SVO=0.813 mais NER plafonne à 0.827.
 # v8.3 : L_SVO=0.40 (-22%), L_SVO_BOUNDARY=0.45 (-24%) → cible SVO ~0.75-0.78, NER ~0.845+
 # Budget SVO total = 1.50 vs budget NER = 5.3 → SVO = 22% du total (vs 27% en v8.2).
-L_SVO_BOUNDARY=0.45   # Boundary SVO (silver) — réduit vs v8.2 (0.595) pour ne pas écraser NER
-L_SVO=0.40            # Labels SVO (syn labels) — réduit vs v8.2 (0.51) pour équilibre NER/SVO
-L_ROLE=0.25           # Rôles SVO — réduit 0.6→0.25 : role fix (ffc3210) a ajouté ~200k spans/ep, gradient trop fort → régression boundary
+L_SVO_BOUNDARY=0.595  # Restauré v8.0 (0.45 en v8.7.8 → -7pts NER budget via nouveaux heads)
+L_SVO=0.51            # Restauré v8.0 (0.40 en v8.7.8)
+L_ROLE=0.025          # Minuscule : budget restant après restauration v8.0 (cible NER 77%) — gradient role ~200k spans/ep écrase boundary
 L_VOICE=0.1275        # Voix active/passive (très silver) [v8.1: 0.15]
-L_CERTAINTY=0.4       # Certainty active/hypo/etc. (silver) (INCHANGÉ)
-L_MORPHO=0.10         # Gender/Number/Person — calibré pour coverage v8.1 (77% vs 43% v8.0 → gradient ×1.8x)
-L_VERB_PTR=0.5        # Pointer head verbe gouverneur — supervisé sur 91% SVO (v8.2) [v8.1: 0.25]
+L_CERTAINTY=0.013     # Minuscule : budget restant après restauration v8.0 (cible NER 77%)
+L_MORPHO=0.10         # Gender/Number/Person — calibré pour coverage v8.1 (77% vs 43% v8.0 → gradient 1.8x)
+L_VERB_PTR=0.2125     # Restauré v8.0 (0.5 en v8.7.8 → ×2.4 vs v8.0)
 ROLE_DELAY=${ROLE_DELAY:-12}  # Role démarre 12 epochs après fin warmup NER (v8.5: +4 vs v8.4c=8 car APPOS ×6 → gradient rôle fort)
 
 # Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
@@ -204,7 +204,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="${GOLD_VERSION}-nw0-md8-rd12-svotrig-bnd77c87-${TORCH_SHORT}"  # v8.8+: nerwarmup0, morpho_delay8, role_delay12, svo-trigger bnd>0.77 & coarse>0.87
+DATASET_VERSION="${GOLD_VERSION}-nw0-md8-rd12-svotrig-bnd77c87-v80lam-${TORCH_SHORT}"  # v8.8+: nerwarmup0, morpho_delay8, role_delay12, svo-trigger bnd>0.77 & coarse>0.87, lambdas restaurées v8.0 (NER 77%)
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
