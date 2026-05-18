@@ -93,11 +93,12 @@ SVO_TRIGGER_STEP_EPOCHS=${SVO_TRIGGER_STEP_EPOCHS:-5}  # +20% SVO tous les N epo
 # Niveaux de difficulté progressifs (6 niveaux)
 LEVEL_NAMES=("easy" "easy+" "medium" "medium+" "hard" "full")
 HARD_PER_GOLD=(2    2      3       4        5      6)
-# v8.3 : soft_factor réduit aux niveaux bas pour compenser l'augmentation
-# des candidats SYN (pron_subj/pron_obj) — niveau easy passe de 1.0 à 0.5
-# ce qui ramène ~70 candidats/phrase vers ~50 (niveau v8.2) pour limiter
-# le coût compute pendant le warmup NER (12 epochs où SVO lambda=0)
-SOFT_FACTORS=( 0.5  1.0    1.5     2.0      2.0    2.0)
+# v8.3 avait réduit easy: 1.0→0.5 pour limiter compute, mais créait un gap ×4 avec le val
+# (val toujours à soft=2.0) : modèle ne voyait pas assez de négatifs proches des gold en easy
+# → boundary plafonnait à 0.77 sans pouvoir apprendre la discrimination fine requise par val.
+# Retour à 1.0 (identique v8.1 qui atteignait 0.927) — gap ×2 au lieu de ×4.
+# Compute : ~+30% à niveau easy vs 0.5 (acceptable, idem v8.1 sur 3090).
+SOFT_FACTORS=( 1.0  1.25   1.5     2.0      2.0    2.0)
 
 # ── Lambdas NER (têtes principales, labels gold) ─────────────────────────────
 # lambda_boundary élevé = priorité absolue : c'est la tête la plus fragile.
@@ -204,7 +205,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="${GOLD_VERSION}-nw0-md8-rd12-svotrig-bnd77c87-v80lam-${TORCH_SHORT}"  # v8.8+: nerwarmup0, morpho_delay8, role_delay12, svo-trigger bnd>0.77 & coarse>0.87, lambdas restaurées v8.0 (NER 77%)
+DATASET_VERSION="${GOLD_VERSION}-nw0-md8-rd12-svotrig-bnd77c87-v80lam-sf10-${TORCH_SHORT}"  # sf10: soft_factor easy restauré à 1.0 (v8.1) — corrige gap ×4 train/val
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
