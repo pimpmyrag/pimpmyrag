@@ -78,10 +78,17 @@ MIN_DELTA=${MIN_DELTA:-0.0003}
 # Détection plateau boundary par fenêtre glissante (évite les faux-reset par micro-améliorations)
 BOUNDARY_WINDOW=${BOUNDARY_WINDOW:-5}              # nb epochs de la fenêtre glissante boundary
 BOUNDARY_WINDOW_DELTA=${BOUNDARY_WINDOW_DELTA:-0.005}  # progrès net minimal requis sur la fenêtre (0.5%)
-SVO_RAMP_EPOCHS=${SVO_RAMP_EPOCHS:-20}             # SVO : 100% atteint après N epochs MULTITASK — v8.4: 20 (vs 35 en v8.3, convergence plus rapide)
-MORPHO_RAMP_EPOCHS=${MORPHO_RAMP_EPOCHS:-20}       # Morpho : même principe, ramp sur 20 epochs multitask
-MORPHO_DELAY=${MORPHO_DELAY:-8}                    # Morpho démarre 8 epochs après fin warmup NER — REVERT v8.3 (v8.4 avait 0 → régression boundary)
-SVO_DELAY=${SVO_DELAY:-0}                          # SVO démarre N epochs après fin warmup NER (0 = dès le début du multitask, comme avant)
+SVO_RAMP_EPOCHS=${SVO_RAMP_EPOCHS:-20}             # utilisé uniquement pour la ramp role (ROLE_DELAY → 100% en SVO_RAMP_EPOCHS epochs)
+MORPHO_RAMP_EPOCHS=${MORPHO_RAMP_EPOCHS:-20}       # Morpho : ramp sur 20 epochs multitask
+MORPHO_DELAY=${MORPHO_DELAY:-8}                    # Morpho démarre 8 epochs après fin warmup NER
+# ── Trigger SVO basé sur les métriques (v8.8+) ──────────────────────────────
+# SVO ne démarre que quand boundary > thr_bnd ET coarse > thr_coarse → NER stable.
+# fine exclu du trigger : monte trop lentement (ep 20-25), ferait attendre inutilement.
+# Seuils calibrés sur les bons runs v8.0/v8.1 : trigger naturel vers ep 8-12.
+# Pas de délai fixe, pas de ramp linéaire : trigger organique + +20% tous les N epochs.
+SVO_TRIGGER_BND=${SVO_TRIGGER_BND:-0.77}               # seuil boundary : reflète stabilité NER de base
+SVO_TRIGGER_COARSE=${SVO_TRIGGER_COARSE:-0.87}         # seuil coarse  : confirme que l'encodeur est ancré
+SVO_TRIGGER_STEP_EPOCHS=${SVO_TRIGGER_STEP_EPOCHS:-5}  # +20% SVO tous les N epochs après trigger (0→20→40→60→80→100)
 
 # Niveaux de difficulté progressifs (6 niveaux)
 LEVEL_NAMES=("easy" "easy+" "medium" "medium+" "hard" "full")
@@ -122,18 +129,6 @@ L_MORPHO=0.10         # Gender/Number/Person — calibré pour coverage v8.1 (77
 L_VERB_PTR=0.5        # Pointer head verbe gouverneur — supervisé sur 91% SVO (v8.2) [v8.1: 0.25]
 ROLE_DELAY=${ROLE_DELAY:-12}  # Role démarre 12 epochs après fin warmup NER (v8.5: +4 vs v8.4c=8 car APPOS ×6 → gradient rôle fort)
 
-# ── Ramp SVO par niveau (comme v8.0) ─────────────────────────────────────────
-# RETOUR v8.0 : Le rampup linéaire (v8.1) montait SVO trop vite (100% à epoch 20)
-# ce qui perturbait la consolidation NER entre epochs 8-20 → régression -0.05 Fine F1.
-# Solution : garder le rampup par niveau (SVO suit la difficulté des hard negatives).
-#   Level 0 easy   (dès epoch 1)  : SVO  5%   ← mais LR/10 à epoch 1 (--warmup-epochs 1) → SVO effectif ~0.5%
-#   Level 1 easy+                 : SVO 15%
-#   Level 2 medium                : SVO 35%
-#   Level 3 med+                  : SVO 60%
-#   Level 4 hard                  : SVO 85%
-#   Level 5 full                  : SVO 100%
-SVO_RAMP_PCT=(5 15 35 60 85 100)  # % SVO par niveau de difficulté
-
 # Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
 START_LEVEL=${START_LEVEL:-0}    # 0=easy — ramp SVO progressif par niveau (5%→15%→35%→60%→85%→100%)
 START_EPOCH=${START_EPOCH:-1}
@@ -166,6 +161,10 @@ best_boundary=-1.0
 boundary_f1_window=()   # buffer fenêtre glissante pour détection plateau boundary
 current_epoch=$START_EPOCH
 resume_arg=""
+# ── État trigger SVO (métriques-driven, v8.8) ────────────────────────────────
+svo_triggered=0          # 0=pas encore déclenché, 1=déclenché
+svo_pct=0                # % SVO courant : 0 → 20 → 40 → 60 → 80 → 100
+svo_trigger_epoch=0      # epoch à laquelle le trigger a été activé (bnd > SVO_TRIGGER_BND & coarse > SVO_TRIGGER_COARSE)
 
 mkdir -p logs
 log_file="logs/adaptive.log"
@@ -205,7 +204,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="${GOLD_VERSION}-nw0-md8-rd12-svobl-${TORCH_SHORT}"  # v8.6: nerwarmup0, morpho_delay8, role_delay12, svo-by-level
+DATASET_VERSION="${GOLD_VERSION}-nw0-md8-rd12-svotrig-bnd77c87-${TORCH_SHORT}"  # v8.8+: nerwarmup0, morpho_delay8, role_delay12, svo-trigger bnd>0.77 & coarse>0.87
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
@@ -329,14 +328,10 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
             best_boundary=-1.0
         fi
 
-        # Ramp SVO PAR NIVEAU (v8.0) — plus de ramp linéaire epoch-based
-        # Le delay masquait les premières epochs de ramp → SVO sautait à un niveau élevé
-        # au lieu de ramper depuis 0. Ici SVO suit directement le niveau de difficulté HN.
-        #   Level 0 easy   : SVO  5%   Level 3 med+  : SVO 60%
-        #   Level 1 easy+  : SVO 15%   Level 4 hard  : SVO 85%
-        #   Level 2 medium : SVO 35%   Level 5 full  : SVO 100%
+        # Ramp SVO PAR TRIGGER MÉTRIQUES (v8.8) — svo_pct est mis à jour en fin de boucle.
+        # 0% jusqu'au trigger (bnd > SVO_TRIGGER_BND & coarse > SVO_TRIGGER_COARSE), puis +20% / SVO_TRIGGER_STEP_EPOCHS.
         ramp_epoch=$((current_epoch - NER_WARMUP_EPOCHS))
-        svo_pct=${SVO_RAMP_PCT[$current_level]}
+        # svo_pct = variable d'état (initialisée à 0, mise à jour après chaque epoch en fin de boucle)
         svo_progress=$(python3 -c "print($svo_pct / 100.0)")
         L_SVO_B_NOW=$(python3 -c "print(f'{$L_SVO_BOUNDARY * $svo_progress:.4f}')")
         L_SVO_NOW=$(python3   -c "print(f'{$L_SVO        * $svo_progress:.4f}')")
@@ -353,7 +348,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         L_MORPHO_NOW=$(python3 -c "print(f'{$L_MORPHO * $morpho_progress:.4f}')")
         L_VPTR_NOW=$(python3  -c "print(f'{$L_VERB_PTR   * $svo_progress:.4f}')")
 
-        echo "🎛️  Lambdas multitask (SVO ramp: ${svo_pct}% [by-level=${LEVEL_NAMES[$current_level]}] morpho=${morpho_ramp_epoch}/${MORPHO_RAMP_EPOCHS} role=${role_ramp_epoch}/${SVO_RAMP_EPOCHS})" | tee -a $log_file
+        echo "🎛️  Lambdas multitask (SVO trigger: ${svo_pct}% [triggered=${svo_triggered}, bnd>${SVO_TRIGGER_BND} coarse>${SVO_TRIGGER_COARSE}] morpho=${morpho_ramp_epoch}/${MORPHO_RAMP_EPOCHS} role=${role_ramp_epoch}/${SVO_RAMP_EPOCHS})" | tee -a $log_file
         echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE  fine=$L_FINE" | tee -a $log_file
         echo "      SVO  : svo_boundary=$L_SVO_B_NOW  svo=$L_SVO_NOW  role=$L_ROLE_NOW  voice=$L_VOICE_NOW  certainty=$L_CERTAINTY_NOW  morpho=$L_MORPHO_NOW  verb_ptr=$L_VPTR_NOW" | tee -a $log_file
     fi
@@ -422,13 +417,17 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
     fi
 
     # Log résumé SVO depuis le log epoch
-    boundary_f1=$(grep "Boundary F1=" $epoch_log | tail -1 | grep -oE "Boundary F1=[0-9.]+" | cut -d= -f2 || echo "?")
-    svo_f1=$(grep "SVO F1=" $epoch_log | tail -1 | grep -oE "SVO F1=[0-9.]+" | cut -d= -f2 || echo "?")
+    # Utilisation de la ligne val (commence par "Val   loss=") pour isoler val vs test
+    val_log_line=$(grep "Val   loss=" "$epoch_log" | tail -1)
+    boundary_f1=$(echo "$val_log_line" | grep -oE "Boundary F1=[0-9.]+" | cut -d= -f2 || echo "?")
+    coarse_f1=$(echo "$val_log_line" | grep -oE "Coarse F1=[0-9.]+" | cut -d= -f2 || echo "?")
+    fine_f1=$(echo "$val_log_line" | grep -oE "Fine F1=[0-9.]+" | cut -d= -f2 || echo "?")
+    svo_f1=$(echo "$val_log_line" | grep -oE "SVO F1=[0-9.]+" | cut -d= -f2 || echo "?")
     voice_f1=$(grep "Voice F1=" $epoch_log | tail -1 | grep -oE "Voice F1=[0-9.]+" | head -1 | cut -d= -f2 || echo "?")
     gender_f1=$(grep "Gender F1=" $epoch_log | tail -1 | grep -oE "Gender F1=[0-9.]+" | cut -d= -f2 || echo "?")
     number_f1=$(grep "Number F1=" $epoch_log | tail -1 | grep -oE "Number F1=[0-9.]+" | cut -d= -f2 || echo "?")
     person_f1=$(grep "Person F1=" $epoch_log | tail -1 | grep -oE "Person F1=[0-9.]+" | cut -d= -f2 || echo "?")
-    echo "📊 Epoch $current_epoch — Val Score=$val_score Boundary=$boundary_f1 SVO_F1=$svo_f1 Voice_F1=$voice_f1 Gender_F1=$gender_f1 Number_F1=$number_f1 Person_F1=$person_f1 (best=$best_score)" | tee -a $log_file
+    echo "📊 Epoch $current_epoch — Val Score=$val_score Boundary=$boundary_f1 Coarse=$coarse_f1 Fine=$fine_f1 SVO_F1=$svo_f1 Voice_F1=$voice_f1 Gender_F1=$gender_f1 Number_F1=$number_f1 Person_F1=$person_f1 (best=$best_score)" | tee -a $log_file
 
     improved=$(python3 -c "print('yes' if float('$val_score') > float('$best_score') + $MIN_DELTA else 'no')")
     boundary_improved=$(python3 -c "print('yes' if '$boundary_f1' != '?' and float('$boundary_f1') > float('$best_boundary') + $MIN_DELTA else 'no')" 2>/dev/null || echo "no")
@@ -484,6 +483,38 @@ except:
         [ -f checkpoint_best_multitask.pt ] && resume_arg="--resume checkpoint_best_multitask.pt"
         current_epoch=$((current_epoch + 1))
         continue
+    fi
+
+    # ── Trigger SVO basé sur les métriques (v8.8+) ────────────────────────────
+    # Démarre à 20% quand boundary > SVO_TRIGGER_BND ET coarse > SVO_TRIGGER_COARSE,
+    # puis +20% tous les SVO_TRIGGER_STEP_EPOCHS epochs. Max = 100%.
+    # fine exclu : monte trop lentement (ep 20-25), les deux autres suffisent pour
+    # confirmer la stabilité NER (bnd=0.77+coarse=0.87 ≈ ep 8-12 sur les bons runs).
+    if [ "$NER_ONLY_BENCH" != "1" ]; then
+        if [ "$svo_triggered" = "0" ] && [ "$boundary_f1" != "?" ] && [ "$coarse_f1" != "?" ]; then
+            all_above=$(python3 -c "
+try:
+    v = float('$boundary_f1') > $SVO_TRIGGER_BND and float('$coarse_f1') > $SVO_TRIGGER_COARSE
+    print('yes' if v else 'no')
+except:
+    print('no')
+" 2>/dev/null || echo "no")
+            if [ "$all_above" = "yes" ]; then
+                svo_triggered=1
+                svo_pct=20
+                svo_trigger_epoch=$current_epoch
+                echo "🚀 SVO TRIGGER ep $current_epoch — bnd=$boundary_f1 > $SVO_TRIGGER_BND & coarse=$coarse_f1 > $SVO_TRIGGER_COARSE → SVO 20% dès ep suivante" | tee -a $log_file
+            else
+                echo "⏳ SVO trigger : bnd=$boundary_f1 (>${SVO_TRIGGER_BND}?) coarse=$coarse_f1 (>${SVO_TRIGGER_COARSE}?) — attente seuils" | tee -a $log_file
+            fi
+        elif [ "$svo_triggered" = "1" ] && [ "$svo_pct" -lt 100 ]; then
+            epochs_since_trigger=$((current_epoch - svo_trigger_epoch))
+            new_svo_pct=$(python3 -c "print(min(100, 20 + ($epochs_since_trigger // $SVO_TRIGGER_STEP_EPOCHS) * 20))" 2>/dev/null || echo "$svo_pct")
+            if [ "$new_svo_pct" -gt "$svo_pct" ]; then
+                echo "📈 SVO +20% → ${new_svo_pct}% (ep $current_epoch, +${epochs_since_trigger} depuis trigger ep $svo_trigger_epoch)" | tee -a $log_file
+                svo_pct=$new_svo_pct
+            fi
+        fi
     fi
 
     epochs_at_level=$((epochs_at_level + 1))
