@@ -86,7 +86,7 @@ MORPHO_DELAY=${MORPHO_DELAY:-8}                    # Morpho démarre 8 epochs ap
 # fine exclu du trigger : monte trop lentement (ep 20-25), ferait attendre inutilement.
 # Seuils calibrés sur les bons runs v8.0/v8.1 : trigger naturel vers ep 8-12.
 # Pas de délai fixe, pas de ramp linéaire : trigger organique + +20% tous les N epochs.
-SVO_TRIGGER_BND=${SVO_TRIGGER_BND:-0.77}               # seuil boundary : reflète stabilité NER de base
+SVO_TRIGGER_BND=${SVO_TRIGGER_BND:-0.76}               # seuil boundary : reflète stabilité NER de base
 SVO_TRIGGER_COARSE=${SVO_TRIGGER_COARSE:-0.87}         # seuil coarse  : confirme que l'encodeur est ancré
 SVO_TRIGGER_STEP_EPOCHS=${SVO_TRIGGER_STEP_EPOCHS:-5}  # +20% SVO tous les N epochs après trigger (0→20→40→60→80→100)
 
@@ -121,13 +121,13 @@ FOCAL_COARSE_GAMMA=0.0
 # v8.2 (L_SVO=0.51, L_SVO_BOUNDARY=0.595) → SVO=0.813 mais NER plafonne à 0.827.
 # v8.3 : L_SVO=0.40 (-22%), L_SVO_BOUNDARY=0.45 (-24%) → cible SVO ~0.75-0.78, NER ~0.845+
 # Budget SVO total = 1.50 vs budget NER = 5.3 → SVO = 22% du total (vs 27% en v8.2).
-L_SVO_BOUNDARY=0.595  # Restauré v8.0 (0.45 en v8.7.8 → -7pts NER budget via nouveaux heads)
-L_SVO=0.51            # Restauré v8.0 (0.40 en v8.7.8)
-L_ROLE=0.025          # Minuscule : budget restant après restauration v8.0 (cible NER 77%) — gradient role ~200k spans/ep écrase boundary
-L_VOICE=0.1275        # Voix active/passive (très silver) [v8.1: 0.15]
-L_CERTAINTY=0.013     # Minuscule : budget restant après restauration v8.0 (cible NER 77%)
-L_MORPHO=0.10         # Gender/Number/Person — calibré pour coverage v8.1 (77% vs 43% v8.0 → gradient 1.8x)
-L_VERB_PTR=0.2125     # Restauré v8.0 (0.5 en v8.7.8 → ×2.4 vs v8.0)
+L_SVO_BOUNDARY=0.50   # Boundary SVO (silver) — réduit vs v8.2 (0.595) pour ne pas écraser NER
+L_SVO=0.50            # Labels SVO (syn labels) — réduit vs v8.2 (0.51) pour équilibre NER/SVO
+L_ROLE=0.35           # Rôles SVO — réduit 0.6→0.25 : role fix (ffc3210) a ajouté ~200k spans/ep, gradient trop fort → régression boundary
+L_VOICE=0.20        # Voix active/passive (très silver) [v8.1: 0.15]
+L_CERTAINTY=0.05       # Certainty active/hypo/etc. (silver) (INCHANGÉ)
+L_MORPHO=0.10         # Gender/Number/Person — calibré pour coverage v8.1 (77% vs 43% v8.0 → gradient ×1.8x)
+L_VERB_PTR=0.5        # Pointer head verbe gouverneur — supervisé sur 91% SVO (v8.2) [v8.1: 0.25]
 ROLE_DELAY=${ROLE_DELAY:-12}  # Role démarre 12 epochs après fin warmup NER (v8.5: +4 vs v8.4c=8 car APPOS ×6 → gradient rôle fort)
 
 # Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
