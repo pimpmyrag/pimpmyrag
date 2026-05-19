@@ -3,7 +3,7 @@
 # Downloads the ONNX model (~700 MB) automatically on first run.
 set -euo pipefail
 
-MODEL_URL="https://github.com/pimpmyrag/pimpmyrag/releases/download/v1.0.0-ner-model/best_model_multitask_full.onnx"
+MODEL_URL="https://github.com/pimpmyrag/pimpmyrag/releases/download/v1.2.0-ner-model/best_model_multitask_full.onnx"
 CACHE_DIR="${HOME}/.pimpmyrag"
 MODEL_PATH="${CACHE_DIR}/model/best_model_multitask_full.onnx"
 PORT="${NER_PORT:-8090}"
