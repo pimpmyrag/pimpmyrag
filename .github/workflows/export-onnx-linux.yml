@@ -6,15 +6,15 @@ on:
       pt_release_tag:
         description: "Release tag containing best_model_multitask.pt (ex: v1.1.0-ner-model)"
         required: true
-        default: "v1.1.0-ner-model"
+        default: "v1.3.0-ner-model"
       pt_sha256:
         description: "Expected SHA-256 of best_model_multitask.pt (optionnel — vide = pas de vérification)"
         required: false
-        default: "c25644f8f6a5ca64afd268989361964fae5b8f9014e894950b2cda0994f3500d"
+        default: "b62eec5cd7d7002b1b836e2be020ed4ad7ebfc96c74e55665afed00ada3f7883"
       output_tag:
         description: "Tag de la release de sortie (ex: v1.2.0-ner-model)"
         required: true
-        default: "v1.2.0-ner-model"
+        default: "v1.3.0-ner-model"
       opset:
         description: "ONNX opset version"
         required: false
