@@ -12,10 +12,10 @@ Interface ONNX :
     span_ends        [N]     int64
     span_batch_ids   [N]     int64
 
-  Outputs (NER):
+   Outputs (NER):
     boundary_logits      [N, 2]
-    coarse_logits        [N, 9]
-    fine_logits          [N, 32]
+    coarse_logits        [N, 10]
+    fine_logits          [N, 38]
 
   Outputs (SVO / syntaxe v4):
     svo_boundary_logits  [N, 2]
@@ -41,7 +41,7 @@ from transformers import AutoTokenizer
 
 from multitask_model import SpanMultiTaskModel
 from labels import (
-    COARSE_LABELS, FINE_LABELS,
+    COARSE_LABELS, FINE_LABELS, NUM_FINE,
     SYN_LABELS, ROLE_LABELS, VOICE_LABELS, CERTAINTY_LABELS,
     GENDER_LABELS, NUMBER_LABELS, PERSON_LABELS,
 )
@@ -51,14 +51,76 @@ from labels import (
 #  Chargement avec tokenizer étendu
 # ──────────────────────────────────────────────────────────
 
+def _infer_dims_from_state(state: dict) -> dict:
+    """Infère les dimensions des têtes depuis le state_dict du checkpoint."""
+    dims = {}
+    head_keys = {
+        "num_coarse": "coarse_head.bias",
+        "num_fine":   "fine_head.bias",
+        "num_syn":    "syn_head.bias",
+        "num_role":   "role_head.bias",
+        "num_voice":  "voice_head.bias",
+        "num_certainty": "certainty_head.bias",
+        "num_gender": "gender_head.bias",
+        "num_number": "number_head.bias",
+        "num_person": "person_head.bias",
+    }
+    for dim_name, key in head_keys.items():
+        if key in state:
+            dims[dim_name] = state[key].shape[0]
+    return dims
+
+
 def load_model_with_extended_tokenizer(checkpoint_path: str, model_name: str, tokenizer_path: str = None):
     """
     Crée un SpanMultiTaskModel et charge le checkpoint.
+    Infère les dimensions des têtes depuis le checkpoint pour gérer
+    les checkpoints entraînés avec d'anciennes versions de labels.py.
     Si tokenizer_path est fourni, étend les embeddings au vocab_size du tokenizer
     AVANT de charger les poids — évite le RuntimeError 'size mismatch'.
     """
+    # ── 1. Charger le state_dict pour inférer les dimensions ──
+    print(f"📦 Chargement checkpoint : {checkpoint_path}")
+    ckpt  = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    state = ckpt.get("model_state", ckpt)
+    dims = _infer_dims_from_state(state)
+
+    num_coarse = dims.get("num_coarse", len(COARSE_LABELS))
+    print(f"   Dimensions inférées depuis checkpoint : {dims}")
+
+    # ── 2. Créer le modèle avec les bonnes dimensions ──
     print(f"📦 Chargement modèle de base : {model_name}")
-    model = SpanMultiTaskModel(model_name=model_name).float()
+    model = SpanMultiTaskModel(model_name=model_name, num_coarse=num_coarse).float()
+
+    # Si les dims des têtes dans le checkpoint diffèrent du labels.py actuel,
+    # recréer les Linear avec les bonnes tailles avant load_state_dict.
+    span_hidden_dim = state["boundary_head.bias"].shape[0]  # toujours 2, on prend le weight
+    span_hidden_dim = state["boundary_head.weight"].shape[1]  # dim d'entrée
+    dim_overrides = {
+        "fine_head":      ("num_fine",      NUM_FINE),
+        "gender_head":    ("num_gender",    None),
+        "number_head":    ("num_number",    None),
+        "person_head":    ("num_person",    None),
+        "syn_head":       ("num_syn",       None),
+        "role_head":      ("num_role",      None),
+        "voice_head":     ("num_voice",     None),
+        "certainty_head": ("num_certainty", None),
+    }
+    for head_name, (dim_key, _) in dim_overrides.items():
+        if dim_key in dims:
+            ckpt_size = dims[dim_key]
+            current_head = getattr(model, head_name)
+            if current_head.out_features != ckpt_size:
+                print(f"   ⚠️  {head_name}: {current_head.out_features} → {ckpt_size} (adapté au checkpoint)")
+                setattr(model, head_name, nn.Linear(span_hidden_dim, ckpt_size))
+
+    # Recréer le coarse_fine_mask avec les dims du checkpoint
+    if "coarse_fine_mask" in state:
+        ckpt_mask_shape = state["coarse_fine_mask"].shape
+        current_mask_shape = model.coarse_fine_mask.shape
+        if ckpt_mask_shape != current_mask_shape:
+            print(f"   ⚠️  coarse_fine_mask: {current_mask_shape} → {ckpt_mask_shape} (adapté au checkpoint)")
+            model.coarse_fine_mask = nn.Parameter(torch.zeros(ckpt_mask_shape), requires_grad=False)
 
     if tokenizer_path:
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, use_fast=True)
@@ -76,9 +138,6 @@ def load_model_with_extended_tokenizer(checkpoint_path: str, model_name: str, to
         else:
             print(f"   Vocab tokenizer ({extended_vocab}) ≤ vocab modèle ({current_vocab}) — pas d'extension")
 
-    print(f"📦 Chargement checkpoint : {checkpoint_path}")
-    ckpt  = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    state = ckpt.get("model_state", ckpt)
     model.load_state_dict(state, strict=True)
     model.eval()
     print("✅ Checkpoint chargé")
@@ -152,8 +211,8 @@ class OnnxSpanWrapperFull(nn.Module):
 
         return (
             self.boundary_head(span_h),       # [N, 2]
-            self.coarse_head(span_h),         # [N, 9]
-            self.fine_head(span_h),           # [N, 32]
+            self.coarse_head(span_h),         # [N, 10]
+            self.fine_head(span_h),           # [N, 38]
             self.svo_boundary_head(span_h),   # [N, 2]
             self.syn_head(span_h),            # [N, 3]
             self.role_head(span_h),           # [N, 7]
