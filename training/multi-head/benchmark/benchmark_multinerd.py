@@ -24,15 +24,23 @@ def tag_to_type(t): return _TYPES[(t-1)//2] if t > 0 and (t-1)//2 < len(_TYPES) 
 def is_begin(t): return t > 0 and t % 2 == 1
 
 # ── Mapping strict : coarse → MultiNERD + whitelist fine ──────────────────
+# MultiNERD n'annote que les entités NOMMÉES (noms propres). Les rôles
+# génériques (président, gouvernement, rivière) ne sont PAS annotés.
+# Le whitelist filtre donc seulement les fine labels qui correspondent
+# à des entités nommées susceptibles d'être dans MultiNERD.
 COARSE_TO_MN = {"PER":"PER","ORG":"ORG","LOC":"LOC","TIME":"TIME","EVENT":"EVE","WORK":"MEDIA"}
-FINE_SPECIAL = {"hint_disease":"DIS","hint_food":"FOOD","hint_vehicle":"VEHI"}
+FINE_SPECIAL = {
+    "hint_disease":"DIS",
+    "hint_food":"FOOD",
+    "hint_vehicle":"VEHI",
+}
 FINE_WHITELIST = {
     "PER":   {"hint_person_name"},
     "ORG":   {"hint_org_name", "hint_inst_name"},
     "LOC":   {"hint_gpe", "hint_fac_name", "hint_infra"},
-    "TIME":  {"hint_time_date", "hint_time_clock"},
+    "TIME":  {"hint_time_date", "hint_time_clock", "hint_time_duration"},
     "EVE":   {"hint_event_named"},
-    "MEDIA": {"hint_work_of_art", "hint_law"},
+    "MEDIA": {"hint_work_of_art", "hint_law", "hint_work_generic"},
 }
 def map_pred(ent):
     fine = ent["fine"]
