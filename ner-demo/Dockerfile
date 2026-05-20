@@ -46,8 +46,8 @@ WORKDIR /app
 # Mettre cette couche AVANT le JAR pour bénéficier du cache Docker :
 # si le code change mais pas l'URL du modèle, cette couche est réutilisée.
 # MODEL_SHA256 : changer ce hash invalide le cache Docker et force un re-téléchargement.
-ARG MODEL_URL=https://github.com/pimpmyrag/pimpmyrag/releases/download/v1.2.0-ner-model/best_model_multitask_full.onnx
-ARG MODEL_SHA256=b3c40572129bde8f159d5d9eacae46d80ac92ec3d0632019ed915661b6d0f624
+ARG MODEL_URL=https://github.com/pimpmyrag/pimpmyrag/releases/download/v1.3.0-ner-model/best_model_multitask_full.onnx
+ARG MODEL_SHA256=c339ad0ff3d1215fffb04252d17b83a286a7245891063f666338f0485db16acd
 RUN mkdir -p model && \
     echo "[docker] downloading model from $MODEL_URL" && \
     curl -fL --retry 3 "$MODEL_URL" -o model/best_model_multitask_full.onnx && \
