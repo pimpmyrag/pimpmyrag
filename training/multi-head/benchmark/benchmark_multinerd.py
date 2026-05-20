@@ -51,6 +51,19 @@ def map_pred(ent):
     if wl and fine not in wl: return None
     return mn
 
+def nms_longest(preds):
+    """NMS qui préfère le span le plus long parmi les overlaps.
+    Trie par longueur décroissante : les spans longs sont gardés en premier,
+    les spans courts qui chevauchent sont supprimés.
+    """
+    candidates = sorted(preds, key=lambda x: (-(x[1]-x[0]), -x[4]))
+    kept = []
+    for ps, pe, pt, ptext, score in candidates:
+        overlapping = any(min(pe,ke)-max(ps,ks) > 0 for ks,ke,_,__,___ in kept)
+        if not overlapping:
+            kept.append((ps,pe,pt,ptext,score))
+    return kept
+
 # ── BIO → char spans (texte reconstruit par " ".join(tokens)) ─────────────
 def bio_to_char_spans(tokens, tags):
     spans, cur_type, cur_start = [], None, 0
@@ -140,8 +153,8 @@ def main():
             for ent in res["ner"]:
                 mn = map_pred(ent)
                 if mn:
-                    preds.append((ent["char_start"], ent["char_end"], mn, ent["text"]))
-            pred_all.append(preds)
+                    preds.append((ent["char_start"], ent["char_end"], mn, ent["text"], ent["score"]))
+            pred_all.append(nms_longest(preds))
         if (i//a.batch_size) % 100 == 0:
             el = max(.01, time.time()-t0)
             print(f"   {i+len(batch):6d}/{len(texts)} ({(i+len(batch))/el:.0f} s/s)")
@@ -159,7 +172,7 @@ def main():
         for gs,ge,gt,gtext in golds:
             best_match = None
             best_match_type_ok = False
-            for ps,pe,pt,ptext in preds:
+            for ps,pe,pt,ptext,_ in preds:
                 m = match_type(ps,pe,ptext,gs,ge,gtext)
                 if m is not None:
                     if pt == gt:
@@ -217,7 +230,7 @@ def main():
 
     for golds, preds in zip(gold_all, pred_all):
         gold_set = {(gs,ge,gt) for gs,ge,gt,_ in golds}
-        for ps,pe,pt,ptext in preds:
+        for ps,pe,pt,ptext,_ in preds:
             # Est-ce que ce pred matche un gold du même type ?
             has_same_type_gold = any(
                 text_overlap(ps,pe,gs,ge) > 0 and pt == gt
@@ -272,14 +285,14 @@ def main():
     tp3=fp3=fn3=tp3r=0
     for golds, preds in zip(gold_all, pred_all):
         gs3 = {(s,e,t) for s,e,t,_ in golds if t in core3}
-        ps3 = {(s,e,t) for s,e,t,_ in preds if t in core3}
+        ps3 = {(s,e,t) for s,e,t,_,__ in preds if t in core3}
         for s in ps3:
             if s in gs3: tp3+=1
             else: fp3+=1
         for s in gs3:
             if s not in ps3: fn3+=1
         # Relaxed
-        for ps,pe,pt,ptext in preds:
+        for ps,pe,pt,ptext,_ in preds:
             if pt not in core3: continue
             for gs,ge,gt,_ in golds:
                 if pt==gt and text_overlap(ps,pe,gs,ge)/max(1,pe-ps)>=.5 and text_overlap(ps,pe,gs,ge)/max(1,ge-gs)>=.5:
