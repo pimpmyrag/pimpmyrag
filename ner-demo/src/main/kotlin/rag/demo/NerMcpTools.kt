@@ -25,8 +25,8 @@ import kotlin.math.roundToInt
  * ARCHITECTURE — modèle UNIQUE multi-tête :
  *   Un seul modèle DeBERTa-v3 avec plusieurs têtes de décodage sur chaque span candidat :
  *     • tête boundary  → "ce span est-il une entité ?" (prob pBoundary)
- *     • tête coarse    → "quelle grande famille ?" (prob pCoarse, 9 classes + NONE)
- *     • tête fine      → "quel label parmi 32 ?" (prob pFine)
+ *     • tête coarse    → "quelle grande famille ?" (prob pCoarse, 10 classes dont NONE)
+ *     • tête fine      → "quel label parmi 38 ?" (prob pFine)
  *     • têtes SVO      → rôle syntaxique / voix / genre / nombre  [feature preview — voir ci-dessous]
  *
  *   Il N'Y A PAS deux modèles distincts (pas de XLM-RoBERTa, pas de BILOU séparé).
@@ -39,36 +39,38 @@ import kotlin.math.roundToInt
  *   Elle N'est PAS évaluée directement ; seule la valeur FINE compte sémantiquement.
  *   pCoarse / tauCoarse servent uniquement au débogage et au paramétrage du masque.
  *
- * FAMILLES COARSE (8 + NONE) :
- *   PER, LOC, ORG, TIME, EVENT, OBJECT, VALUE, ABSTRACT, NONE
+ * FAMILLES COARSE (9 + NONE) :
+ *   PER, LOC, ORG, TIME, EVENT, OBJECT, VALUE, WORK, ABSTRACT, NONE
  *
- * LABELS FINE-GRAINED (32) — seules valeurs sémantiques réelles :
+ * LABELS FINE-GRAINED (38) — seules valeurs sémantiques réelles :
  *
- *   Famille PER (personnes & groupes humains)
+ *   Famille PER (personnes & groupes humains) — 4 labels
  *     hint_person_name   — nom propre d'une personne physique (prénom, nom, alias)
  *     hint_person_role   — rôle, titre ou fonction (président, général, PDG…)
  *     hint_norp          — nationalité, groupe religieux/ethnique/politique (Français, Chiites…)
  *     hint_group_role    — désignation collective humaine (équipe, jury, délégation…)
  *
- *   Famille LOC (lieux)
+ *   Famille LOC (lieux) — 4 labels
  *     hint_gpe           — entité géopolitique nommée : pays, ville, région (France, Paris…)
  *     hint_fac_name      — lieu bâti nommé : monument, stade, hôpital (Tour Eiffel, Bercy…)
  *     hint_loc_generic   — lieu géographique générique non nommé (montagne, fleuve, côte…)
  *     hint_infra         — infrastructure nommée : route, ligne, réseau (A6, ligne 4…)
  *
- *   Famille ORG (organisations)
- *     hint_org_name      — organisation formelle nommée : entreprise, institution, parti (ONU, LVMH…)
+ *   Famille ORG (organisations) — 3 labels
+ *     hint_org_name      — organisation formelle nommée : entreprise, parti (LVMH, Greenpeace…)
+ *     hint_inst_name     — institution publique NOMMÉE, sigle ou nom propre qualifié (ONU, OTAN, Sénat américain…)
+ *     hint_inst_role     — institution GÉNÉRIQUE sans qualificatif (gouvernement, police, armée, tribunal…)
  *
- *   Famille TIME (expressions temporelles)
+ *   Famille TIME (expressions temporelles) — 3 labels
  *     hint_time_date     — date ou référence calendaire (12 mars, 2024, lundi prochain)
  *     hint_time_clock    — heure précise (14h30, à minuit, vers 8h)
  *     hint_time_duration — durée ou intervalle temporel (3 ans, depuis 2 mois…)
  *
- *   Famille EVENT (événements)
+ *   Famille EVENT (événements) — 2 labels
  *     hint_event_nominal — événement décrit nominalement (la guerre, le procès, la crise)
  *     hint_event_named   — événement proprement nommé (COP28, Révolution française, JO 2024)
  *
- *   Famille OBJECT (objets physiques)
+ *   Famille OBJECT (objets physiques) — 7 labels
  *     hint_weapon        — arme ou munition (missile, AK-47, bombe…)
  *     hint_vehicle       — véhicule (avion, navire, tank, voiture)
  *     hint_substance     — matière ou substance (pétrole, gaz, uranium)
@@ -77,20 +79,26 @@ import kotlin.math.roundToInt
  *     hint_object_generic — objet physique générique
  *     hint_object_name   — objet physique proprement nommé (iPhone 15, Boeing 737…)
  *
- *   Famille VALUE (valeurs numériques)
- *     hint_quantity      — quantité physique avec unité (3 km, 500 kg, 20 MW)
- *     hint_measure       — mesure scientifique ou technique (température, pression)
+ *   Famille VALUE (valeurs numériques) — 5 labels
+ *     hint_measure       — mesure ou quantité physique avec unité (3 km, 500 kg, 20 MW)
  *     hint_percentage    — pourcentage (12%, un quart)
  *     hint_count         — dénombrement entier (3 morts, 12 000 soldats)
  *     hint_money         — montant monétaire (200€, 3 milliards de dollars)
  *     hint_rate          — taux, ratio, indice (taux de chômage à 7%, CAC à 8000)
  *
- *   Famille ABSTRACT (concepts & œuvres)
- *     hint_law           — texte juridique, loi, traité, décret (loi El Khomri, traité de Rome)
+ *   Famille WORK (productions intellectuelles & culturelles) — 4 labels
  *     hint_work_of_art   — œuvre nommée : livre, film, chanson (La Joconde, Avatar)
- *     hint_concept       — concept abstrait nommé (libéralisme, intelligence artificielle)
+ *     hint_law           — texte juridique, loi, traité, décret (loi El Khomri, traité de Rome)
+ *     hint_document      — rapport, lettre, communiqué, contrat, données…
+ *     hint_work_generic  — production culturelle générique sans titre (film, livre, presse, médias…)
+ *
+ *   Famille ABSTRACT (concepts & états abstraits) — 6 labels
  *     hint_disease       — maladie ou pathologie (Covid-19, cancer du poumon)
  *     hint_language      — langue humaine ou informatique (français, Python, arabe)
+ *     hint_doctrine      — doctrine, idéologie, courant de pensée (libéralisme, marxisme…)
+ *     hint_state         — état, condition, situation abstraite (pauvreté, crise, paix…)
+ *     hint_notion        — concept abstrait pur, valeur, principe, règle générique
+ *     hint_field         — domaine / secteur d'activité (santé, éducation, agriculture…)
  *
  * CHAMPS SCORES — nature et usage :
  *
@@ -121,11 +129,11 @@ import kotlin.math.roundToInt
  *                Sert au masque structurel COARSE_TO_FINE (réduit le nb de candidats fins).
  *                Sélection par argmax(pCoarse) parmi familles ≥ tauCoarse — pas de
  *                compétition via score composite (biais fort sinon vers familles
- *                à peu de labels fins comme ORG qui aurait pFine≈1.0 par construction).
+ *                à peu de labels fins comme EVENT/2 qui aurait pFine≈1.0 par construction).
  *                < 0.60 → confusion de famille → peut engendrer un mauvais label fin
  *                ≥ 0.80 → famille bien identifiée, score bas = pFine seul en cause
  *
- *   pFine      → tête fine : "quel label parmi les 32 ?" — LA valeur sémantique réelle
+ *   pFine      → tête fine : "quel label parmi les 38 ?" — LA valeur sémantique réelle
  *                < 0.60 → ambiguïté entre deux labels fins voisins (ex: event_nominal
  *                          vs concept) → le label retenu est le plus probable mais fragile
  *                ≥ 0.85 → label fin confiant, score bas = produit des deux autres
@@ -234,9 +242,10 @@ import kotlin.math.roundToInt
  *   [tauSvoAnchoredBoundary, tauBoundary[, l'entité est promue avec des seuils NER
  *   assouplis (×0.85 fine, ×0.60 score). Taguée svoAnchored=true.
  *
- * TÊTES MORPHO — genre / nombre :
- *   gender : Masc | Fem  (absent si indéterminé)
- *   number : Sing | Plur (absent si indéterminé)
+ * TÊTES MORPHO — genre / nombre / personne :
+ *   gender : M | F  (absent si indéterminé)
+ *   number : SG | PL (absent si indéterminé)
+ *   person : 1 | 2 | 3 (pronoms uniquement, absent sinon)
  *
  * COMMENT ÉVALUER LES SVO V4 EN PREVIEW :
  *   1. analyzeText(texte) → observer "svoSpans" :
@@ -367,7 +376,7 @@ class NerMcpTools(private val nerService: NerService) {
         By default all coarse families share the same tauBoundary.
         Use this tool to make a specific family STRICTER or MORE PERMISSIVE independently.
 
-        Valid coarse names: PER | LOC | ORG | TIME | EVENT | VALUE | OBJECT | ABSTRACT
+        Valid coarse names: PER | LOC | ORG | TIME | EVENT | VALUE | OBJECT | WORK | ABSTRACT
 
         Examples:
           setCoarseScore("EVENT", 0.85)  → only EVENT entities with score ≥ 0.85 are kept
@@ -382,12 +391,12 @@ class NerMcpTools(private val nerService: NerService) {
         Returns the updated scoreByCoarse map.
     """)
     fun setCoarseScore(
-        @ToolParam(description = "Coarse family name: PER | LOC | ORG | TIME | EVENT | VALUE | OBJECT | ABSTRACT")
+        @ToolParam(description = "Coarse family name: PER | LOC | ORG | TIME | EVENT | VALUE | OBJECT | WORK | ABSTRACT")
         coarse: String,
         @ToolParam(description = "Minimum composite score for this family (0 = reset to global tauBoundary, max 1.0)")
         value: Float,
     ): Map<String, Any> {
-        val validCoarse = setOf("PER", "LOC", "ORG", "TIME", "EVENT", "VALUE", "OBJECT", "ABSTRACT")
+        val validCoarse = setOf("PER", "LOC", "ORG", "TIME", "EVENT", "VALUE", "OBJECT", "WORK", "ABSTRACT")
         if (coarse !in validCoarse)
             return mapOf("error" to "Unknown coarse: $coarse. Valid: ${validCoarse.joinToString("|")}")
 
@@ -410,7 +419,7 @@ class NerMcpTools(private val nerService: NerService) {
         and — as a PREVIEW — SVO syntactic roles reconciled from the multi-head model.
 
         SVO IS NON-DESTRUCTIVE: the SVO heads run on the same forward pass as NER at zero extra cost.
-        They enrich entities with syntactic roles (nsubj/obj/iobj), gender, number, and voice.
+        They enrich entities with syntactic roles (SUBJECT/OBJECT/OBLIQUE…), gender, number, and voice.
         Calibrate NER thresholds (tauBoundary etc.) independently — SVO does NOT affect NER detection.
 
         ══════════════════════════════════════════════════════════════
@@ -434,16 +443,16 @@ class NerMcpTools(private val nerService: NerService) {
         ENTITY FIELDS:
           text           — surface form of the detected entity span
           coarse         — indicative family (PER/LOC/ORG/…), used for display and fine masking
-          fine           — THE ACTUAL SEMANTIC LABEL (32 values). This is what you evaluate.
+           fine           — THE ACTUAL SEMANTIC LABEL (38 values). This is what you evaluate.
           score / pBoundary / pCoarse / pFine — see class KDoc for score formula details
           nested         — true if fully contained in a parent span with different fine label
           [SVO PREVIEW]
-          syntacticRole  — "nsubj" | "obj" | "iobj" if SVO head fired on this entity's span (inline)
-          svoRole        — raw SVO label: svo_subject | svo_object | svo_iobj | pron_subj | pron_obj
+          syntacticRole  — "subject" | "object" | "oblique" | "appos" if SVO head fired on this entity's span (inline)
+          svoRole        — raw SVO role: SUBJECT | OBJECT | OBLIQUE | OBLIQUE_AGENT | OBLIQUE_CAUSE | APPOS
           svoRoleProb    — confidence of the SVO role label
           svoBoundaryScore — confidence of the SVO boundary head on this span
-          gender         — "Masc" | "Fem" if detected (morphologie head)
-          number         — "Sing" | "Plur" if detected (morphologie head)
+           gender         — "M" | "F" if detected (morphologie head)
+           number         — "SG" | "PL" if detected (morphologie head)
           svoAnchored    — true if entity was promoted by SVO confidence (pBoundary < tauBoundary
                            but ≥ tauSvoAnchoredBoundary). These have reduced NER confidence.
 
@@ -549,6 +558,9 @@ class NerMcpTools(private val nerService: NerService) {
                     (e.metadata["gender"]        as? String)?.let { put("gender",        it) }
                     (e.metadata["number"]        as? String)?.let { put("number",        it) }
                     if (e.metadata["svoAnchored"] == true) put("svoAnchored", true)
+                    // ── Alt fine : 2ème choix quand pFine < 0.60 ──
+                    (e.metadata["altFine"]  as? String)?.let { put("altFine",  it) }
+                    (e.metadata["altPFine"] as? Float )?.let { put("altPFine", fmt(it)) }
                 }
             },
             "svoSpans" to result.svoSpans.map { s ->
@@ -683,7 +695,7 @@ class NerMcpTools(private val nerService: NerService) {
           - Spot low-confidence entities (score < 0.50) that MAY be false positives
             (but check their pBoundary + pFine before discarding)
           - Evaluate fine-label distribution against domain expectations
-          - [SVO PREVIEW] Check svoRoleDistribution — counts of nsubj/obj/iobj/verb per corpus
+          - [SVO PREVIEW] Check svoRoleDistribution — counts of SUBJECT/OBJECT/OBLIQUE/verb per corpus
 
         Output fields:
           byCoarseType   — per-family count + avgScore / minScore / maxScore.

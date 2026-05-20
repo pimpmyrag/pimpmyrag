@@ -21,18 +21,47 @@ import kotlin.math.min
 // ─────────────────────────────────────────────────────────────────────────────
 
 private val COARSE_LABELS = listOf(
-    "PER", "LOC", "ORG", "TIME", "EVENT", "OBJECT", "VALUE", "ABSTRACT", "NONE"
+    "PER", "LOC", "ORG", "TIME", "EVENT", "OBJECT", "VALUE", "WORK", "ABSTRACT", "NONE"
 )
 private val FINE_LABELS = listOf(
-    "hint_person_name", "hint_person_role", "hint_norp", "hint_group_role",
-    "hint_org_name", "hint_gpe", "hint_fac_name", "hint_loc_generic",
-    "hint_weapon", "hint_vehicle", "hint_substance", "hint_food",
-    "hint_infra", "hint_tool", "hint_object_generic", "hint_object_name",
-    "hint_event_nominal", "hint_event_named",
-    "hint_time_date", "hint_time_clock", "hint_time_duration",
-    "hint_quantity", "hint_measure", "hint_percentage", "hint_count",
-    "hint_money", "hint_rate",
-    "hint_law", "hint_work_of_art", "hint_concept", "hint_disease", "hint_language"
+    "hint_person_name",      // 0
+    "hint_person_role",      // 1
+    "hint_norp",             // 2
+    "hint_group_role",       // 3
+    "hint_org_name",         // 4
+    "hint_inst_name",        // 5
+    "hint_gpe",              // 6
+    "hint_fac_name",         // 7
+    "hint_loc_generic",      // 8
+    "hint_weapon",           // 9
+    "hint_vehicle",          // 10
+    "hint_substance",        // 11
+    "hint_food",             // 12
+    "hint_infra",            // 13
+    "hint_tool",             // 14
+    "hint_object_generic",   // 15
+    "hint_object_name",      // 16
+    "hint_event_nominal",    // 17
+    "hint_event_named",      // 18
+    "hint_time_date",        // 19
+    "hint_time_clock",       // 20
+    "hint_time_duration",    // 21
+    "hint_measure",          // 22
+    "hint_percentage",       // 23
+    "hint_count",            // 24
+    "hint_money",            // 25
+    "hint_rate",             // 26
+    "hint_work_of_art",      // 27
+    "hint_law",              // 28
+    "hint_document",         // 29
+    "hint_disease",          // 30
+    "hint_language",         // 31
+    "hint_inst_role",        // 32
+    "hint_doctrine",         // 33
+    "hint_state",            // 34
+    "hint_notion",           // 35
+    "hint_work_generic",     // 36
+    "hint_field",            // 37
 )
 
 private val COARSE_NONE_IDX = COARSE_LABELS.indexOf("NONE")
@@ -57,7 +86,7 @@ private val ROLE_LABELS = listOf(
 )
 private val VOICE_LABELS     = listOf("active", "passive")
 private val CERTAINTY_LABELS = listOf("certain", "modal", "denied")
-private val GENDER_LABELS    = listOf("M", "F", "N")
+private val GENDER_LABELS    = listOf("M", "F")
 private val NUMBER_LABELS    = listOf("SG", "PL")
 private val PERSON_LABELS    = listOf("1", "2", "3")
 
@@ -82,14 +111,18 @@ val LABEL_KIND: Map<String, LabelKind> = mapOf(
     "hint_person_name"    to LabelKind.ENTITY,
     "hint_gpe"            to LabelKind.ENTITY,
     "hint_org_name"       to LabelKind.ENTITY,
+    "hint_inst_name"      to LabelKind.ENTITY,
     "hint_event_named"    to LabelKind.ENTITY,
     "hint_law"            to LabelKind.ENTITY,
-    "hint_fac_name"       to LabelKind.ENTITY,       // toponyme de facility (palais, aéroport…)
+    "hint_fac_name"       to LabelKind.ENTITY,
+    "hint_object_name"    to LabelKind.ENTITY,
+    "hint_work_of_art"    to LabelKind.ENTITY,
 
     // ── Mentions de rôle / groupe ─────────────────────────────────────────────
     "hint_person_role"    to LabelKind.MENTION_ROLE,
     "hint_group_role"     to LabelKind.MENTION_ROLE,
-    "hint_norp"           to LabelKind.MENTION_ROLE, // nationalité/appartenance (peut être adj.)
+    "hint_norp"           to LabelKind.MENTION_ROLE,
+    "hint_inst_role"      to LabelKind.MENTION_ROLE,
 
     // ── Indices de trigger événementiel ──────────────────────────────────────
     "hint_event_nominal"  to LabelKind.TRIGGER_INFO,
@@ -101,17 +134,19 @@ val LABEL_KIND: Map<String, LabelKind> = mapOf(
     "hint_loc_generic"    to LabelKind.TRIGGER_ARG,
     "hint_infra"          to LabelKind.TRIGGER_ARG,
     "hint_object_generic" to LabelKind.TRIGGER_ARG,
-    "hint_object_name"    to LabelKind.TRIGGER_ARG,
     "hint_vehicle"        to LabelKind.TRIGGER_ARG,
     "hint_substance"      to LabelKind.TRIGGER_ARG,
     "hint_food"           to LabelKind.TRIGGER_ARG,
     "hint_weapon"         to LabelKind.TRIGGER_ARG,
     "hint_tool"           to LabelKind.TRIGGER_ARG,
     "hint_disease"        to LabelKind.TRIGGER_ARG,
-    "hint_concept"        to LabelKind.TRIGGER_ARG,
-    "hint_work_of_art"    to LabelKind.TRIGGER_ARG,
+    "hint_doctrine"       to LabelKind.TRIGGER_ARG,
+    "hint_state"          to LabelKind.TRIGGER_ARG,
+    "hint_notion"         to LabelKind.TRIGGER_ARG,
+    "hint_work_generic"   to LabelKind.TRIGGER_ARG,
+    "hint_document"       to LabelKind.TRIGGER_ARG,
     "hint_language"       to LabelKind.TRIGGER_ARG,
-    "hint_quantity"       to LabelKind.TRIGGER_ARG,
+    "hint_field"          to LabelKind.TRIGGER_ARG,
     "hint_measure"        to LabelKind.TRIGGER_ARG,
     "hint_percentage"     to LabelKind.TRIGGER_ARG,
     "hint_count"          to LabelKind.TRIGGER_ARG,
@@ -122,14 +157,15 @@ val LABEL_KIND: Map<String, LabelKind> = mapOf(
 /** mask[coarseIdx][fineIdx] = true si ce label fine est autorisé pour ce coarse */
 private val COARSE_FINE_MASK: Array<BooleanArray> = run {
     val mapping: Map<Int, List<Int>> = mapOf(
-        0 to listOf(0, 1, 2, 3),           // PER    → person_name, person_role, norp, group_role
-        1 to listOf(5, 6, 7, 12),          // LOC    → gpe, fac_name, loc_generic, infra
-        2 to listOf(4),                    // ORG    → org_name
-        3 to listOf(18, 19, 20),           // TIME   → time_date, time_clock, time_duration
-        4 to listOf(16, 17),               // EVENT  → event_nominal, event_named
-        5 to listOf(8, 9, 10, 11, 13, 14, 15), // OBJECT → weapon…object_name
-        6 to listOf(21, 22, 23, 24, 25, 26),   // VALUE  → quantity…rate
-        7 to listOf(27, 28, 29, 30, 31),   // ABSTRACT → law…language
+        0 to listOf(0, 1, 2, 3),                   // PER      → person_name, person_role, norp, group_role
+        1 to listOf(6, 7, 8, 13),                   // LOC      → gpe, fac_name, loc_generic, infra
+        2 to listOf(4, 5, 32),                      // ORG      → org_name, inst_name, inst_role
+        3 to listOf(19, 20, 21),                    // TIME     → time_date, time_clock, time_duration
+        4 to listOf(17, 18),                         // EVENT    → event_nominal, event_named
+        5 to listOf(9, 10, 11, 12, 14, 15, 16),     // OBJECT   → weapon…object_name
+        6 to listOf(22, 23, 24, 25, 26),             // VALUE    → measure…rate
+        7 to listOf(27, 28, 29, 36),                 // WORK     → work_of_art, law, document, work_generic
+        8 to listOf(30, 31, 33, 34, 35, 37),         // ABSTRACT → disease, language, doctrine, state, notion, field
     )
     Array(COARSE_LABELS.size) { c -> BooleanArray(FINE_LABELS.size) { f -> mapping[c]?.contains(f) == true } }
 }
@@ -154,16 +190,20 @@ private const val DEFAULT_TAU_NONE = 0.99f
 private const val DEFAULT_TAU_COARSE = 0.45f
 /** Score minimum global (pBnd × pCoarse × pFine) pour retenir un span. */
 private const val DEFAULT_MIN_SCORE = 0.10f
-/** Longueur max en SOUS-TOKENS par label fine (≈ mots × 2 pour DeBERTa fr). */
+/** Longueur max en SOUS-TOKENS par label fine (≈ mots × 2 pour DeBERTa fr).
+ *  null = pas de limite explicite (maxSpanLen s'applique toujours). */
 private val MAX_TOK_LEN: Map<String, Int> = mapOf(
     "hint_person_name"    to 12,
-    "hint_person_role"    to 8,
-    "hint_group_role"     to 8,
+    "hint_person_role"    to 10,
+    "hint_group_role"     to 10,
     "hint_gpe"            to 10,
     "hint_org_name"       to 16,
+    "hint_inst_name"      to 16,
+    "hint_inst_role"      to 10,
     "hint_fac_name"       to 14,
     "hint_time_date"      to 12,
     "hint_time_clock"     to 10,
+    "hint_time_duration"  to 12,
     "hint_event_nominal"  to 12,
     "hint_event_named"    to 16,
     "hint_object_generic" to 10,
@@ -172,30 +212,25 @@ private val MAX_TOK_LEN: Map<String, Int> = mapOf(
     "hint_money"          to 12,
     "hint_measure"        to 12,
     "hint_count"          to 10,
-    "hint_quantity"       to 10,
     "hint_rate"           to 14,
     "hint_vehicle"        to 12,
     "hint_substance"      to 10,
-    "hint_disease"        to 10,
+    "hint_disease"        to 12,
     "hint_loc_generic"    to 12,
     "hint_infra"          to 14,
-    "hint_concept"        to 16,
     "hint_law"            to 16,
+    "hint_work_of_art"    to 16,
+    "hint_document"       to 14,
+    "hint_doctrine"       to 16,
+    "hint_notion"         to 14,
+    "hint_work_generic"   to 12,
+    "hint_field"          to 12,
 )
-/** Seuils fine par label. */
-private val FINE_THRESHOLDS: Map<String, Float> = mapOf(
-    "hint_person_name"    to 0.90f,
-    "hint_org_name"       to 0.90f,
-    "hint_gpe"            to 0.70f,
-    "hint_fac_name"       to 0.70f,
-    "hint_time_date"      to 0.70f,
-    "hint_time_clock"     to 0.70f,
-    "hint_person_role"    to 0.90f,
-    "hint_group_role"     to 0.90f,
-    "hint_event_nominal"  to 0.90f,
-    "hint_object_generic" to 0.90f,
-)
-private const val DEFAULT_FINE_THRESHOLD = 0.80f
+/** Seuil fine par défaut — appliqué uniformément à tous les labels.
+ *  Plus de seuils per-label hardcodés : la nouvelle taxonomie (38 labels, familles multi-labels
+ *  de 2–7 membres) rend les seuils per-label fragiles — la distribution du softmax masqué
+ *  dépend du nombre de labels dans la famille (ORG/3 vs PER/4 vs OBJECT/7). */
+private const val DEFAULT_FINE_THRESHOLD = 0.50f
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Data classes internes
@@ -275,17 +310,19 @@ data class ExtractionResult(
     /** Reconstruit les triplets (sujet, verbe, objet) de façon greedy.
      *  Priorité au verb pointer (govVerbCharStart) quand disponible, sinon heuristique positionnelle. */
     fun svoTriplets(): List<SvoTriplet> {
-        val verbs    = svoSpans.filter { it.synLabel == "verb_trigger" }
-        val subjects = svoSpans.filter { it.role in listOf("SUBJECT") || it.synLabel == "pron_subj" }
-        val objects  = svoSpans.filter { it.role in listOf("OBJECT") || it.synLabel == "pron_obj" }
+        val verbs    = svoSpans.filter { it.synLabel == "verb_trigger" && it.role == "NONE" }
+        val subjects = svoSpans.filter { it.role == "SUBJECT" || it.synLabel == "pron_subj" }
+        val objects  = svoSpans.filter { it.role == "OBJECT"  || it.synLabel == "pron_obj" }
         return verbs.map { v ->
-            // Si l'argument a un govVerbCharStart qui pointe sur ce verbe → liaison directe
+            // Priorité au verb pointer (govVerbCharStart) quand disponible.
+            // Un argument lié par verb pointer a une priorité absolue (Int.MAX) sur un
+            // argument lié par simple proximité positionnelle (charStart).
             val subj = subjects
                 .filter { it.govVerbCharStart == v.charStart || (it.govVerbCharStart == null && it.charEnd <= v.charStart) }
-                .maxByOrNull { if (it.govVerbCharStart != null) 1f else 0f + it.charStart }
+                .maxByOrNull { if (it.govVerbCharStart != null) Int.MAX_VALUE else it.charStart }
             val obj = objects
                 .filter { it.govVerbCharStart == v.charStart || (it.govVerbCharStart == null && it.charStart >= v.charEnd) }
-                .minByOrNull { if (it.govVerbCharStart != null) -1f else 0f + it.charStart }
+                .minByOrNull { if (it.govVerbCharStart != null) Int.MIN_VALUE else it.charStart }
             SvoTriplet(subject = subj, verb = v, obj = obj)
         }
     }
@@ -637,6 +674,9 @@ private data class SpanResult(
      * Les entités svoAnchored sont moins certaines côté NER.
      */
     val svoAnchored: Boolean = false,
+    /** 2ème meilleur fine label dans la même famille coarse (diagnostic quand pFine < 0.60). */
+    val altFine: String? = null,
+    val altPFine: Float? = null,
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -649,7 +689,7 @@ private data class SpanResult(
  * Interface ONNX attendue :
  *   Inputs  : input_ids [B,L], attention_mask [B,L],
  *             span_starts [N], span_ends [N], span_batch_ids [N]
- *   Outputs : boundary_logits [N,2], coarse_logits [N,9], fine_logits [N,32]
+ *   Outputs : boundary_logits [N,2], coarse_logits [N,10], fine_logits [N,38]
  *
  * Cf. export_onnx_multitask.py pour l'export du modèle.
  */
@@ -1052,7 +1092,7 @@ class OnnxMultiHeadEntityExtractor(
                         for (result in topResults) {
                             val tokLen     = cand.tokEnd - cand.tokStart + 1
                             val maxTok     = MAX_TOK_LEN[result.fine]
-                            val fineThresh = FINE_THRESHOLDS.getOrDefault(result.fine, DEFAULT_FINE_THRESHOLD)
+                            val fineThresh = DEFAULT_FINE_THRESHOLD
                             val score      = pBoundary * result.pCoarse * result.pFine
                             val minScoreEff = effScoreByCoarse[result.coarse] ?: minScore
                             if ((maxTok == null || tokLen <= maxTok) && result.pFine >= fineThresh && score >= minScoreEff) {
@@ -1070,6 +1110,8 @@ class OnnxMultiHeadEntityExtractor(
                                     svoGender        = nerGender,
                                     svoNumber        = nerNumber,
                                     svoPerson        = nerPerson,
+                                    altFine          = result.altFine,
+                                    altPFine         = result.altPFine,
                                 )
                             }
                         }
@@ -1225,7 +1267,7 @@ class OnnxMultiHeadEntityExtractor(
                                     val tokLen      = cand.tokEnd - cand.tokStart + 1
                                     val maxTok      = MAX_TOK_LEN[result.fine]
                                     // Seuil fine légèrement assoupli (×0.85) en mode anchored
-                                    val fineThresh  = FINE_THRESHOLDS.getOrDefault(result.fine, DEFAULT_FINE_THRESHOLD) * 0.85f
+                                    val fineThresh  = DEFAULT_FINE_THRESHOLD * 0.85f
                                     val score       = pBoundary * result.pCoarse * result.pFine
                                     val minScoreEff = (effScoreByCoarse[result.coarse] ?: minScore) * 0.60f
                                     if ((maxTok == null || tokLen <= maxTok) && result.pFine >= fineThresh && score >= minScoreEff) {
@@ -1244,6 +1286,8 @@ class OnnxMultiHeadEntityExtractor(
                                             svoNumber        = number,
                                             svoPerson        = person,
                                             svoAnchored      = true,
+                                            altFine          = result.altFine,
+                                            altPFine         = result.altPFine,
                                         )
                                     }
                                 }
@@ -1444,6 +1488,9 @@ class OnnxMultiHeadEntityExtractor(
     private data class CoarseFineScore(
         val coarse: String, val pCoarse: Float,
         val fine: String,   val pFine: Float,
+        /** 2ème meilleur fine label dans la même famille (null si famille mono-label). */
+        val altFine: String? = null,
+        val altPFine: Float? = null,
     )
 
     private fun bestCoarseFine(
@@ -1483,7 +1530,15 @@ class OnnxMultiHeadEntityExtractor(
             var fIdx = 0
             var fMax = fProbs[0]
             for (i in 1 until fProbs.size) if (fProbs[i] > fMax) { fMax = fProbs[i]; fIdx = i }
-            CoarseFineScore(COARSE_LABELS[bestCoarseIdx], bestPCoarse, FINE_LABELS[fIdx], fMax)
+            // 2ème meilleur fine dans la même famille (pour diagnostic quand pFine < 0.60)
+            var fIdx2 = -1
+            var fMax2 = -1f
+            for (i in fProbs.indices) {
+                if (i != fIdx && mask[i] && fProbs[i] > fMax2) { fMax2 = fProbs[i]; fIdx2 = i }
+            }
+            val altFine  = if (fIdx2 >= 0) FINE_LABELS[fIdx2] else null
+            val altPFine = if (fIdx2 >= 0) fMax2 else null
+            CoarseFineScore(COARSE_LABELS[bestCoarseIdx], bestPCoarse, FINE_LABELS[fIdx], fMax, altFine, altPFine)
         }
     }
 
@@ -1602,6 +1657,11 @@ class OnnxMultiHeadEntityExtractor(
             put("pCoarse",   r.span.pCoarse)
             put("pFine",     r.span.pFine)
             put("score",     r.span.score)
+            // ── Alt fine : 2ème choix quand pFine < 0.60 (diagnostic d'ambiguïté) ──
+            if (r.span.pFine < 0.60f && r.span.altFine != null) {
+                put("altFine",  r.span.altFine)
+                put("altPFine", r.span.altPFine)
+            }
             // ── Rôle SVO inline (même candidat span, même forward pass) ──────────
             // svoRole        : rôle SVO v4 (SUBJECT, OBJECT, OBLIQUE, OBLIQUE_AGENT, OBLIQUE_CAUSE, APPOS)
             // syntacticRole  : normalisation UD ("nsubj", "obj", "obl", "obl:agent", "obl:cause", "appos")

@@ -35,6 +35,11 @@ dependencies {
     implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.22.0")
 }
 
+tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {
+    // Profil "local" activé automatiquement en dev (batch=8, ALL_OPT, arena, auto-threads)
+    systemProperty("spring.profiles.active", "local")
+}
+
 tasks.test {
     useJUnitPlatform()
 }

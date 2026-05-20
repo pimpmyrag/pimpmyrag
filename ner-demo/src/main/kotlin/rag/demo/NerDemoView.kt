@@ -45,6 +45,7 @@ class NerDemoView(
             "EVENT"    to ("#fee2e2" to "#991b1b"),
             "VALUE"    to ("#ccfbf1" to "#0f766e"),
             "OBJECT"   to ("#fef3c7" to "#92400e"),
+            "WORK"     to ("#fce7f3" to "#9d174d"),
             "ABSTRACT" to ("#f1f5f9" to "#334155"),
             "NONE"     to ("#f3f4f6" to "#6b7280"),
         )
@@ -67,6 +68,8 @@ class NerDemoView(
             "hint_norp"           to "norp",
             "hint_group_role"     to "grp",
             "hint_org_name"       to "org",
+            "hint_inst_name"      to "inst",
+            "hint_inst_role"      to "inst·r",
             "hint_gpe"            to "gpe",
             "hint_fac_name"       to "fac",
             "hint_loc_generic"    to "loc",
@@ -83,17 +86,21 @@ class NerDemoView(
             "hint_time_date"      to "date",
             "hint_time_clock"     to "time",
             "hint_time_duration"  to "dur",
-            "hint_quantity"       to "qty",
             "hint_measure"        to "meas",
             "hint_percentage"     to "pct",
             "hint_count"          to "cnt",
             "hint_money"          to "€",
             "hint_rate"           to "rate",
-            "hint_law"            to "law",
             "hint_work_of_art"    to "art",
-            "hint_concept"        to "cpt",
+            "hint_law"            to "law",
+            "hint_document"       to "doc",
+            "hint_work_generic"   to "work",
             "hint_disease"        to "dis",
             "hint_language"       to "lang",
+            "hint_doctrine"       to "doct",
+            "hint_state"          to "state",
+            "hint_notion"         to "notion",
+            "hint_field"          to "field",
         )
         val ALL_COARSE = COARSE_COLORS.keys.filter { it != "NONE" }
         private val SVO_EMOJI = mapOf(
@@ -1355,6 +1362,20 @@ class NerDemoView(
             addRow(detailPanel, "p_entity", fmt(ent.metadata["pBoundary"]))
             addRow(detailPanel, "p_coarse", fmt(ent.metadata["pCoarse"]))
             addRow(detailPanel, "p_fine",   fmt(ent.metadata["pFine"]))
+            // ── Alt fine : 2ème choix affiché quand pFine < 0.60 ──
+            val altFine  = ent.metadata["altFine"]  as? String
+            val altPFine = ent.metadata["altPFine"] as? Float
+            if (altFine != null && altPFine != null) {
+                val altLabel = COMPACT_LABEL[altFine] ?: altFine.removePrefix("hint_")
+                val altBadge = Span("↳ alt: ${altLabel} (${fmt(altPFine)})")
+                altBadge.style["font-size"]   = "0.72em"
+                altBadge.style["color"]       = "#6366f1"
+                altBadge.style["font-weight"] = "500"
+                altBadge.style["display"]     = "block"
+                altBadge.style["margin-top"]  = "2px"
+                altBadge.style["margin-left"] = "4px"
+                detailPanel.add(altBadge)
+            }
             addRow(detailPanel, "score",    fmt(ent.metadata["score"]))
             if (ent.metadata["svoAnchored"] == true) {
                 val badge = Span("⚡ SVO-anchored — confiance NER réduite")

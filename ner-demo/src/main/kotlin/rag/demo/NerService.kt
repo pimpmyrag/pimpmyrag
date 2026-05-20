@@ -243,7 +243,7 @@ class NerService(
     private fun SvoSpan.isObject()  = role in setOf("OBJECT", "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE", "APPOS") || synLabel == "pron_obj"
 
     private val subjCoarse   = setOf("PER", "ORG", "EVENT", "ABSTRACT")
-    private val objCoarse    = setOf("PER", "ORG", "LOC", "EVENT", "OBJECT", "ABSTRACT", "VALUE", "TIME")
+    private val objCoarse    = setOf("PER", "ORG", "LOC", "EVENT", "OBJECT", "ABSTRACT", "VALUE", "TIME", "WORK")
 
     private fun reconcile(
         svoSpans: List<SvoSpan>,

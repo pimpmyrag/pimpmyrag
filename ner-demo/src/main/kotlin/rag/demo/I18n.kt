@@ -105,7 +105,7 @@ data class I18n(
 
         val FR = I18n(
             headerTitle     = "Analyse d'entités & de relations",
-            headerSub       = "DeBERTa multitête · NER 32 labels · Syntaxe SVO · Évaluation LLM",
+            headerSub       = "DeBERTa multitête · NER 38 labels · Syntaxe SVO · Évaluation LLM",
             headerBadgeNer  = "NER",
             headerBadgeSvo  = "SVO",
             headerBadgeLlm  = "LLM Judge",
@@ -187,7 +187,7 @@ data class I18n(
 
         val EN = I18n(
             headerTitle     = "Entity & Relation Analysis",
-            headerSub       = "DeBERTa multi-head · NER 32 labels · SVO syntax · LLM evaluation",
+            headerSub       = "DeBERTa multi-head · NER 38 labels · SVO syntax · LLM evaluation",
             headerBadgeNer  = "NER",
             headerBadgeSvo  = "SVO",
             headerBadgeLlm  = "LLM Judge",
@@ -269,7 +269,7 @@ data class I18n(
 
         val DE = I18n(
             headerTitle     = "Entitäts- & Relationsanalyse",
-            headerSub       = "DeBERTa Multi-Head · NER 32 Labels · SVO-Syntax · LLM-Bewertung",
+            headerSub       = "DeBERTa Multi-Head · NER 38 Labels · SVO-Syntax · LLM-Bewertung",
             headerBadgeNer  = "NER",
             headerBadgeSvo  = "SVO",
             headerBadgeLlm  = "LLM-Richter",
@@ -351,7 +351,7 @@ data class I18n(
 
         val ES = I18n(
             headerTitle     = "Análisis de Entidades & Relaciones",
-            headerSub       = "DeBERTa multi-cabeza · NER 32 etiquetas · Sintaxis SVO · Evaluación LLM",
+            headerSub       = "DeBERTa multi-cabeza · NER 38 etiquetas · Sintaxis SVO · Evaluación LLM",
             headerBadgeNer  = "NER",
             headerBadgeSvo  = "SVO",
             headerBadgeLlm  = "Juez LLM",
@@ -433,7 +433,7 @@ data class I18n(
 
         val IT = I18n(
             headerTitle     = "Analisi di Entità & Relazioni",
-            headerSub       = "DeBERTa multi-testa · NER 32 etichette · Sintassi SVO · Valutazione LLM",
+            headerSub       = "DeBERTa multi-testa · NER 38 etichette · Sintassi SVO · Valutazione LLM",
             headerBadgeNer  = "NER",
             headerBadgeSvo  = "SVO",
             headerBadgeLlm  = "Giudice LLM",
