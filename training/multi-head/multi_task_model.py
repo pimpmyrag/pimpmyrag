@@ -177,6 +177,7 @@ class SpanMultiTaskModel(nn.Module):
             coarse_class_weights=None,
             fine_class_weights=None,
             role_class_weights=None,
+            certainty_class_weights=None,
             lambda_boundary=1.0,
             lambda_coarse=1.0,
             lambda_fine=1.2,
@@ -192,6 +193,7 @@ class SpanMultiTaskModel(nn.Module):
             focal_coarse_gamma=0.0, # Focal loss sur tête coarse — positifs seulement (≠NONE)
             focal_fine_gamma=0.0,   # Focal loss sur tête fine (séparé de boundary)
             ignore_coarse_none=False,  # Si True, exclut spans NONE de la loss coarse (positifs only)
+            weighting=None,  # Dynamic loss weighting module (UncertaintyWeighting / GradNormWeighting)
     ):
         device = outputs["boundary_logits"].device
 
@@ -230,6 +232,8 @@ class SpanMultiTaskModel(nn.Module):
             fine_class_weights = fine_class_weights.to(device=device, dtype=torch.float32)
         if role_class_weights is not None:
             role_class_weights = role_class_weights.to(device=device, dtype=torch.float32)
+        if certainty_class_weights is not None:
+            certainty_class_weights = certainty_class_weights.to(device=device, dtype=torch.float32)
 
         # ── 1) NER Boundary ────────────────────────────────────────────────
         loss_b_per = F.cross_entropy(b_logits, boundary_labels,
@@ -321,7 +325,8 @@ class SpanMultiTaskModel(nn.Module):
         # ── 8) Certainty (sur verb_trigger uniquement) ─────────────────────
         cert_mask = (certainty_labels >= 0) & (certainty_labels < cert_logits.size(-1))
         if cert_mask.any():
-            loss_cert = (F.cross_entropy(cert_logits[cert_mask], certainty_labels[cert_mask], reduction="none")
+            loss_cert = (F.cross_entropy(cert_logits[cert_mask], certainty_labels[cert_mask],
+                                         weight=certainty_class_weights, reduction="none")
                          * sample_weights[cert_mask]).mean()
         else:
             loss_cert = torch.tensor(0.0, device=device)
@@ -376,23 +381,55 @@ class SpanMultiTaskModel(nn.Module):
 
         loss_compat = loss_compat_rb + loss_compat_bc
 
-        # ── Total ──────────────────────────────────────────────────────────
-        total_loss = (
-            lambda_boundary       * loss_b
-            + lambda_coarse       * loss_c
-            + lambda_fine         * loss_f
-            + lambda_svo_boundary * loss_svo_b
-            + lambda_svo          * loss_syn
-            + lambda_role         * loss_role
-            + lambda_voice        * loss_voice
-            + lambda_certainty    * loss_cert
-            + lambda_morpho       * (loss_gender + loss_number + loss_person)
-            + lambda_verb_ptr     * loss_verb_ptr
-            + lambda_compat       * loss_compat
-        )
+        # ── Raw losses per task (for dynamic weighting) ─────────────────
+        raw_losses = {
+            "boundary":     loss_b,
+            "coarse":       loss_c,
+            "fine":         loss_f,
+            "svo_boundary": loss_svo_b,
+            "svo":          loss_syn,
+            "role":         loss_role,
+            "voice":        loss_voice,
+            "certainty":    loss_cert,
+            "morpho":       loss_gender + loss_number + loss_person,
+            "verb_ptr":     loss_verb_ptr,
+            "compat":       loss_compat,
+        }
+
+        # ── Total (dynamic or fixed weighting) ────────────────────────────
+        if weighting is not None:
+            ramp_lambdas = {
+                "boundary":     lambda_boundary,
+                "coarse":       lambda_coarse,
+                "fine":         lambda_fine,
+                "svo_boundary": lambda_svo_boundary,
+                "svo":          lambda_svo,
+                "role":         lambda_role,
+                "voice":        lambda_voice,
+                "certainty":    lambda_certainty,
+                "morpho":       lambda_morpho,
+                "verb_ptr":     lambda_verb_ptr,
+                "compat":       lambda_compat,
+            }
+            total_loss = weighting.combine(raw_losses, ramp_lambdas)
+        else:
+            total_loss = (
+                lambda_boundary       * loss_b
+                + lambda_coarse       * loss_c
+                + lambda_fine         * loss_f
+                + lambda_svo_boundary * loss_svo_b
+                + lambda_svo          * loss_syn
+                + lambda_role         * loss_role
+                + lambda_voice        * loss_voice
+                + lambda_certainty    * loss_cert
+                + lambda_morpho       * (loss_gender + loss_number + loss_person)
+                + lambda_verb_ptr     * loss_verb_ptr
+                + lambda_compat       * loss_compat
+            )
 
         return {
             "loss":                 total_loss,
+            "raw_losses":           {k: v.detach() for k, v in raw_losses.items()},
             "loss_boundary":        loss_b.detach(),
             "loss_coarse":          loss_c.detach(),
             "loss_fine":            loss_f.detach(),

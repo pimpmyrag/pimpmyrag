@@ -24,10 +24,11 @@ from sklearn.metrics import f1_score, classification_report
 
 from multitask_dataset import MultiTaskSpanDataset, make_collate_fn
 from multitask_model import SpanMultiTaskModel
+from loss_weighting import create_weighting, FixedWeighting, TASK_KEYS
 from labels import (
     COARSE_LABELS, FINE_LABELS,
     SYN_LABELS, NUM_SYN, ROLE_LABELS, NUM_ROLE,
-    NUM_VOICE, NUM_CERTAINTY, NUM_GENDER, NUM_NUMBER, NUM_PERSON,
+    NUM_VOICE, NUM_CERTAINTY, CERTAINTY_LABELS, NUM_GENDER, NUM_NUMBER, NUM_PERSON,
     PERSON_LABELS, ROLE_NONE_ID,
     # compat
     SVO_LABELS, NUM_SVO,
@@ -300,10 +301,12 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
         make_weights(coarse_counts, len(COARSE_LABELS), power=0.0),  # cwp=0 sur coarse : NONE majoritaire perturbe boundary via encodeur partagé
         make_weights(fine_counts, len(FINE_LABELS), power=power),
         make_weights(role_counts, NUM_ROLE, power=0.0),  # cwp=0 sur role : APPOS/OBLIQUE rares → gradient trop fort via encodeur partagé → régression boundary
+        make_weights(certainty_counts, NUM_CERTAINTY, power=power),
         boundary_counts,
         coarse_counts,
         fine_counts,
         role_counts,
+        certainty_counts,
     )
 
 
@@ -330,6 +333,7 @@ def run_epoch(
         coarse_class_weights=None,
         fine_class_weights=None,
         role_class_weights=None,
+        certainty_class_weights=None,
         lambda_boundary=2.5,
         lambda_coarse=1.0,
         lambda_fine=1.8,
@@ -352,6 +356,8 @@ def run_epoch(
         focal_fine_gamma: float = 0.0,   # Focal loss sur tête fine
         focal_coarse_gamma: float = 0.0, # Focal loss sur tête coarse (positifs seulement)
         ignore_coarse_none: bool = False, # Si True, exclut spans NONE de la loss coarse
+        weighting=None,  # Dynamic loss weighting module
+        gradnorm_every: int = 10,  # GradNorm update frequency (optimizer steps)
 ):
     """
     Version adaptée à l'architecture :
@@ -601,6 +607,7 @@ def run_epoch(
                     coarse_class_weights=coarse_class_weights,
                     fine_class_weights=fine_class_weights,
                     role_class_weights=role_class_weights,
+                    certainty_class_weights=certainty_class_weights,
                     lambda_boundary=lambda_boundary,
                     lambda_coarse=lambda_coarse,
                     lambda_fine=lambda_fine,
@@ -616,6 +623,7 @@ def run_epoch(
                     focal_coarse_gamma=focal_coarse_gamma,
                     focal_fine_gamma=focal_fine_gamma,
                     ignore_coarse_none=ignore_coarse_none,
+                    weighting=weighting,
                 )
 
                 loss = loss_dict["loss"] / accum_steps
@@ -639,6 +647,36 @@ def run_epoch(
             optimizer.zero_grad()
             if ema is not None:
                 ema.update(model)
+
+            # ── GradNorm step (separate optimization of log_lambdas) ────────
+            _gn_step_id = getattr(run_epoch, '_gn_step_counter', 0) + 1
+            run_epoch._gn_step_counter = _gn_step_id
+            if (train and weighting is not None
+                    and hasattr(weighting, 'gradnorm_loss')
+                    and _gn_step_id % gradnorm_every == 0):
+                from loss_weighting import GradNormWeighting
+                if isinstance(weighting, GradNormWeighting):
+                    ramp_lambdas = {
+                        "boundary": lambda_boundary, "coarse": lambda_coarse,
+                        "fine": lambda_fine, "svo_boundary": lambda_svo_boundary,
+                        "svo": lambda_svo, "role": lambda_role,
+                        "voice": lambda_voice, "certainty": lambda_certainty,
+                        "morpho": lambda_morpho, "verb_ptr": lambda_verb_ptr,
+                        "compat": lambda_compat,
+                    }
+                    raw = loss_dict.get("raw_losses")
+                    if raw:
+                        gn_loss = weighting.gradnorm_loss(raw, model.span_mlp, ramp_lambdas)
+                        if gn_loss is not None:
+                            gn_loss.backward()
+                            # Only step the weighting params
+                            for pg in optimizer.param_groups:
+                                if pg.get("name") == "loss_weighting":
+                                    for p in pg["params"]:
+                                        if p.grad is not None:
+                                            p.data -= pg["lr"] * p.grad
+                                            p.grad = None
+                            weighting.renormalize(ramp_lambdas)
 
         losses.append(loss_dict["loss"].item())
 
@@ -1084,6 +1122,18 @@ def main():
     parser.add_argument("--hn-min-weight",   type=float, default=0.3,
                         help="Poids minimum (défaut=0.3)")
 
+    # ── Dynamic Loss Weighting ──────────────────────────────────────────
+    parser.add_argument("--loss-weighting", choices=["fixed", "uncertainty", "gradnorm"],
+                        default="fixed",
+                        help="Stratégie de pondération des losses multi-task. "
+                             "fixed=lambdas fixes (défaut), "
+                             "uncertainty=Kendall 2018 (learnable sigma par tête), "
+                             "gradnorm=Chen ICML 2018 (gradient norm balancing)")
+    parser.add_argument("--gradnorm-alpha", type=float, default=1.5,
+                        help="GradNorm alpha (asymétrie du balancement, 1.5=recommandé)")
+    parser.add_argument("--gradnorm-every", type=int, default=10,
+                        help="GradNorm update every N optimizer steps (10=recommandé pour limiter le coût)")
+
     # ── W&B ──────────────────────────────────────────────────────────────────
     parser.add_argument("--wandb-project", type=str, default="pimpmyrag-ner",
                         help="Nom du projet W&B (défaut: pimpmyrag-ner). Mettre '' pour désactiver.")
@@ -1237,23 +1287,50 @@ def main():
     param_groups = get_layerwise_param_groups(model, args.lr, head_lr, decay=args.layer_lr_decay)
     optimizer = AdamW(param_groups)
 
+    # ── Dynamic loss weighting ─────────────────────────────────────────────
+    initial_lambdas = {
+        "boundary": args.lambda_boundary, "coarse": args.lambda_coarse,
+        "fine": args.lambda_fine, "svo_boundary": args.lambda_svo_boundary,
+        "svo": args.lambda_svo, "role": args.lambda_role,
+        "voice": args.lambda_voice, "certainty": args.lambda_certainty,
+        "morpho": args.lambda_morpho, "verb_ptr": args.lambda_verb_ptr,
+        "compat": args.lambda_compat,
+    }
+    weighting = create_weighting(args.loss_weighting, initial_lambdas,
+                                 alpha=args.gradnorm_alpha)
+    weighting = weighting.to(device)
+    if not isinstance(weighting, FixedWeighting):
+        # Add weighting parameters to optimizer with separate LR
+        wt_lr = 0.01 if args.loss_weighting == "uncertainty" else 0.025
+        optimizer.add_param_group({
+            "params": list(weighting.parameters()),
+            "lr": wt_lr,
+            "weight_decay": 0.0,
+            "name": "loss_weighting",
+        })
+        print(f"🎛️  Loss weighting: {args.loss_weighting} (lr={wt_lr})")
+    else:
+        print(f"🎛️  Loss weighting: fixed (lambdas manuels)")
+
     # Log LR par couche
     print(f"📐 Layer-wise LR decay={args.layer_lr_decay}")
     for g in param_groups:
         print(f"   {g.get('name', '?'):<20} lr={g['lr']:.2e}")
     print(f"📐 Focal gamma: {args.focal_gamma}")
 
-    boundary_w = coarse_w = fine_w = None
+    boundary_w = coarse_w = fine_w = certainty_w = None
     if args.class_weights == "auto":
         (
             boundary_w,
             coarse_w,
             fine_w,
             role_w,
+            certainty_w,
             boundary_counts,
             coarse_counts,
             fine_counts,
             role_counts,
+            certainty_counts,
         ) = compute_class_weights_from_multitask_jsonl(
             args.train,
             power=args.class_weight_power,
@@ -1294,12 +1371,17 @@ def main():
         print("\n[role counts / weights]")
         for i, name in enumerate(ROLE_LABELS):
             print(f"  {name:<15} count={role_counts.get(i, 0):>8} weight={role_w[i].item():.6f}")
+
+        print("\n[certainty counts / weights]")
+        for i, name in enumerate(CERTAINTY_LABELS):
+            print(f"  {name:<15} count={certainty_counts.get(i, 0):>8} weight={certainty_w[i].item():.6f}")
     else:
         print("⚖️ class weights désactivés")
         boundary_w = None
         coarse_w = None
         fine_w = None
         role_w = None
+        certainty_w = None
 
     best_score = -1.0
     start_epoch = 1
@@ -1369,6 +1451,13 @@ def main():
                 ema.shadow = {k: v.clone() for k, v in ckpt["ema_state"].items()}
                 print("📐 EMA state rechargé depuis checkpoint")
 
+            if not isinstance(weighting, FixedWeighting) and "weighting_state" in ckpt and ckpt["weighting_state"] is not None:
+                try:
+                    weighting.load_state_dict(ckpt["weighting_state"])
+                    print(f"🎛️  Loss weighting state rechargé depuis checkpoint")
+                except Exception as e:
+                    print(f"⚠️ Impossible de recharger le weighting state: {e}")
+
             if args.start_epoch is not None:
                 start_epoch = args.start_epoch
             else:
@@ -1399,6 +1488,7 @@ def main():
             coarse_class_weights=coarse_w,
             fine_class_weights=fine_w,
             role_class_weights=role_w,
+            certainty_class_weights=certainty_w,
             lambda_boundary=args.lambda_boundary,
             lambda_coarse=args.lambda_coarse,
             lambda_fine=args.lambda_fine,
@@ -1420,6 +1510,8 @@ def main():
             focal_fine_gamma=args.focal_fine_gamma,
             focal_coarse_gamma=args.focal_coarse_gamma,
             ignore_coarse_none=args.ignore_coarse_none,
+            weighting=weighting,
+            gradnorm_every=args.gradnorm_every,
         )
 
         # ── Inline HN mining — mise à jour des poids in-memory ────────────────
@@ -1450,6 +1542,7 @@ def main():
             coarse_class_weights=coarse_w,
             fine_class_weights=fine_w,
             role_class_weights=role_w,
+            certainty_class_weights=certainty_w,
             lambda_boundary=args.lambda_boundary,
             lambda_coarse=args.lambda_coarse,
             lambda_fine=args.lambda_fine,
@@ -1469,6 +1562,7 @@ def main():
             focal_fine_gamma=args.focal_fine_gamma,
             focal_coarse_gamma=args.focal_coarse_gamma,
             ignore_coarse_none=args.ignore_coarse_none,
+            weighting=weighting,
         )
 
         if use_ema:
@@ -1564,6 +1658,19 @@ def main():
                 pair = f"{item['true_label']}__{item['pred_label']}"
                 log_dict[f"val/fine_confusion_count_{pair}"] = item["count"]
                 log_dict[f"val/fine_confusion_row_pct_{pair}"] = item["row_pct"]
+            # Log dynamic loss weights
+            if not isinstance(weighting, FixedWeighting):
+                ramp_lambdas = {
+                    "boundary": args.lambda_boundary, "coarse": args.lambda_coarse,
+                    "fine": args.lambda_fine, "svo_boundary": args.lambda_svo_boundary,
+                    "svo": args.lambda_svo, "role": args.lambda_role,
+                    "voice": args.lambda_voice, "certainty": args.lambda_certainty,
+                    "morpho": args.lambda_morpho, "verb_ptr": args.lambda_verb_ptr,
+                    "compat": args.lambda_compat,
+                }
+                eff_weights = weighting.get_effective_weights(ramp_lambdas)
+                for k, v in eff_weights.items():
+                    log_dict[f"weights/{k}"] = v
             wandb.log(log_dict, step=epoch)
 
         print("\n[VAL boundary]")
@@ -1594,6 +1701,7 @@ def main():
             "best_score": best_score,
             "epochs_no_improve": epochs_no_improve,
             "ema_state": ema.state_dict() if use_ema else None,
+            "weighting_state": weighting.state_dict() if not isinstance(weighting, FixedWeighting) else None,
         }, "checkpoint_last_multitask.pt")
 
         if score > best_score + args.min_delta:
@@ -1608,6 +1716,7 @@ def main():
                 "optim_state": optimizer.state_dict(),
                 "best_score": best_score,
                 "ema_state": ema.state_dict() if use_ema else None,
+                "weighting_state": weighting.state_dict() if not isinstance(weighting, FixedWeighting) else None,
             }, "checkpoint_best_multitask.pt")
             torch.save(model.state_dict(), "best_model_multitask.pt")
             if use_ema:
@@ -1648,6 +1757,7 @@ def main():
         coarse_class_weights=coarse_w,
         fine_class_weights=fine_w,
         role_class_weights=role_w,
+        certainty_class_weights=certainty_w,
         lambda_boundary=args.lambda_boundary,
         lambda_coarse=args.lambda_coarse,
         lambda_fine=args.lambda_fine,
@@ -1666,6 +1776,7 @@ def main():
         focal_fine_gamma=args.focal_fine_gamma,
         focal_coarse_gamma=args.focal_coarse_gamma,
         ignore_coarse_none=args.ignore_coarse_none,
+        weighting=weighting,
     )
 
     print("\n🎯 TEST")

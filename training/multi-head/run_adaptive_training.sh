@@ -98,6 +98,9 @@ BOUNDARY_RESCUE_TARGET=${BOUNDARY_RESCUE_TARGET:-0.90}  # seuil cible : ne rescu
 BOUNDARY_RESCUE_DELTA=${BOUNDARY_RESCUE_DELTA:-0.003}   # gain minimal requis sur la fenêtre (0.3%)
 BOUNDARY_RESCUE_FACTOR=${BOUNDARY_RESCUE_FACTOR:-0.50}  # facteur de réduction (×0.5 sur verb_ptr et voice)
 
+# ── Dynamic loss weighting (uncertainty / gradnorm) ──────────────────
+LOSS_WEIGHTING=${LOSS_WEIGHTING:-fixed}  # fixed | uncertainty | gradnorm
+
 # Niveaux de difficulté progressifs (6 niveaux)
 LEVEL_NAMES=("easy" "easy+" "medium" "medium+" "hard" "full")
 HARD_PER_GOLD=(2    2      3       4        5      6)
@@ -408,6 +411,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --hn-max-weight 8.0 \
         --hn-min-weight 0.3 \
         --num-workers $NUM_WORKERS \
+        --loss-weighting $LOSS_WEIGHTING \
         $( [ "$NER_ONLY_BENCH" = "1" ] && echo "--ner-only-score" ) \
         --wandb-run-name  "$WANDB_RUN_NAME" \
         --wandb-tags      "$WANDB_TAGS" \
