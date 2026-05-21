@@ -150,8 +150,11 @@ FOCAL_COARSE_GAMMA=0.0
 # v8.2 (L_SVO=0.51, L_SVO_BOUNDARY=0.595) → SVO=0.813 mais NER plafonne à 0.827.
 # v8.3 : L_SVO=0.40 (-22%), L_SVO_BOUNDARY=0.45 (-24%) → cible SVO ~0.75-0.78, NER ~0.845+
 # Budget SVO total = 1.50 vs budget NER = 5.3 → SVO = 22% du total (vs 27% en v8.2).
-L_SVO_BOUNDARY=0.50   # Boundary SVO (silver) — réduit vs v8.2 (0.595) pour ne pas écraser NER
-L_SVO=0.50            # Labels SVO (syn labels) — réduit vs v8.2 (0.51) pour équilibre NER/SVO
+L_SVO_BOUNDARY=0.20   # Réduit 0.50→0.20 : svo_boundary_head couvre verb_trigger/pron, mais les spans
+# entités (SUBJECT/OBJECT) sont DÉJÀ supervisés par boundary_head (NER) → redondance partielle.
+# svo_boundary_head reste utile uniquement pour les verb_trigger spans (non-NER).
+# Libère ~0.30 de budget encodeur → profite à NER boundary.
+L_SVO=0.50            # Labels SVO (syn heads) — inchangé, supervise verb_trigger/pron_subj/pron_obj
 L_ROLE=0.35           # Rôles SVO — réduit 0.6→0.25 : role fix (ffc3210) a ajouté ~200k spans/ep, gradient trop fort → régression boundary
 L_VOICE=0.13        # Retour valeur v8.0 (0.20 trop fort → siphonnait gradient NER boundary)
 L_CERTAINTY=0.12      # Relevé 0.05→0.12 : était INCHANGÉ depuis l'origine, trop faible (10x sous L_SVO=0.50)
