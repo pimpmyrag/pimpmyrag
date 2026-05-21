@@ -90,6 +90,14 @@ SVO_TRIGGER_BND=${SVO_TRIGGER_BND:-0.76}               # seuil boundary : reflè
 SVO_TRIGGER_COARSE=${SVO_TRIGGER_COARSE:-0.87}         # seuil coarse  : confirme que l'encodeur est ancré
 SVO_TRIGGER_STEP_EPOCHS=${SVO_TRIGGER_STEP_EPOCHS:-5}  # +20% SVO tous les N epochs après trigger (0→20→40→60→80→100)
 
+# ── NER rescue : si boundary stagne sous la cible, réduit les lambdas concurrents ──
+# Déclenché une seule fois quand boundary n'a pas progressé de DELTA sur WINDOW epochs
+# ET est encore sous TARGET. Réduit L_VERB_PTR et L_VOICE ×FACTOR pour libérer du gradient NER.
+BOUNDARY_RESCUE_WINDOW=${BOUNDARY_RESCUE_WINDOW:-10}    # epochs de fenêtre pour détecter le plateau
+BOUNDARY_RESCUE_TARGET=${BOUNDARY_RESCUE_TARGET:-0.90}  # seuil cible : ne rescuer que si boundary < 0.90
+BOUNDARY_RESCUE_DELTA=${BOUNDARY_RESCUE_DELTA:-0.003}   # gain minimal requis sur la fenêtre (0.3%)
+BOUNDARY_RESCUE_FACTOR=${BOUNDARY_RESCUE_FACTOR:-0.50}  # facteur de réduction (×0.5 sur verb_ptr et voice)
+
 # Niveaux de difficulté progressifs (6 niveaux)
 LEVEL_NAMES=("easy" "easy+" "medium" "medium+" "hard" "full")
 HARD_PER_GOLD=(2    2      3       4        5      6)
@@ -124,10 +132,10 @@ FOCAL_COARSE_GAMMA=0.0
 L_SVO_BOUNDARY=0.50   # Boundary SVO (silver) — réduit vs v8.2 (0.595) pour ne pas écraser NER
 L_SVO=0.50            # Labels SVO (syn labels) — réduit vs v8.2 (0.51) pour équilibre NER/SVO
 L_ROLE=0.35           # Rôles SVO — réduit 0.6→0.25 : role fix (ffc3210) a ajouté ~200k spans/ep, gradient trop fort → régression boundary
-L_VOICE=0.20        # Voix active/passive (très silver) [v8.1: 0.15]
+L_VOICE=0.13        # Retour valeur v8.0 (0.20 trop fort → siphonnait gradient NER boundary)
 L_CERTAINTY=0.05       # Certainty active/hypo/etc. (silver) (INCHANGÉ)
 L_MORPHO=0.10         # Gender/Number/Person — calibré pour coverage v8.1 (77% vs 43% v8.0 → gradient ×1.8x)
-L_VERB_PTR=0.5        # Pointer head verbe gouverneur — supervisé sur 91% SVO (v8.2) [v8.1: 0.25]
+L_VERB_PTR=0.20       # Retour valeur v8.0 (0.5 → plateau boundary à 0.872 confirmé par analyse config)
 ROLE_DELAY=${ROLE_DELAY:-12}  # Role démarre 12 epochs après fin warmup NER (v8.5: +4 vs v8.4c=8 car APPOS ×6 → gradient rôle fort)
 
 # Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
@@ -160,6 +168,8 @@ epochs_at_level=0
 best_score=-1.0
 best_boundary=-1.0
 boundary_f1_window=()   # buffer fenêtre glissante pour détection plateau boundary
+boundary_rescue_window=()  # buffer plus long (BOUNDARY_RESCUE_WINDOW) pour le NER rescue
+ner_rescue_applied=0       # 0=pas encore déclenché, 1=rescue appliqué (once-only)
 current_epoch=$START_EPOCH
 resume_arg=""
 # ── État trigger SVO (métriques-driven, v8.8) ────────────────────────────────
@@ -205,7 +215,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="${GOLD_VERSION}-nw0-md8-rd12-svotrig-bnd77c87-v80lam-sf10-${TORCH_SHORT}"  # sf10: soft_factor easy restauré à 1.0 (v8.1) — corrige gap ×4 train/val
+DATASET_VERSION="${GOLD_VERSION}-nw0-md8-rd12-svotrig-bnd77c87-v80lam-vptr020-sf10-${TORCH_SHORT}"  # vptr020: verb_ptr retour v8.0 (0.50→0.20), voice retour v8.0 (0.20→0.13) + NER rescue dyn
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
@@ -477,8 +487,37 @@ except:
         echo "✅ Boundary: $boundary_f1 (fenêtre ${#boundary_f1_window[@]}/$BOUNDARY_WINDOW, best=$best_boundary)" | tee -a $log_file
     fi
 
-    # Pendant le warmup NER : ne pas toucher au niveau ni à la stagnation
-    # (le score NER-only ne reflète pas encore le régime multitask final)
+    # ── NER rescue dynamique : réduit verb_ptr + voice si boundary stagne sous la cible ──
+    # Déclenché une seule fois (ner_rescue_applied=0) pour éviter une over-réduction.
+    # Fenêtre indépendante (BOUNDARY_RESCUE_WINDOW=10) plus large que le plateau window (5).
+    if [ "$ner_rescue_applied" = "0" ] && [ "$in_warmup" != "1" ] && [ "$boundary_f1" != "?" ]; then
+        boundary_rescue_window+=("$boundary_f1")
+        while [ ${#boundary_rescue_window[@]} -gt $BOUNDARY_RESCUE_WINDOW ]; do
+            boundary_rescue_window=("${boundary_rescue_window[@]:1}")
+        done
+        if [ ${#boundary_rescue_window[@]} -ge $BOUNDARY_RESCUE_WINDOW ]; then
+            rescue_oldest="${boundary_rescue_window[0]}"
+            rescue_needed=$(python3 -c "
+try:
+    gain  = float('$boundary_f1') - float('$rescue_oldest')
+    below = float('$boundary_f1') < $BOUNDARY_RESCUE_TARGET
+    print('yes' if below and gain < $BOUNDARY_RESCUE_DELTA else 'no')
+except:
+    print('no')
+" 2>/dev/null || echo "no")
+            if [ "$rescue_needed" = "yes" ]; then
+                ner_rescue_applied=1
+                L_VERB_PTR=$(python3 -c "print(f'{float(\"$L_VERB_PTR\") * $BOUNDARY_RESCUE_FACTOR:.4f}')")
+                L_VOICE=$(python3    -c "print(f'{float(\"$L_VOICE\")    * $BOUNDARY_RESCUE_FACTOR:.4f}')")
+                echo "🆘 NER RESCUE ep $current_epoch — boundary stagne à $boundary_f1 (Δ=$rescue_oldest→$boundary_f1) < cible $BOUNDARY_RESCUE_TARGET → L_VERB_PTR=$L_VERB_PTR L_VOICE=$L_VOICE (×$BOUNDARY_RESCUE_FACTOR)" | tee -a $log_file
+                boundary_rescue_window=()
+            else
+                echo "🔭 NER rescue watch ep $current_epoch : bnd fenêtre $rescue_oldest→$boundary_f1 (cible=$BOUNDARY_RESCUE_TARGET, rescue=$([ $ner_rescue_applied -eq 1 ] && echo 'déjà appliqué' || echo 'prêt'))" | tee -a $log_file
+            fi
+        fi
+    fi
+
+    # Pendant le warmup NER : ne pas toucher au niveau ni à la stagnation    # (le score NER-only ne reflète pas encore le régime multitask final)
     if [ "$in_warmup" = "1" ]; then
         resume_arg=""
         [ -f checkpoint_best_multitask.pt ] && resume_arg="--resume checkpoint_best_multitask.pt"
