@@ -20,7 +20,7 @@ Qui lui-même lance run_adaptive_training.sh.
 import runpod, os, json, time, argparse
 
 # ── Config par défaut ─────────────────────────────────────────────────────────
-DEFAULT_GOLD_VERSION = "v8.7.8"   # ← seul endroit  mettre  jour entre versions
+DEFAULT_GOLD_VERSION = "v8.8"   # ← seul endroit à mettre à jour entre versions
 DEFAULT_BRANCH       = "main"   # branche ou SHA à cloner (surcharge avec --sha)
 DEFAULT_GPU_PRIORITY = [
     "NVIDIA GeForce RTX 3090",
@@ -47,7 +47,7 @@ def load_secrets():
             k, v = line.split('=', 1)
             os.environ.setdefault(k.strip(), v.strip())
 
-def build_start_cmd(ref: str, gold_version: str) -> str:
+def build_start_cmd(ref: str, gold_version: str, loss_weighting: str = "fixed") -> str:
     return (
         "bash -c '"
         "cd /workspace && "
@@ -55,7 +55,7 @@ def build_start_cmd(ref: str, gold_version: str) -> str:
         f"cd pimpmyrag && git fetch origin && git checkout {ref} && "
         "cd training/multi-head && "
         "chmod +x setup_runpod.sh && "
-        f"GOLD_VERSION={gold_version} ./setup_runpod.sh 2>&1 | tee /workspace/training.log"
+        f"GOLD_VERSION={gold_version} LOSS_WEIGHTING={loss_weighting} ./setup_runpod.sh 2>&1 | tee /workspace/training.log"
         "'"
     )
 
@@ -64,6 +64,7 @@ def main():
     parser.add_argument("--sha",          default=DEFAULT_BRANCH,       help=f"SHA ou branche git (défaut: {DEFAULT_BRANCH})")
     parser.add_argument("--gold-version", default=DEFAULT_GOLD_VERSION, help=f"Version dataset gold (défaut: {DEFAULT_GOLD_VERSION})")
     parser.add_argument("--gpu",          default=None,                 help="GPU à mettre en tête de liste (ex: 'RTX 4090')")
+    parser.add_argument("--loss-weighting", default="fixed",            help="Stratégie loss weighting: fixed|uncertainty|gradnorm")
     parser.add_argument("--dry-run",      action="store_true",          help="Affiche la config sans lancer le pod")
     parser.add_argument("--no-kill",      action="store_true",          help="Ne PAS tuer les pods existants (runs parallèles)")
     args = parser.parse_args()
@@ -73,7 +74,7 @@ def main():
 
     gold_version = args.gold_version
     ref          = args.sha
-    start_cmd    = build_start_cmd(ref, gold_version)
+    start_cmd    = build_start_cmd(ref, gold_version, args.loss_weighting)
 
     # GPU priority — permet de mettre un GPU préféré en premier
     gpu_list = list(DEFAULT_GPU_PRIORITY)
