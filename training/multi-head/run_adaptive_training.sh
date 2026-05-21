@@ -88,7 +88,9 @@ MORPHO_DELAY=${MORPHO_DELAY:-8}                    # Morpho démarre 8 epochs ap
 # Pas de délai fixe, pas de ramp linéaire : trigger organique + +20% tous les N epochs.
 SVO_TRIGGER_BND=${SVO_TRIGGER_BND:-0.76}               # seuil boundary : reflète stabilité NER de base
 SVO_TRIGGER_COARSE=${SVO_TRIGGER_COARSE:-0.87}         # seuil coarse  : confirme que l'encodeur est ancré
-SVO_TRIGGER_STEP_EPOCHS=${SVO_TRIGGER_STEP_EPOCHS:-5}  # +20% SVO tous les N epochs après trigger (0→20→40→60→80→100)
+SVO_TRIGGER_STEP_EPOCHS=${SVO_TRIGGER_STEP_EPOCHS:-8}  # +20% SVO tous les N epochs après trigger — 8 au lieu de 5 : ramp plus lente
+# voice_f1 s'effondrait (-0.36) exactement au passage 60%→80% SVO (ep19 du run cllvsc17 avec step=5)
+# Avec step=8 : 20%(ep4), 40%(ep12), 60%(ep20), 80%(ep28), 100%(ep36) — laisse boundary se stabiliser d'abord
 
 # ── NER rescue : si boundary stagne sous la cible, réduit les lambdas concurrents ──
 # Déclenché une seule fois quand boundary n'a pas progressé de DELTA sur WINDOW epochs
@@ -97,7 +99,9 @@ SVO_TRIGGER_STEP_EPOCHS=${SVO_TRIGGER_STEP_EPOCHS:-5}  # +20% SVO tous les N epo
 BOUNDARY_RESCUE_WINDOW=${BOUNDARY_RESCUE_WINDOW:-5}     # epochs de fenêtre (réduit 10→5 : réaction plus rapide)
 BOUNDARY_RESCUE_TARGET=${BOUNDARY_RESCUE_TARGET:-0.90}  # seuil cible : ne rescuer que si boundary < 0.90
 BOUNDARY_RESCUE_DELTA=${BOUNDARY_RESCUE_DELTA:-0.003}   # gain minimal requis sur la fenêtre (0.3%)
-BOUNDARY_RESCUE_FACTOR=${BOUNDARY_RESCUE_FACTOR:-0.50}  # facteur de réduction verb_ptr + voice (×0.5)
+BOUNDARY_RESCUE_FACTOR=${BOUNDARY_RESCUE_FACTOR:-0.65}  # facteur de réduction verb_ptr + voice (×0.65 — was 0.50 trop agressif)
+# ×0.50 donnait L_VOICE=0.039 et L_VERB_PTR=0.06 après rescue (run cllvsc17) — 3× moins que v8.1 (0.108/0.18 → 0.919 bnd)
+# ×0.65 : L_VOICE=0.13×0.65=0.085, L_VERB_PTR=0.20×0.65=0.13 — plus proche des valeurs qui fonctionnent
 BOUNDARY_RESCUE_COARSE_FACTOR=${BOUNDARY_RESCUE_COARSE_FACTOR:-0.75}  # réduction L_COARSE (×0.75) — libère gradient NER
 BOUNDARY_RESCUE_BND_BOOST=${BOUNDARY_RESCUE_BND_BOOST:-1.20}          # boost L_BOUNDARY (×1.2) quand rescue déclenché
 
@@ -222,7 +226,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="${GOLD_VERSION}-nw0-md8-rd12-svotrig-bnd77c87-v80lam-vptr020-sf10-rescue2-${TORCH_SHORT}"  # rescue2: régression détectée en 3ep + L_COARSE réduit + L_BND boosté + fenêtre rescue 10→5
+DATASET_VERSION="${GOLD_VERSION}-nw0-md8-rd12-svotrig-bnd77c87-v80lam-vptr020-sf10-rescue2-svostep8-${TORCH_SHORT}"  # rescue2: rég détectée 3ep+L_COARSE réduit+L_BND boosté, svostep8: ramp SVO 5→8ep (fix voice collapse)
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
