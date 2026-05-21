@@ -633,6 +633,38 @@ def run_epoch(
                 loss = loss_dict["loss"] / accum_steps
 
             if train:
+                # ── GradNorm step BEFORE main backward (needs the graph alive) ──
+                _gn_step_id = getattr(run_epoch, '_gn_step_counter', 0) + 1
+                run_epoch._gn_step_counter = _gn_step_id
+                if (weighting is not None
+                        and hasattr(weighting, 'gradnorm_loss')
+                        and _gn_step_id % gradnorm_every == 0
+                        and step % accum_steps == 0):
+                    from loss_weighting import GradNormWeighting
+                    if isinstance(weighting, GradNormWeighting):
+                        ramp_lambdas = {
+                            "boundary": lambda_boundary, "coarse": lambda_coarse,
+                            "fine": lambda_fine, "svo_boundary": lambda_svo_boundary,
+                            "svo": lambda_svo, "role": lambda_role,
+                            "voice": lambda_voice, "certainty": lambda_certainty,
+                            "morpho": lambda_morpho, "verb_ptr": lambda_verb_ptr,
+                            "compat": lambda_compat,
+                        }
+                        raw = loss_dict.get("raw_losses")
+                        if raw:
+                            gn_loss = weighting.gradnorm_loss(raw, model.span_mlp, ramp_lambdas)
+                            if gn_loss is not None:
+                                gn_loss.backward(retain_graph=True)
+                                # Manual step on weighting params only
+                                for pg in optimizer.param_groups:
+                                    if pg.get("name") == "loss_weighting":
+                                        for p in pg["params"]:
+                                            if p.grad is not None:
+                                                p.data -= pg["lr"] * p.grad
+                                                p.grad = None
+                                weighting.renormalize(ramp_lambdas)
+
+                # ── Main backward ──
                 if scaler is not None:
                     scaler.scale(loss).backward()
                 else:
@@ -651,36 +683,6 @@ def run_epoch(
             optimizer.zero_grad()
             if ema is not None:
                 ema.update(model)
-
-            # ── GradNorm step (separate optimization of log_lambdas) ────────
-            _gn_step_id = getattr(run_epoch, '_gn_step_counter', 0) + 1
-            run_epoch._gn_step_counter = _gn_step_id
-            if (train and weighting is not None
-                    and hasattr(weighting, 'gradnorm_loss')
-                    and _gn_step_id % gradnorm_every == 0):
-                from loss_weighting import GradNormWeighting
-                if isinstance(weighting, GradNormWeighting):
-                    ramp_lambdas = {
-                        "boundary": lambda_boundary, "coarse": lambda_coarse,
-                        "fine": lambda_fine, "svo_boundary": lambda_svo_boundary,
-                        "svo": lambda_svo, "role": lambda_role,
-                        "voice": lambda_voice, "certainty": lambda_certainty,
-                        "morpho": lambda_morpho, "verb_ptr": lambda_verb_ptr,
-                        "compat": lambda_compat,
-                    }
-                    raw = loss_dict.get("raw_losses")
-                    if raw:
-                        gn_loss = weighting.gradnorm_loss(raw, model.span_mlp, ramp_lambdas)
-                        if gn_loss is not None:
-                            gn_loss.backward()
-                            # Only step the weighting params
-                            for pg in optimizer.param_groups:
-                                if pg.get("name") == "loss_weighting":
-                                    for p in pg["params"]:
-                                        if p.grad is not None:
-                                            p.data -= pg["lr"] * p.grad
-                                            p.grad = None
-                            weighting.renormalize(ramp_lambdas)
 
         losses.append(loss_dict["loss"].item())
 
