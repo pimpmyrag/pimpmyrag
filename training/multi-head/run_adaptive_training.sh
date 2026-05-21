@@ -92,11 +92,14 @@ SVO_TRIGGER_STEP_EPOCHS=${SVO_TRIGGER_STEP_EPOCHS:-5}  # +20% SVO tous les N epo
 
 # ── NER rescue : si boundary stagne sous la cible, réduit les lambdas concurrents ──
 # Déclenché une seule fois quand boundary n'a pas progressé de DELTA sur WINDOW epochs
-# ET est encore sous TARGET. Réduit L_VERB_PTR et L_VOICE ×FACTOR pour libérer du gradient NER.
-BOUNDARY_RESCUE_WINDOW=${BOUNDARY_RESCUE_WINDOW:-10}    # epochs de fenêtre pour détecter le plateau
+# ET est encore sous TARGET. Réduit L_VERB_PTR, L_VOICE ET L_COARSE pour libérer du gradient NER.
+# L_COARSE est le principal compétiteur de boundary sur l'encodeur partagé.
+BOUNDARY_RESCUE_WINDOW=${BOUNDARY_RESCUE_WINDOW:-5}     # epochs de fenêtre (réduit 10→5 : réaction plus rapide)
 BOUNDARY_RESCUE_TARGET=${BOUNDARY_RESCUE_TARGET:-0.90}  # seuil cible : ne rescuer que si boundary < 0.90
 BOUNDARY_RESCUE_DELTA=${BOUNDARY_RESCUE_DELTA:-0.003}   # gain minimal requis sur la fenêtre (0.3%)
-BOUNDARY_RESCUE_FACTOR=${BOUNDARY_RESCUE_FACTOR:-0.50}  # facteur de réduction (×0.5 sur verb_ptr et voice)
+BOUNDARY_RESCUE_FACTOR=${BOUNDARY_RESCUE_FACTOR:-0.50}  # facteur de réduction verb_ptr + voice (×0.5)
+BOUNDARY_RESCUE_COARSE_FACTOR=${BOUNDARY_RESCUE_COARSE_FACTOR:-0.75}  # réduction L_COARSE (×0.75) — libère gradient NER
+BOUNDARY_RESCUE_BND_BOOST=${BOUNDARY_RESCUE_BND_BOOST:-1.20}          # boost L_BOUNDARY (×1.2) quand rescue déclenché
 
 # ── Dynamic loss weighting (uncertainty / gradnorm) ──────────────────
 LOSS_WEIGHTING=${LOSS_WEIGHTING:-fixed}  # fixed | uncertainty | gradnorm
@@ -173,6 +176,7 @@ best_boundary=-1.0
 boundary_f1_window=()   # buffer fenêtre glissante pour détection plateau boundary
 boundary_rescue_window=()  # buffer plus long (BOUNDARY_RESCUE_WINDOW) pour le NER rescue
 ner_rescue_applied=0       # 0=pas encore déclenché, 1=rescue appliqué (once-only)
+boundary_regression_count=0  # nb d'epochs consécutives où boundary < best_boundary - REGRESSION_DELTA
 current_epoch=$START_EPOCH
 resume_arg=""
 # ── État trigger SVO (métriques-driven, v8.8) ────────────────────────────────
@@ -218,7 +222,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="${GOLD_VERSION}-nw0-md8-rd12-svotrig-bnd77c87-v80lam-vptr020-sf10-${TORCH_SHORT}"  # vptr020: verb_ptr retour v8.0 (0.50→0.20), voice retour v8.0 (0.20→0.13) + NER rescue dyn
+DATASET_VERSION="${GOLD_VERSION}-nw0-md8-rd12-svotrig-bnd77c87-v80lam-vptr020-sf10-rescue2-${TORCH_SHORT}"  # rescue2: régression détectée en 3ep + L_COARSE réduit + L_BND boosté + fenêtre rescue 10→5
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
@@ -491,9 +495,39 @@ except:
         echo "✅ Boundary: $boundary_f1 (fenêtre ${#boundary_f1_window[@]}/$BOUNDARY_WINDOW, best=$best_boundary)" | tee -a $log_file
     fi
 
-    # ── NER rescue dynamique : réduit verb_ptr + voice si boundary stagne sous la cible ──
+    # ── Détection de régression boundary (réaction avant la fenêtre glissante) ──────────────
+    # Si boundary chute de REGRESSION_DELTA sous son peak sur REGRESSION_WINDOW epochs consécutifs
+    # → booste L_BOUNDARY immédiatement et réduit L_COARSE (vole le gradient de boundary)
+    # Cette détection est COMPLÉMENTAIRE au rescue (agit plus tôt, sur la baisse, pas le plateau)
+    if [ "$ner_rescue_applied" = "0" ] && [ "$boundary_f1" != "?" ] && [ "$best_boundary" != "-1.0" ]; then
+        is_regressing=$(python3 -c "
+try:
+    drop = float('$best_boundary') - float('$boundary_f1')
+    print('yes' if drop >= $BOUNDARY_REGRESSION_DELTA else 'no')
+except:
+    print('no')
+" 2>/dev/null || echo "no")
+        if [ "$is_regressing" = "yes" ]; then
+            boundary_regression_count=$((boundary_regression_count + 1))
+            echo "📉 Boundary régresse: best=$best_boundary → actuel=$boundary_f1 (chute=$(python3 -c "print(f'{float(\"$best_boundary\")-float(\"$boundary_f1\"):.4f}')" 2>/dev/null), consécutives=$boundary_regression_count/$BOUNDARY_REGRESSION_WINDOW)" | tee -a $log_file
+            if [ "$boundary_regression_count" -ge "$BOUNDARY_REGRESSION_WINDOW" ]; then
+                ner_rescue_applied=1
+                L_BOUNDARY=$(python3 -c "print(f'{float(\"$L_BOUNDARY\") * $BOUNDARY_RESCUE_BND_BOOST:.4f}')")
+                L_COARSE=$(python3   -c "print(f'{float(\"$L_COARSE\")    * $BOUNDARY_RESCUE_COARSE_FACTOR:.4f}')")
+                L_VERB_PTR=$(python3 -c "print(f'{float(\"$L_VERB_PTR\") * $BOUNDARY_RESCUE_FACTOR:.4f}')")
+                L_VOICE=$(python3    -c "print(f'{float(\"$L_VOICE\")    * $BOUNDARY_RESCUE_FACTOR:.4f}')")
+                echo "🚨 BOUNDARY REGRESSION RESCUE ep $current_epoch — chute ${BOUNDARY_REGRESSION_WINDOW}ep depuis best=$best_boundary → L_BOUNDARY=$L_BOUNDARY (+×${BOUNDARY_RESCUE_BND_BOOST}) L_COARSE=$L_COARSE (×${BOUNDARY_RESCUE_COARSE_FACTOR}) L_VERB_PTR=$L_VERB_PTR L_VOICE=$L_VOICE (×${BOUNDARY_RESCUE_FACTOR})" | tee -a $log_file
+                boundary_rescue_window=()
+                boundary_regression_count=0
+            fi
+        else
+            boundary_regression_count=0
+        fi
+    fi
+
+    # ── NER rescue dynamique : réduit verb_ptr + voice + coarse si boundary stagne sous la cible ──
     # Déclenché une seule fois (ner_rescue_applied=0) pour éviter une over-réduction.
-    # Fenêtre indépendante (BOUNDARY_RESCUE_WINDOW=10) plus large que le plateau window (5).
+    # Fenêtre indépendante (BOUNDARY_RESCUE_WINDOW=5) — réaction plus rapide que plateau window.
     if [ "$ner_rescue_applied" = "0" ] && [ "$in_warmup" != "1" ] && [ "$boundary_f1" != "?" ]; then
         boundary_rescue_window+=("$boundary_f1")
         while [ ${#boundary_rescue_window[@]} -gt $BOUNDARY_RESCUE_WINDOW ]; do
@@ -511,9 +545,11 @@ except:
 " 2>/dev/null || echo "no")
             if [ "$rescue_needed" = "yes" ]; then
                 ner_rescue_applied=1
+                L_BOUNDARY=$(python3 -c "print(f'{float(\"$L_BOUNDARY\") * $BOUNDARY_RESCUE_BND_BOOST:.4f}')")
+                L_COARSE=$(python3   -c "print(f'{float(\"$L_COARSE\")    * $BOUNDARY_RESCUE_COARSE_FACTOR:.4f}')")
                 L_VERB_PTR=$(python3 -c "print(f'{float(\"$L_VERB_PTR\") * $BOUNDARY_RESCUE_FACTOR:.4f}')")
                 L_VOICE=$(python3    -c "print(f'{float(\"$L_VOICE\")    * $BOUNDARY_RESCUE_FACTOR:.4f}')")
-                echo "🆘 NER RESCUE ep $current_epoch — boundary stagne à $boundary_f1 (Δ=$rescue_oldest→$boundary_f1) < cible $BOUNDARY_RESCUE_TARGET → L_VERB_PTR=$L_VERB_PTR L_VOICE=$L_VOICE (×$BOUNDARY_RESCUE_FACTOR)" | tee -a $log_file
+                echo "🆘 NER RESCUE ep $current_epoch — boundary stagne à $boundary_f1 (Δ=${rescue_oldest}→${boundary_f1}) < cible $BOUNDARY_RESCUE_TARGET → L_BOUNDARY=$L_BOUNDARY (+×${BOUNDARY_RESCUE_BND_BOOST}) L_COARSE=$L_COARSE (×${BOUNDARY_RESCUE_COARSE_FACTOR}) L_VERB_PTR=$L_VERB_PTR L_VOICE=$L_VOICE (×${BOUNDARY_RESCUE_FACTOR})" | tee -a $log_file
                 boundary_rescue_window=()
             else
                 echo "🔭 NER rescue watch ep $current_epoch : bnd fenêtre $rescue_oldest→$boundary_f1 (cible=$BOUNDARY_RESCUE_TARGET, rescue=$([ $ner_rescue_applied -eq 1 ] && echo 'déjà appliqué' || echo 'prêt'))" | tee -a $log_file
