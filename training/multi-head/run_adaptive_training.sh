@@ -71,7 +71,9 @@ fi
 
 MODEL="microsoft/deberta-v3-base"
 DATA="data"
-MAX_EPOCHS=${MAX_EPOCHS:-60}
+MAX_EPOCHS=${MAX_EPOCHS:-75}
+# Relevé 60→75 : avec SVO_TRIGGER_BND=0.84, trigger ~ep20 → 100% SVO @ep68 → besoin de temps pour cert/vptr
+# Analyse run lms8mkna : certainty=0.563 et verb_ptr=0.729 à ep32 (training fini) → ~20ep manquantes
 PATIENCE=${PATIENCE:-5}
 MAX_EPOCHS_PER_LEVEL=${MAX_EPOCHS_PER_LEVEL:-6}    # réduit 12→6 : passage plus rapide au niveau suivant
 # cllvsc17 : boundary stagnait +0.001/ep (ep12-24=12ep perdues) puis +0.022 en 2ep dès medium
@@ -152,9 +154,12 @@ L_SVO_BOUNDARY=0.50   # Boundary SVO (silver) — réduit vs v8.2 (0.595) pour n
 L_SVO=0.50            # Labels SVO (syn labels) — réduit vs v8.2 (0.51) pour équilibre NER/SVO
 L_ROLE=0.35           # Rôles SVO — réduit 0.6→0.25 : role fix (ffc3210) a ajouté ~200k spans/ep, gradient trop fort → régression boundary
 L_VOICE=0.13        # Retour valeur v8.0 (0.20 trop fort → siphonnait gradient NER boundary)
-L_CERTAINTY=0.05       # Certainty active/hypo/etc. (silver) (INCHANGÉ)
+L_CERTAINTY=0.12      # Relevé 0.05→0.12 : était INCHANGÉ depuis l'origine, trop faible (10x sous L_SVO=0.50)
+# lms8mkna : certainty=0.563 à ep32 (fin training), Δ=+0.007/ep → besoin ~20ep de plus
+# 0.12 = 2.4x plus de gradient, impact boundary minimal (tête auxiliaire silver)
 L_MORPHO=0.10         # Gender/Number/Person — calibré pour coverage v8.1 (77% vs 43% v8.0 → gradient ×1.8x)
-L_VERB_PTR=0.20       # Retour valeur v8.0 (0.5 → plateau boundary à 0.872 confirmé par analyse config)
+L_VERB_PTR=0.25       # Relevé 0.20→0.25 : lms8mkna verb_ptr=0.729 à ep32, besoin ~11ep pour 0.80
+# +25% prudent (0.50 = plateau boundary, 0.20 = trop bas pour converger en 33ep)
 ROLE_DELAY=${ROLE_DELAY:-12}  # Role démarre 12 epochs après fin warmup NER (v8.5: +4 vs v8.4c=8 car APPOS ×6 → gradient rôle fort)
 
 # Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
