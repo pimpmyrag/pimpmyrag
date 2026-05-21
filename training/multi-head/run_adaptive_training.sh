@@ -10,7 +10,7 @@ export PYTHONPATH="$(pwd):$PYTHONPATH"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🔑  SEUL ENDROIT À CHANGER POUR UPGRADER LE DATASET
-GOLD_VERSION="${GOLD_VERSION:-v8.8}"
+GOLD_VERSION="${GOLD_VERSION:-v8.12}"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 # ── Environnement Python ──────────────────────────────────
@@ -91,11 +91,15 @@ MORPHO_DELAY=${MORPHO_DELAY:-8}                    # Morpho démarre 8 epochs ap
 # fine exclu du trigger : monte trop lentement (ep 20-25), ferait attendre inutilement.
 # Seuils calibrés sur les bons runs v8.0/v8.1 : trigger naturel vers ep 8-12.
 # Pas de délai fixe, pas de ramp linéaire : trigger organique + +20% tous les N epochs.
-SVO_TRIGGER_BND=${SVO_TRIGGER_BND:-0.76}               # seuil boundary : reflète stabilité NER de base
-SVO_TRIGGER_COARSE=${SVO_TRIGGER_COARSE:-0.87}         # seuil coarse  : confirme que l'encodeur est ancré
-SVO_TRIGGER_STEP_EPOCHS=${SVO_TRIGGER_STEP_EPOCHS:-8}  # +20% SVO tous les N epochs après trigger — 8 au lieu de 5 : ramp plus lente
-# voice_f1 s'effondrait (-0.36) exactement au passage 60%→80% SVO (ep19 du run cllvsc17 avec step=5)
-# Avec step=8 : 20%(ep4), 40%(ep12), 60%(ep20), 80%(ep28), 100%(ep36) — laisse boundary se stabiliser d'abord
+SVO_TRIGGER_BND=${SVO_TRIGGER_BND:-0.84}               # seuil boundary : relevé 0.76→0.84 pour laisser NER grimper librement avant SVO
+# Analyse run v8.8 (lms8mkna) : trigger à 0.76 (ep13) puis paliers SVO @ep21(40%) ep29(60%)
+# corrèlent exactement avec ralentissement boundary : Δbnd 0.010→0.005→0.002→0.001
+# Chaque palier SVO vole du gradient boundary. En retardant le trigger à 0.84,
+# boundary a ~8 epochs de plus pour croître librement → cible 0.90+ avant premier palier SVO.
+SVO_TRIGGER_COARSE=${SVO_TRIGGER_COARSE:-0.87}         # seuil coarse  : confirme que l'encodeur est ancr
+SVO_TRIGGER_STEP_EPOCHS=${SVO_TRIGGER_STEP_EPOCHS:-12} # +20% SVO tous les N epochs après trigger — relevé 8→12 : ramp plus lente
+# Comparaison : step=5 → voice effondrement @ 60%→80% ; step=8 → plateau boundary 0.874 ;
+# step=12 → 20%(ep0), 40%(ep12), 60%(ep24), 80%(ep36), 100%(ep48) — donne boundary plus de temps
 
 # ── NER rescue : si boundary stagne sous la cible, réduit les lambdas concurrents ──
 # Déclenché une seule fois quand boundary n'a pas progressé de DELTA sur WINDOW epochs
@@ -231,7 +235,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="${GOLD_VERSION}-r2-s8-l6-${TORCH_SHORT}"  # r2=rescue2, s8=svostep8, l6=mxlvl6
+DATASET_VERSION="${GOLD_VERSION}-trig84-s12-l6-${TORCH_SHORT}"  # trig84=svotrigger0.84, s12=svostep12, l6=mxlvl6
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
