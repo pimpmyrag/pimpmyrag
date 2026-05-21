@@ -73,11 +73,16 @@ MODEL="microsoft/deberta-v3-base"
 DATA="data"
 MAX_EPOCHS=${MAX_EPOCHS:-60}
 PATIENCE=${PATIENCE:-5}
-MAX_EPOCHS_PER_LEVEL=${MAX_EPOCHS_PER_LEVEL:-12}   # hard negatives : adaptatif (boundary-driven)
+MAX_EPOCHS_PER_LEVEL=${MAX_EPOCHS_PER_LEVEL:-6}    # réduit 12→6 : passage plus rapide au niveau suivant
+# cllvsc17 : boundary stagnait +0.001/ep (ep12-24=12ep perdues) puis +0.022 en 2ep dès medium
+# → les niveaux supérieurs débloquent boundary, inutile d'attendre 12ep à chaque palier
 MIN_DELTA=${MIN_DELTA:-0.0003}
 # Détection plateau boundary par fenêtre glissante (évite les faux-reset par micro-améliorations)
 BOUNDARY_WINDOW=${BOUNDARY_WINDOW:-5}              # nb epochs de la fenêtre glissante boundary
-BOUNDARY_WINDOW_DELTA=${BOUNDARY_WINDOW_DELTA:-0.005}  # progrès net minimal requis sur la fenêtre (0.5%)
+BOUNDARY_WINDOW_DELTA=${BOUNDARY_WINDOW_DELTA:-0.003}  # progrès net minimal requis sur la fenêtre (réduit 0.005→0.003)
+# ── Détection de régression boundary (réaction immédiate à la baisse) ──────────────────────
+BOUNDARY_REGRESSION_WINDOW=${BOUNDARY_REGRESSION_WINDOW:-3}   # nb epochs consécutives sous le peak
+BOUNDARY_REGRESSION_DELTA=${BOUNDARY_REGRESSION_DELTA:-0.008} # chute tolérée depuis le peak avant rescue
 SVO_RAMP_EPOCHS=${SVO_RAMP_EPOCHS:-20}             # utilisé uniquement pour la ramp role (ROLE_DELAY → 100% en SVO_RAMP_EPOCHS epochs)
 MORPHO_RAMP_EPOCHS=${MORPHO_RAMP_EPOCHS:-20}       # Morpho : ramp sur 20 epochs multitask
 MORPHO_DELAY=${MORPHO_DELAY:-8}                    # Morpho démarre 8 epochs après fin warmup NER
@@ -226,7 +231,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="${GOLD_VERSION}-nw0-md8-rd12-svotrig-bnd77c87-v80lam-vptr020-sf10-rescue2-svostep8-${TORCH_SHORT}"  # rescue2: rég détectée 3ep+L_COARSE réduit+L_BND boosté, svostep8: ramp SVO 5→8ep (fix voice collapse)
+DATASET_VERSION="${GOLD_VERSION}-nw0-md8-rd12-svotrig-bnd77c87-v80lam-vptr020-sf10-rescue2-svostep8-mxlvl6-${TORCH_SHORT}"  # mxlvl6: max_per_level 12→6 (advance plus vite aux niveaux supérieurs)
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
