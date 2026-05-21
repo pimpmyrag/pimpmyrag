@@ -266,6 +266,7 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
     coarse_counts = Counter()
     fine_counts = Counter()
     role_counts = Counter()
+    certainty_counts = Counter()
 
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -275,6 +276,9 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
                 coarse_counts[c["coarse_label_id"]] += 1
                 fine_counts[c["fine_label_id"]] += 1
                 role_counts[c["role_label_id"]] += 1
+                cert_id = c.get("certainty_label_id", -1)
+                if cert_id >= 0:
+                    certainty_counts[cert_id] += 1
 
     def make_weights(counts, num_classes, power=0.5):
         total = sum(counts.values())
