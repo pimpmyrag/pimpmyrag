@@ -117,15 +117,20 @@ class GradNormWeighting(nn.Module):
         device = next(iter(raw_losses.values())).device
         total = torch.tensor(0.0, device=device)
 
-        # Record initial losses (first step)
+        # Record initial losses (first step — only tasks with actual signal)
         if not self._initial_set:
             with torch.no_grad():
+                any_real = False
                 for i, k in enumerate(TASK_KEYS):
-                    if k in raw_losses:
-                        self.initial_losses[i] = raw_losses[k].detach().clamp(min=1e-6)
-                    else:
-                        self.initial_losses[i] = 1.0
-            self._initial_set = True
+                    if k in raw_losses and raw_losses[k].item() > 1e-6:
+                        self.initial_losses[i] = raw_losses[k].detach()
+                        any_real = True
+                    elif self.initial_losses[i] == 0:
+                        self.initial_losses[i] = 1.0  # placeholder, updated later
+                # Only mark as set once we have at least boundary + 2 others
+                if any_real and self.initial_losses[0] > 1e-6:
+                    # Update any still-placeholder values on subsequent calls
+                    self._initial_set = True
 
         for k in TASK_KEYS:
             ramp = ramp_lambdas.get(k, 0.0)
@@ -150,7 +155,8 @@ class GradNormWeighting(nn.Module):
         active_keys = [k for k in TASK_KEYS
                        if k in raw_losses
                        and ramp_lambdas.get(k, 0.0) > 0
-                       and raw_losses[k].requires_grad]
+                       and raw_losses[k].requires_grad
+                       and raw_losses[k].item() > 1e-7]  # skip zero-loss tasks (empty mask batches)
 
         if len(active_keys) < 2:
             return None
@@ -233,4 +239,6 @@ def create_weighting(mode: str, initial_lambdas: Dict[str, float],
         return GradNormWeighting(initial_lambdas, alpha=alpha)
     else:
         raise ValueError(f"Unknown loss weighting mode: {mode}")
+
+
 

@@ -429,7 +429,8 @@ class SpanMultiTaskModel(nn.Module):
 
         return {
             "loss":                 total_loss,
-            "raw_losses":           {k: v.detach() for k, v in raw_losses.items()},
+            "raw_losses":           raw_losses,  # with grad (for GradNorm)
+            "raw_losses_detached":  {k: v.detach() for k, v in raw_losses.items()},
             "loss_boundary":        loss_b.detach(),
             "loss_coarse":          loss_c.detach(),
             "loss_fine":            loss_f.detach(),
