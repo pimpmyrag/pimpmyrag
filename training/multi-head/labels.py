@@ -59,6 +59,58 @@ NUM_FINE = len(FINE_LABELS)
 FINE_NONE_ID = NUM_FINE  # = 38, hors range [0..37]
 
 # ─────────────────────────────────────────────────────────────
+# GROUPES FINE LABELS : CONCRETE vs ABSTRACT
+# CONCRETE : entités nommées prototypiques (NER classique) — faciles, fréquentes
+# ABSTRACT : labels génériques / sémantiques — plus difficiles, moins distinctifs
+# ─────────────────────────────────────────────────────────────
+FINE_CONCRETE_LABELS = [
+    "hint_person_name",    # nom propre de personne
+    "hint_org_name",       # nom d'organisation
+    "hint_inst_name",      # institution nommée (sigle, nom propre qualifié)
+    "hint_gpe",            # entité géopolitique
+    "hint_fac_name",       # facility nommée
+    "hint_object_name",    # objet nommé
+    "hint_event_named",    # événement nommé
+    "hint_time_date",      # date
+    "hint_time_clock",     # heure
+    "hint_time_duration",  # durée
+    "hint_measure",        # mesure
+    "hint_percentage",     # pourcentage
+    "hint_count",          # compte numérique
+    "hint_money",          # montant monétaire
+    "hint_rate",           # taux
+    "hint_work_of_art",    # œuvre nommée
+    "hint_law",            # loi / texte officiel nommé
+]
+
+FINE_ABSTRACT_LABELS = [
+    "hint_person_role",    # rôle (fonctionnel, non-nom propre)
+    "hint_norp",           # nationalité / religion / politique
+    "hint_group_role",     # groupe générique (l'opposition, les civils…)
+    "hint_loc_generic",    # lieu générique (non nommé)
+    "hint_infra",          # infrastructure générique
+    "hint_weapon",         # arme générique
+    "hint_vehicle",        # véhicule générique
+    "hint_substance",      # substance (pétrole, gaz…)
+    "hint_food",           # nourriture
+    "hint_tool",           # outil
+    "hint_object_generic", # objet générique
+    "hint_event_nominal",  # événement nominalé / non nommé
+    "hint_document",       # document générique (rapport, lettre…)
+    "hint_work_generic",   # production culturelle générique
+    "hint_disease",        # maladie
+    "hint_language",       # langue
+    "hint_inst_role",      # institution générique (gouvernement, armée…)
+    "hint_doctrine",       # doctrine, idéologie
+    "hint_state",          # état / condition abstraite
+    "hint_notion",         # notion / concept abstrait
+    "hint_field",          # domaine d'activité
+]
+
+FINE_CONCRETE_IDS: frozenset[int] = frozenset(FINE2ID[l] for l in FINE_CONCRETE_LABELS if l in FINE2ID)
+FINE_ABSTRACT_IDS: frozenset[int] = frozenset(FINE2ID[l] for l in FINE_ABSTRACT_LABELS if l in FINE2ID)
+
+# ─────────────────────────────────────────────────────────────
 # COARSE LABELS
 # ─────────────────────────────────────────────────────────────
 
@@ -198,13 +250,18 @@ ALL_SYN_LABELS: set[str] = set(SYN_LABELS)
 # ─────────────────────────────────────────────────────────────
 
 ROLE_LABELS = [
-    "SUBJECT",        # 0  sujet grammatical
-    "OBJECT",         # 1  objet direct
-    "OBLIQUE",        # 2  complément circonstanciel (lieu/temps/manière)
-    "OBLIQUE_AGENT",  # 3  agent sémantique en passif ("par la police")
-    "OBLIQUE_CAUSE",  # 4  complément causal ("suite à…")
-    "APPOS",          # 5  apposition
-    "NONE",           # 6  pas d'argument verbal direct
+    "SUBJECT",              # 0  sujet grammatical
+    "OBJECT",               # 1  objet direct
+    "OBLIQUE",              # 2  complément circonstanciel générique (lieu/temps/manière)
+    "OBLIQUE_AGENT",        # 3  agent sémantique en passif ("par la police")
+    "OBLIQUE_CAUSE",        # 4  complément causal ("suite à…", "grâce à…")
+    "APPOS",                # 5  apposition
+    "NONE",                 # 6  pas d'argument verbal direct
+    "OBLIQUE_ADVERSARY",    # 7  adversaire ("contre la France", "face à l'opposition")
+    "OBLIQUE_BENEFICIARY",  # 8  bénéficiaire ("pour les victimes", "en faveur de…")
+    "OBLIQUE_COMITATIVE",   # 9  comitatif ("avec ses alliés", "aux côtés de…")
+    "OBLIQUE_DOMAIN",       # 10 domaine / thème ("sur l'éducation", "concernant…")
+    "OBLIQUE_SOURCE",       # 11 source épistémique ("selon Reuters", "d'après…")
 ]
 ROLE2ID      = {x: i for i, x in enumerate(ROLE_LABELS)}
 ID2ROLE      = {i: x for x, i in ROLE2ID.items()}

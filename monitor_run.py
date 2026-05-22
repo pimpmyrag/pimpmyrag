@@ -88,18 +88,20 @@ def print_run_detail(r, max_epochs=None):
 
     # ── NER core ──────────────────────────────────────────────────────────────
     print(f"\n  📊 NER core")
-    print(f"    {'ep':>3}  {'boundary':>8}  {'Δbnd':>6}  {'coarse':>7}  {'fine':>6}  {'trend'}")
-    print(f"    {'─'*55}")
+    print(f"    {'ep':>3}  {'boundary':>8}  {'Δbnd':>6}  {'coarse':>7}  {'fine':>6}  {'concrete':>8}  {'abstract':>8}  {'trend'}")
+    print(f"    {'─'*70}")
     prev_bnd = None
     for ep, row in by_ep.iterrows():
         ep = int(ep)
-        bnd    = row.get("val/boundary_f1", float("nan"))
-        coarse = row.get("val/coarse_f1",   float("nan"))
-        fine   = row.get("val/fine_f1",     float("nan"))
+        bnd      = row.get("val/boundary_f1",    float("nan"))
+        coarse   = row.get("val/coarse_f1",      float("nan"))
+        fine     = row.get("val/fine_f1",        float("nan"))
+        concrete = row.get("val/fine_concrete_f1", float("nan"))
+        abstract = row.get("val/fine_abstract_f1", float("nan"))
         d = (bnd - prev_bnd) if (prev_bnd is not None and bnd == bnd) else None
         delta  = f"{d:+.3f}" if d is not None else "  — "
         trn    = trend_icon(d)
-        print(f"    {ep:>3}  {fmt(bnd):>8}  {delta:>6}  {fmt(coarse):>7}  {fmt(fine):>6}  {trn}")
+        print(f"    {ep:>3}  {fmt(bnd):>8}  {delta:>6}  {fmt(coarse):>7}  {fmt(fine):>6}  {fmt(concrete):>8}  {fmt(abstract):>8}  {trn}")
         prev_bnd = bnd if bnd == bnd else prev_bnd
 
     # ── TIME ──────────────────────────────────────────────────────────────────

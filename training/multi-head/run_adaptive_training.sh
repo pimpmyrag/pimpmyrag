@@ -71,7 +71,7 @@ fi
 
 MODEL="microsoft/deberta-v3-base"
 DATA="data"
-MAX_EPOCHS=${MAX_EPOCHS:-75}
+MAX_EPOCHS=${MAX_EPOCHS:-90}  # Relevé 75→90 : certainty/verb_ptr arrivent à plein régime (~ep68) avec seulement 7ep restantes → pas le temps de converger ; +15ep = 22ep à 100% SVO
 # Relevé 60→75 : avec SVO_TRIGGER_BND=0.84, trigger ~ep20 → 100% SVO @ep68 → besoin de temps pour cert/vptr
 # Analyse run lms8mkna : certainty=0.563 et verb_ptr=0.729 à ep32 (training fini) → ~20ep manquantes
 PATIENCE=${PATIENCE:-5}
@@ -135,11 +135,12 @@ SOFT_FACTORS=( 1.0  1.25   1.5     2.0      2.0    2.0)
 L_BOUNDARY=2.5    # Restauré haut (1.0 avait causé -0.70 de F1 boundary)
 L_COARSE=1.0
 L_FINE=1.8        # Retour valeur v8.0 — 2.2 + focal_fine volait du budget à boundary
-# FOCAL_FINE_GAMMA=1.0 : focal loss sur tête fine — down-weight easy (person_name@98%)
-# up-weight hard (hint_doctrine@60%). 1.0 au lieu de 1.5 : down-weight moins agressif,
-# les classes faciles contribuent encore à la moyenne → convergence plus rapide.
-# 1.5 → convergence lente (−8pts à ep14 vs v8.0), 1.0 → meilleur équilibre.
-FOCAL_FINE_GAMMA=1.0
+# FOCAL_FINE_GAMMA=0.0 : désactivé — CWP(0.5) seul suffit pour gérer le déséquilibre des classes fine.
+# focal=1.0 + CWP = double amplification sur les classes rares difficiles (CW[rare]×(1-p)^1 × CE)
+# → gradient fort sur span_mlp partagé → boundary paye. Identique au pattern L_FINE=2.2+focal
+# qui "volait du budget à boundary" (commentaire ci-dessus). CWP seul = correction statique,
+# sans risque d'explosion gradient sur les exemples rares et difficiles.
+FOCAL_FINE_GAMMA=0.0
 # FOCAL_COARSE_GAMMA=0.0 : désactivé — causait régression boundary -5pts via encodeur partagé
 # (EVENT/OBJECT bénéficiaient mais boundary payait le prix → net négatif)
 FOCAL_COARSE_GAMMA=0.0
@@ -155,14 +156,16 @@ L_SVO_BOUNDARY=0.20   # Réduit 0.50→0.20 : svo_boundary_head couvre verb_trig
 # svo_boundary_head reste utile uniquement pour les verb_trigger spans (non-NER).
 # Libère ~0.30 de budget encodeur → profite à NER boundary.
 L_SVO=0.50            # Labels SVO (syn heads) — inchangé, supervise verb_trigger/pron_subj/pron_obj
-L_ROLE=0.35           # Rôles SVO — réduit 0.6→0.25 : role fix (ffc3210) a ajouté ~200k spans/ep, gradient trop fort → régression boundary
+L_ROLE=0.15           # Réduit 0.35→0.15 : role_mask ~200k spans/ep → gradient volume élevé même à 0.35 ; 0.15 libère budget encodeur pour boundary sans perdre la supervision rôles
 L_VOICE=0.13        # Retour valeur v8.0 (0.20 trop fort → siphonnait gradient NER boundary)
-L_CERTAINTY=0.12      # Relevé 0.05→0.12 : était INCHANGÉ depuis l'origine, trop faible (10x sous L_SVO=0.50)
+L_CERTAINTY=0.30      # Relevé 0.12→0.30 : certainty=0.563 à ep32 (Δ=+0.007/ep →≥20ep de plus pour converger)
+# À 40% SVO (ep32) L_CERTAINTY_NOW=0.048 était trop faible ; 0.30×40%=0.12 dès le milieu de ramp.
+# Tête auxiliaire (silver), risque boundary minimal.
 # lms8mkna : certainty=0.563 à ep32 (fin training), Δ=+0.007/ep → besoin ~20ep de plus
 # 0.12 = 2.4x plus de gradient, impact boundary minimal (tête auxiliaire silver)
 L_MORPHO=0.10         # Gender/Number/Person — calibré pour coverage v8.1 (77% vs 43% v8.0 → gradient ×1.8x)
-L_VERB_PTR=0.25       # Relevé 0.20→0.25 : lms8mkna verb_ptr=0.729 à ep32, besoin ~11ep pour 0.80
-# +25% prudent (0.50 = plateau boundary, 0.20 = trop bas pour converger en 33ep)
+L_VERB_PTR=0.45       # Relevé 0.25→0.45 : verb_ptr=0.729 à ep32 (besoin ~11ep pour 0.80) mais SVO encore à 40% → L_VPTR_NOW=0.10 trop faible
+# 0.45×40%=0.18 à ep32 (vs 0.10 avant) ; 0.45×100%=0.45 en plein régime — convergence plus rapide
 ROLE_DELAY=${ROLE_DELAY:-12}  # Role démarre 12 epochs après fin warmup NER (v8.5: +4 vs v8.4c=8 car APPOS ×6 → gradient rôle fort)
 
 # Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
@@ -417,7 +420,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lambda-morpho     $L_MORPHO_NOW \
         --lambda-verb-ptr   $L_VPTR_NOW \
         --lambda-compat     $( [ "$NER_ONLY_BENCH" = "1" ] && echo "0.0" || echo "0.2" ) \
-        --focal-gamma 0.5 \
+        --focal-gamma 1.0 \
         --focal-fine-gamma $FOCAL_FINE_GAMMA \
         --focal-coarse-gamma $FOCAL_COARSE_GAMMA \
         --device $DEVICE \

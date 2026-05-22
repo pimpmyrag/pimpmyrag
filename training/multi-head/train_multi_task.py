@@ -30,6 +30,7 @@ from labels import (
     SYN_LABELS, NUM_SYN, ROLE_LABELS, NUM_ROLE,
     NUM_VOICE, NUM_CERTAINTY, CERTAINTY_LABELS, NUM_GENDER, NUM_NUMBER, NUM_PERSON,
     PERSON_LABELS, ROLE_NONE_ID,
+    FINE_CONCRETE_IDS, FINE_ABSTRACT_IDS,
     # compat
     SVO_LABELS, NUM_SVO,
 )
@@ -626,6 +627,7 @@ def run_epoch(
                     focal_gamma=focal_gamma,
                     focal_coarse_gamma=focal_coarse_gamma,
                     focal_fine_gamma=focal_fine_gamma,
+                    focal_role_gamma=focal_role_gamma,
                     ignore_coarse_none=ignore_coarse_none,
                     weighting=weighting,
                 )
@@ -876,6 +878,19 @@ def run_epoch(
             all_f_pred_pos,
             labels=[l for l in range(len(FINE_LABELS)) if l in set(all_f_true_pos)]
         ),
+        # Fine split : CONCRETE (entités nommées prototypiques) vs ABSTRACT (génériques/notions)
+        # Permet de diagnostiquer : le modèle maîtrise-t-il les NER classiques mais peine sur
+        # les labels abstraits (doctrine, state, notion, group_role, loc_generic…) ?
+        "fine_concrete_f1": safe_macro_f1_local(
+            [l for l in all_f_true_pos if l in FINE_CONCRETE_IDS],
+            [p for l, p in zip(all_f_true_pos, all_f_pred_pos) if l in FINE_CONCRETE_IDS],
+            labels=[l for l in FINE_CONCRETE_IDS if l in set(all_f_true_pos)]
+        ) if any(l in FINE_CONCRETE_IDS for l in all_f_true_pos) else 0.0,
+        "fine_abstract_f1": safe_macro_f1_local(
+            [l for l in all_f_true_pos if l in FINE_ABSTRACT_IDS],
+            [p for l, p in zip(all_f_true_pos, all_f_pred_pos) if l in FINE_ABSTRACT_IDS],
+            labels=[l for l in FINE_ABSTRACT_IDS if l in set(all_f_true_pos)]
+        ) if any(l in FINE_ABSTRACT_IDS for l in all_f_true_pos) else 0.0,
         "svo_boundary_f1": safe_macro_f1_local(all_svob_true, all_svob_pred),
         "svo_macro_f1": safe_macro_f1_local(
             all_svo_true, all_svo_pred,
@@ -1045,6 +1060,10 @@ def main():
                         help="Focal loss gamma pour tête fine (0=CE, 1.5=recommandé pour classes rares)")
     parser.add_argument("--focal-coarse-gamma", type=float, default=0.0,
                         help="Focal loss gamma sur coarse positifs uniquement (0=CE, 1.0=recommandé OBJECT/EVENT)")
+    parser.add_argument("--focal-role-gamma", type=float, default=0.0,
+                        help="Focal loss gamma sur tête SVO role (0=CE, 2.0=recommandé OBLIQUE_*/APPOS rares). "
+                             "Concentre l'apprentissage sur les rôles difficiles sans amplifier les gradients "
+                             "des classes rares (contrairement aux class weights).")
     parser.add_argument("--head-lr-multiplier", type=float, default=5.0,
                         help="Multiplicateur LR pour les heads vs encoder")
     parser.add_argument("--layer-lr-decay", type=float, default=0.9,
@@ -1515,6 +1534,7 @@ def main():
             scaler=scaler,
             focal_fine_gamma=args.focal_fine_gamma,
             focal_coarse_gamma=args.focal_coarse_gamma,
+            focal_role_gamma=args.focal_role_gamma,
             ignore_coarse_none=args.ignore_coarse_none,
             weighting=weighting,
             gradnorm_every=args.gradnorm_every,
@@ -1567,6 +1587,7 @@ def main():
             eval_split="val",
             focal_fine_gamma=args.focal_fine_gamma,
             focal_coarse_gamma=args.focal_coarse_gamma,
+            focal_role_gamma=args.focal_role_gamma,
             ignore_coarse_none=args.ignore_coarse_none,
             weighting=weighting,
         )
@@ -1628,6 +1649,8 @@ def main():
                 "train/boundary_f1":    train_metrics["boundary_f1"],
                 "train/coarse_f1":      train_metrics["coarse_macro_f1"],
                 "train/fine_f1":        train_metrics["fine_macro_f1"],
+                "train/fine_concrete_f1": train_metrics["fine_concrete_f1"],
+                "train/fine_abstract_f1": train_metrics["fine_abstract_f1"],
                 "train/svo_f1":         train_metrics["svo_macro_f1"],
                 "train/voice_f1":       train_metrics["voice_macro_f1"],
                 "train/certainty_f1":   train_metrics["certainty_macro_f1"],
@@ -1637,6 +1660,8 @@ def main():
                 "val/boundary_f1":      val_metrics["boundary_f1"],
                 "val/coarse_f1":        val_metrics["coarse_macro_f1"],
                 "val/fine_f1":          val_metrics["fine_macro_f1"],
+                "val/fine_concrete_f1": val_metrics["fine_concrete_f1"],
+                "val/fine_abstract_f1": val_metrics["fine_abstract_f1"],
                 "val/svo_f1":           val_metrics["svo_macro_f1"],
                 "val/voice_f1":         val_metrics["voice_macro_f1"],
                 "val/certainty_f1":     val_metrics["certainty_macro_f1"],
@@ -1781,6 +1806,7 @@ def main():
         eval_split="test",
         focal_fine_gamma=args.focal_fine_gamma,
         focal_coarse_gamma=args.focal_coarse_gamma,
+        focal_role_gamma=args.focal_role_gamma,
         ignore_coarse_none=args.ignore_coarse_none,
         weighting=weighting,
     )
@@ -1823,7 +1849,9 @@ def main():
         wandb.log({
             "test/boundary_f1":  test_metrics["boundary_f1"],
             "test/coarse_f1":    test_metrics["coarse_macro_f1"],
-            "test/fine_f1":      test_metrics["fine_macro_f1"],
+            "test/fine_f1":          test_metrics["fine_macro_f1"],
+            "test/fine_concrete_f1": test_metrics["fine_concrete_f1"],
+            "test/fine_abstract_f1": test_metrics["fine_abstract_f1"],
             "test/svo_f1":       test_metrics["svo_macro_f1"],
             "test/voice_f1":     test_metrics["voice_macro_f1"],
             "test/certainty_f1": test_metrics["certainty_macro_f1"],

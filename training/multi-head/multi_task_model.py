@@ -192,6 +192,7 @@ class SpanMultiTaskModel(nn.Module):
             focal_gamma=0.0,
             focal_coarse_gamma=0.0, # Focal loss sur tête coarse — positifs seulement (≠NONE)
             focal_fine_gamma=0.0,   # Focal loss sur tête fine (séparé de boundary)
+            focal_role_gamma=0.0,   # Focal loss sur tête role (SUBJECT/OBJECT/MODIFIER…)
             ignore_coarse_none=False,  # Si True, exclut spans NONE de la loss coarse (positifs only)
             weighting=None,  # Dynamic loss weighting module (UncertaintyWeighting / GradNormWeighting)
     ):
@@ -308,9 +309,16 @@ class SpanMultiTaskModel(nn.Module):
         # ── 6) Role (sur NER spans + pronoms qui ont un rôle != NONE) ─────
         role_mask = (role_labels >= 0) & (role_labels < ROLE_NONE_ID)   # exclut NONE (=6) et sentinelles <0
         if role_mask.any():
-            loss_role = (F.cross_entropy(role_logits[role_mask], role_labels[role_mask],
-                                         weight=role_class_weights, reduction="none")
-                         * sample_weights[role_mask]).mean()
+            loss_role_per = F.cross_entropy(role_logits[role_mask], role_labels[role_mask],
+                                            weight=role_class_weights, reduction="none")
+            if focal_role_gamma > 0.0:
+                # Focal modulation : réduit la contribution des exemples faciles
+                # sans amplifier les gradients des classes rares (≠ class weights)
+                # → Safe pour boundary car gradient magnitude inchangée sur les spans NER
+                probs_r = torch.softmax(role_logits[role_mask].detach(), dim=-1)
+                p_t_r = probs_r.gather(1, role_labels[role_mask].unsqueeze(1)).squeeze(1)
+                loss_role_per = loss_role_per * (1.0 - p_t_r) ** focal_role_gamma
+            loss_role = (loss_role_per * sample_weights[role_mask]).mean()
         else:
             loss_role = torch.tensor(0.0, device=device)
 
