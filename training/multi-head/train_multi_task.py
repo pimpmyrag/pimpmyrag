@@ -360,6 +360,7 @@ def run_epoch(
         eval_split: str | None = None,
         focal_fine_gamma: float = 0.0,   # Focal loss sur tête fine
         focal_coarse_gamma: float = 0.0, # Focal loss sur tête coarse (positifs seulement)
+        focal_role_gamma: float = 0.0,   # Focal loss sur tête role
         ignore_coarse_none: bool = False, # Si True, exclut spans NONE de la loss coarse
         weighting=None,  # Dynamic loss weighting module
         gradnorm_every: int = 10,  # GradNorm update frequency (optimizer steps)
