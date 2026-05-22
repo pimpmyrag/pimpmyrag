@@ -10,7 +10,7 @@ export PYTHONPATH="$(pwd):$PYTHONPATH"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🔑  SEUL ENDROIT À CHANGER POUR UPGRADER LE DATASET
-GOLD_VERSION="${GOLD_VERSION:-v8.13}"
+GOLD_VERSION="${GOLD_VERSION:-v8.14}"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 # ── Environnement Python ──────────────────────────────────
