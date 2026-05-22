@@ -25,8 +25,11 @@ from labels import (
     COARSE_LABELS, FINE_LABELS, COARSE2ID,
     SVO_LABELS, NUM_SVO,
     VOICE_LABELS as _VOICE_LABELS_FROM_LABELS, NUM_VOICE,
+    CERTAINTY_LABELS, NUM_CERTAINTY, CERTAINTY_NONE_ID,
     GENDER_LABELS, NUM_GENDER,
     NUMBER_LABELS, NUM_NUMBER,
+    PERSON_LABELS, NUM_PERSON, PERSON_NONE_ID,
+    ROLE_LABELS, ROLE_NONE_ID,
 )
 
 
@@ -49,8 +52,8 @@ def pick_device(forced: str | None = None) -> str:
 # ──────────────────────────────────────────────────────────
 
 FINE_THRESHOLDS = {
-    "hint_person_name":    0.90,
-    "hint_org_name":       0.90,
+    "hint_person_name":    0.70,
+    "hint_org_name":       0.70,
     "hint_gpe":            0.70,
     "hint_fac_name":       0.70,
     "hint_time_date":      0.70,
@@ -86,27 +89,39 @@ MAX_TOK_LEN_PER_FINE = {
 }
 
 LABEL_CONFIG = {
-    "hint_person_name":    {"base_tau": 0.97, "len_soft_cap": 4, "len_penalty": 0.20, "len_bonus": 0.00},
-    "hint_event_nominal":  {"base_tau": 0.97, "len_soft_cap": 2, "len_penalty": 0.00, "len_bonus": 0.05, "floor_tau": 0.55},
-    "hint_event_named":    {"base_tau": 0.80, "len_soft_cap": 2, "len_penalty": 0.00, "len_bonus": 0.05, "floor_tau": 0.55},
-    "hint_object_generic": {"base_tau": 0.97, "len_soft_cap": 2, "len_penalty": 0.00, "len_bonus": 0.04, "floor_tau": 0.55},
-    "hint_quantity":       {"base_tau": 0.80, "len_soft_cap": 4, "len_penalty": 0.05, "len_bonus": 0.00},
-    "hint_measure":        {"base_tau": 0.80, "len_soft_cap": 5, "len_penalty": 0.03, "len_bonus": 0.02},
-    "hint_percentage":     {"base_tau": 0.75, "len_soft_cap": 3, "len_penalty": 0.05, "len_bonus": 0.00},
-    "hint_count":          {"base_tau": 0.80, "len_soft_cap": 4, "len_penalty": 0.05, "len_bonus": 0.00},
-    "hint_money":          {"base_tau": 0.75, "len_soft_cap": 5, "len_penalty": 0.03, "len_bonus": 0.02},
-    "hint_rate":           {"base_tau": 0.80, "len_soft_cap": 4, "len_penalty": 0.05, "len_bonus": 0.00},
+    "hint_person_name":    {"base_tau": 0.70, "len_soft_cap": 4, "len_penalty": 0.10, "len_bonus": 0.00},
+    "hint_org_name":       {"base_tau": 0.50, "len_soft_cap": 6, "len_penalty": 0.02, "len_bonus": 0.03},
+    "hint_inst_name":      {"base_tau": 0.50, "len_soft_cap": 6, "len_penalty": 0.02, "len_bonus": 0.03},
+    "hint_inst_role":      {"base_tau": 0.60, "len_soft_cap": 5, "len_penalty": 0.02, "len_bonus": 0.02},
+    "hint_gpe":            {"base_tau": 0.60, "len_soft_cap": 4, "len_penalty": 0.03, "len_bonus": 0.00},
+    "hint_fac_name":       {"base_tau": 0.60, "len_soft_cap": 5, "len_penalty": 0.02, "len_bonus": 0.02},
+    "hint_loc_generic":    {"base_tau": 0.60, "len_soft_cap": 4, "len_penalty": 0.03, "len_bonus": 0.00},
+    "hint_norp":           {"base_tau": 0.70, "len_soft_cap": 3, "len_penalty": 0.02, "len_bonus": 0.00},
+    "hint_event_nominal":  {"base_tau": 0.90, "len_soft_cap": 2, "len_penalty": 0.00, "len_bonus": 0.05, "floor_tau": 0.55},
+    "hint_event_named":    {"base_tau": 0.70, "len_soft_cap": 2, "len_penalty": 0.00, "len_bonus": 0.05, "floor_tau": 0.55},
+    "hint_object_generic": {"base_tau": 0.90, "len_soft_cap": 2, "len_penalty": 0.00, "len_bonus": 0.04, "floor_tau": 0.55},
+    "hint_quantity":       {"base_tau": 0.70, "len_soft_cap": 4, "len_penalty": 0.05, "len_bonus": 0.00},
+    "hint_measure":        {"base_tau": 0.70, "len_soft_cap": 5, "len_penalty": 0.03, "len_bonus": 0.02},
+    "hint_percentage":     {"base_tau": 0.65, "len_soft_cap": 3, "len_penalty": 0.05, "len_bonus": 0.00},
+    "hint_count":          {"base_tau": 0.70, "len_soft_cap": 4, "len_penalty": 0.05, "len_bonus": 0.00},
+    "hint_money":          {"base_tau": 0.65, "len_soft_cap": 5, "len_penalty": 0.03, "len_bonus": 0.02},
+    "hint_rate":           {"base_tau": 0.70, "len_soft_cap": 4, "len_penalty": 0.05, "len_bonus": 0.00},
+    "hint_disease":        {"base_tau": 0.60, "len_soft_cap": 4, "len_penalty": 0.02, "len_bonus": 0.02},
+    "hint_law":            {"base_tau": 0.60, "len_soft_cap": 5, "len_penalty": 0.02, "len_bonus": 0.02},
+    "hint_document":       {"base_tau": 0.65, "len_soft_cap": 4, "len_penalty": 0.03, "len_bonus": 0.00},
+    "hint_notion":         {"base_tau": 0.70, "len_soft_cap": 3, "len_penalty": 0.02, "len_bonus": 0.00},
 }
-DEFAULT_CONFIG = {"base_tau": 0.80, "len_soft_cap": 3, "len_penalty": 0.02, "len_bonus": 0.02}
+DEFAULT_CONFIG = {"base_tau": 0.65, "len_soft_cap": 3, "len_penalty": 0.02, "len_bonus": 0.02}
 
 # Labels SVO → emoji pour affichage
 SVO_EMOJI = {
-    "svo_verb":    "🔵",
-    "svo_subject": "🟢",
-    "svo_object":  "🔴",
-    "svo_iobj":    "🟠",
-    "pron_subj":   "🟢",
-    "pron_obj":    "🔴",
+    "verb_trigger": "🔵",  # v4
+    "svo_verb":     "🔵",  # v3 compat
+    "pron_subj":    "🟢",
+    "pron_obj":     "🔴",
+    "svo_subject":  "🟢",
+    "svo_object":   "🔴",
+    "svo_iobj":     "🟠",
 }
 
 VOICE_LABELS = _VOICE_LABELS_FROM_LABELS
@@ -168,7 +183,7 @@ def dynamic_tau(p: Dict) -> float:
     if "floor_tau" in cfg and L >= cfg["len_soft_cap"]:
         return max(cfg["floor_tau"], base - 0.35)
     if p["fine"] == "hint_person_name" and L > cfg["len_soft_cap"]:
-        return min(0.98, base + 0.20)
+        return max(0.50, base - 0.10)
     return base
 
 
@@ -276,12 +291,14 @@ def load_model_and_tokenizer(model_name: str, checkpoint_path: str, tokenizer_pa
     if getattr(tokenizer, "model_max_length", None) is None or tokenizer.model_max_length > 100000:
         tokenizer.model_max_length = 128
 
-    model = SpanMultiTaskModel(model_name=model_name).to(device).float()
-    ckpt = torch.load(checkpoint_path, map_location=device)
-    if isinstance(ckpt, dict) and "model_state" in ckpt:
-        model.load_state_dict(ckpt["model_state"])
-    else:
-        model.load_state_dict(ckpt)
+    # ✅ Lire num_coarse depuis le checkpoint pour éviter mismatch (v8.2 a 10 classes avec NONE)
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    state = ckpt["model_state"] if isinstance(ckpt, dict) and "model_state" in ckpt else ckpt
+    num_coarse = state["coarse_head.weight"].shape[0]
+    print(f"   num_coarse={num_coarse} (détecté depuis checkpoint)")
+
+    model = SpanMultiTaskModel(model_name=model_name, num_coarse=num_coarse).to(device).float()
+    model.load_state_dict(state)
     model.eval()
     return model, tokenizer
 
@@ -315,7 +332,7 @@ def build_candidate_spans(tokenizer, text: str, max_length: int, max_span_len: i
             spans.append({"tok_start": tok_start, "tok_end": tok_end})
             meta.append({"tok_start": tok_start, "tok_end": tok_end,
                           "char_start": s_char, "char_end": e_char, "text": span_text})
-    return input_ids, attention_mask, [spans], meta
+    return input_ids, attention_mask, [spans], meta, [offsets]
 
 
 def build_batch_candidate_spans(tokenizer, texts: List[str], max_length: int, max_span_len: int,
@@ -348,7 +365,7 @@ def build_batch_candidate_spans(tokenizer, texts: List[str], max_length: int, ma
                                "text": span_text, "example_idx": ex_idx})
         spans_per_example.append(spans)
         meta_flat.extend(metas)
-    return input_ids, attention_mask, spans_per_example, meta_flat
+    return input_ids, attention_mask, spans_per_example, meta_flat, offsets_batch
 
 
 def softmax_probs(logits: torch.Tensor) -> torch.Tensor:
@@ -362,7 +379,8 @@ def softmax_probs(logits: torch.Tensor) -> torch.Tensor:
 def _decode_spans(outputs, meta_flat, model, device,
                   tau_boundary, tau_none, tau_coarse, tau_fine, topk_coarse,
                   tau_svo_boundary,
-                  per_example_ner, per_example_svo):
+                  per_example_ner, per_example_svo,
+                  offsets_per_example=None):
     """
     Décode les logits pour tous les spans et remplit per_example_ner / per_example_svo.
     """
@@ -372,11 +390,15 @@ def _decode_spans(outputs, meta_flat, model, device,
     svob_probs   = softmax_probs(outputs["svo_boundary_logits"])
     svo_probs    = softmax_probs(outputs["svo_logits"])
     voice_probs  = softmax_probs(outputs["voice_logits"])
+    certainty_probs = softmax_probs(outputs["certainty_logits"]) if "certainty_logits" in outputs else None
     gender_probs = softmax_probs(outputs["gender_logits"])
     number_probs = softmax_probs(outputs["number_logits"])
+    person_probs = softmax_probs(outputs["person_logits"]) if "person_logits" in outputs else None
+    role_logits  = outputs.get("role_logits")
+    verb_ptr_logits = outputs.get("verb_ptr_logits")
 
     coarse_fine_mask = model.coarse_fine_mask.to(device)
-    none_idx = COARSE2ID["NONE"]
+    none_idx = COARSE2ID.get("NONE", -1)
 
     for i, m in enumerate(meta_flat):
         ex_idx = m.get("example_idx", 0)
@@ -385,7 +407,7 @@ def _decode_spans(outputs, meta_flat, model, device,
         p_ent = float(b_probs[i, 1].item())
         if p_ent >= tau_boundary:
             coarse_row = c_probs[i]
-            p_none = float(coarse_row[none_idx].item())
+            p_none = float(coarse_row[none_idx].item()) if none_idx >= 0 and none_idx < coarse_row.size(0) else 0.0
             top_vals, top_idxs = torch.topk(coarse_row, k=min(topk_coarse, coarse_row.numel()))
             chosen = None
             chosen_score = -1.0
@@ -418,6 +440,22 @@ def _decode_spans(outputs, meta_flat, model, device,
                 tk = chosen["tok_end"] - chosen["tok_start"] + 1
                 max_tok = MAX_TOK_LEN_PER_FINE.get(chosen["fine"])
                 if max_tok is None or tk <= max_tok:
+                    # ── Décoder role (SUBJECT/OBJECT/OBLIQUE/etc.) ──
+                    if role_logits is not None and i < role_logits.size(0):
+                        role_idx = int(torch.argmax(role_logits[i]).item())
+                        if role_idx < ROLE_NONE_ID:
+                            chosen["role"] = ROLE_LABELS[role_idx]
+                            chosen["role_prob"] = round(float(torch.softmax(role_logits[i], dim=-1)[role_idx].item()), 4)
+                    # ── Décoder verb_ptr (index token → char_start) ──
+                    if verb_ptr_logits is not None and i < verb_ptr_logits.size(0):
+                        ptr_tok_idx = int(torch.argmax(verb_ptr_logits[i]).item())
+                        chosen["gov_verb_tok_idx"] = ptr_tok_idx
+                        if offsets_per_example is not None and ex_idx < len(offsets_per_example):
+                            ex_offsets = offsets_per_example[ex_idx]
+                            if ptr_tok_idx < len(ex_offsets):
+                                gov_char_start = ex_offsets[ptr_tok_idx][0]
+                                if gov_char_start > 0:
+                                    chosen["gov_verb_char_start"] = gov_char_start
                     per_example_ner[ex_idx].append(chosen)
 
         # ── SVO boundary (verbe / pronom) ─────────────────────────
@@ -428,12 +466,21 @@ def _decode_spans(outputs, meta_flat, model, device,
             svo_label = SVO_LABELS[svo_idx] if svo_idx < len(SVO_LABELS) else "?"
             svo_prob = float(svo_probs[i, svo_idx].item())
 
-            # voice (pertinent surtout pour svo_verb)
+            # voice (pertinent surtout pour verb_trigger)
             voice_idx = int(torch.argmax(voice_probs[i]).item())
             voice_label = VOICE_LABELS[voice_idx] if voice_idx < NUM_VOICE else "?"
             voice_prob = float(voice_probs[i, voice_idx].item())
 
-            # morpho : gender + number (pertinents pour svo_subject / svo_object / iobj / prons)
+            # certainty (certain/modal/denied — pertinent pour verb_trigger)
+            certainty_label = None
+            certainty_prob = 0.0
+            if certainty_probs is not None and i < certainty_probs.size(0):
+                certainty_idx = int(torch.argmax(certainty_probs[i]).item())
+                if certainty_idx < CERTAINTY_NONE_ID:
+                    certainty_label = CERTAINTY_LABELS[certainty_idx]
+                    certainty_prob = float(certainty_probs[i, certainty_idx].item())
+
+            # morpho : gender + number
             gender_idx = int(torch.argmax(gender_probs[i]).item())
             gender_label = GENDER_LABELS[gender_idx] if gender_idx < NUM_GENDER else "NONE"
             gender_prob = float(gender_probs[i, gender_idx].item())
@@ -442,18 +489,45 @@ def _decode_spans(outputs, meta_flat, model, device,
             number_label = NUMBER_LABELS[number_idx] if number_idx < NUM_NUMBER else "NONE"
             number_prob = float(number_probs[i, number_idx].item())
 
-            per_example_svo[ex_idx].append({
+            # person (1/2/3) — pertinent pour pronoms
+            person_label = None
+            person_prob = 0.0
+            if person_probs is not None and i < person_probs.size(0):
+                person_idx = int(torch.argmax(person_probs[i]).item())
+                if person_idx < PERSON_NONE_ID:
+                    person_label = PERSON_LABELS[person_idx]
+                    person_prob = float(person_probs[i, person_idx].item())
+
+            svo_entry = {
                 "text": m["text"], "char_start": m["char_start"], "char_end": m["char_end"],
                 "tok_start": m["tok_start"], "tok_end": m["tok_end"],
                 "svo_boundary_prob": round(p_svob, 4),
                 "svo_role": svo_label, "svo_prob": round(svo_prob, 4),
                 "voice": voice_label, "voice_prob": round(voice_prob, 4),
+                "certainty": certainty_label,
+                "certainty_prob": round(certainty_prob, 4) if certainty_label else 0.0,
                 "gender": gender_label if gender_label != "NONE" else None,
                 "gender_prob": round(gender_prob, 4),
                 "number": number_label if number_label != "NONE" else None,
                 "number_prob": round(number_prob, 4),
+                "person": person_label,
+                "person_prob": round(person_prob, 4) if person_label else 0.0,
                 "example_idx": ex_idx,
-            })
+            }
+
+            # ── Verb_ptr pour les pronoms (pron_subj / pron_obj) ──
+            # Les pronoms pointent vers leur verbe gouverneur via verb_ptr_logits
+            if svo_label in ("pron_subj", "pron_obj") and verb_ptr_logits is not None and i < verb_ptr_logits.size(0):
+                ptr_tok_idx = int(torch.argmax(verb_ptr_logits[i]).item())
+                svo_entry["gov_verb_tok_idx"] = ptr_tok_idx
+                if offsets_per_example is not None and ex_idx < len(offsets_per_example):
+                    ex_offsets = offsets_per_example[ex_idx]
+                    if ptr_tok_idx < len(ex_offsets):
+                        gov_char_start = ex_offsets[ptr_tok_idx][0]
+                        if gov_char_start > 0:
+                            svo_entry["gov_verb_char_start"] = gov_char_start
+
+            per_example_svo[ex_idx].append(svo_entry)
 
 
 def predict_text(model, tokenizer, text: str, device: str,
@@ -463,7 +537,7 @@ def predict_text(model, tokenizer, text: str, device: str,
                  topk_coarse: int = 2, min_char_len: int = 2,
                  enforce_word_boundaries: bool = True,
                  tau_svo_boundary: float = 0.50):
-    input_ids, attention_mask, spans, meta = build_candidate_spans(
+    input_ids, attention_mask, spans, meta, offsets_per_example = build_candidate_spans(
         tokenizer, text, max_length=max_length, max_span_len=max_span_len,
         min_char_len=min_char_len, enforce_word_boundaries=enforce_word_boundaries)
     input_ids = input_ids.to(device)
@@ -478,7 +552,8 @@ def predict_text(model, tokenizer, text: str, device: str,
         m["example_idx"] = 0
     _decode_spans(outputs, meta, model, device,
                   tau_boundary, tau_none, tau_coarse, tau_fine, topk_coarse,
-                  tau_svo_boundary, per_example_ner, per_example_svo)
+                  tau_svo_boundary, per_example_ner, per_example_svo,
+                  offsets_per_example=offsets_per_example)
 
     ner = sorted(per_example_ner[0], key=lambda x: (x["score"], x["char_end"] - x["char_start"]), reverse=True)
     svo = sorted(per_example_svo[0], key=lambda x: x["char_start"])
@@ -492,7 +567,7 @@ def predict_texts_batch(model, tokenizer, texts: List[str], device: str,
                         topk_coarse: int = 4, min_char_len: int = 2,
                         enforce_word_boundaries: bool = True,
                         tau_svo_boundary: float = 0.50):
-    input_ids, attention_mask, spans_per_example, meta_flat = build_batch_candidate_spans(
+    input_ids, attention_mask, spans_per_example, meta_flat, offsets_batch = build_batch_candidate_spans(
         tokenizer, texts, max_length, max_span_len, min_char_len, enforce_word_boundaries)
     input_ids = input_ids.to(device)
     attention_mask = attention_mask.to(device)
@@ -504,7 +579,8 @@ def predict_texts_batch(model, tokenizer, texts: List[str], device: str,
     per_example_svo = [[] for _ in range(n)]
     _decode_spans(outputs, meta_flat, model, device,
                   tau_boundary, tau_none, tau_coarse, tau_fine, topk_coarse,
-                  tau_svo_boundary, per_example_ner, per_example_svo)
+                  tau_svo_boundary, per_example_ner, per_example_svo,
+                  offsets_per_example=offsets_batch)
 
     results = []
     for i in range(n):
@@ -518,16 +594,25 @@ def predict_texts_batch(model, tokenizer, texts: List[str], device: str,
 #  Reconstruction des triplets SVO
 # ──────────────────────────────────────────────────────────
 
-def build_svo_triplets(svo_spans: List[Dict]) -> List[Dict]:
+def build_svo_triplets(svo_spans: List[Dict], ner_spans: List[Dict] = None) -> List[Dict]:
     """
-    Regroupe les spans SVO en triplets (S, V, O) de façon greedy :
-    - un verbe ancre un triplet
-    - on lui associe le sujet le plus proche (à gauche) et l'objet le plus proche (à droite)
-    Heuristique simple, suffisante pour la visualisation.
+    Regroupe les spans SVO en triplets (S, V, O) de façon greedy.
+    Compatible labels v4 : verb_trigger / pron_subj / pron_obj
+    Si ner_spans fourni, utilise les roles NER (SUBJECT/OBJECT/OBLIQUE) pour enrichir.
     """
-    verbs    = [s for s in svo_spans if s["svo_role"] in ("svo_verb",)]
-    subjects = [s for s in svo_spans if s["svo_role"] in ("svo_subject", "pron_subj")]
-    objects  = [s for s in svo_spans if s["svo_role"] in ("svo_object", "svo_iobj", "pron_obj")]
+    # Labels v4
+    verbs    = [s for s in svo_spans if s.get("svo_role") in ("verb_trigger", "svo_verb")]
+    subjects = [s for s in svo_spans if s.get("svo_role") in ("pron_subj", "svo_subject")]
+    objects  = [s for s in svo_spans if s.get("svo_role") in ("pron_obj", "svo_object", "svo_iobj")]
+
+    # Enrichir avec NER spans qui ont un role
+    if ner_spans:
+        for n in ner_spans:
+            role = n.get("role")
+            if role == "SUBJECT":
+                subjects.append(n)
+            elif role in ("OBJECT",):
+                objects.append(n)
 
     triplets = []
     for v in verbs:
@@ -538,6 +623,18 @@ def build_svo_triplets(svo_spans: List[Dict]) -> List[Dict]:
         # objet = premier objet dont char_start >= verb.char_end
         obj_candidates = [o for o in objects if o["char_start"] >= v["char_end"]]
         obj = min(obj_candidates, key=lambda x: x["char_start"], default=None)
+
+        # Fallback objet via gov_verb_char_start sur NER spans
+        if obj is None and ner_spans:
+            gov_char = v["char_start"]
+            obj_candidates_ner = [
+                n for n in ner_spans
+                if n.get("gov_verb_char_start") == gov_char
+                and n.get("role") in ("OBJECT", "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE", "OBLIQUE_IOBJ")
+                and n["char_start"] >= v["char_end"]
+            ]
+            if obj_candidates_ner:
+                obj = min(obj_candidates_ner, key=lambda x: x["char_start"])
 
         triplets.append({
             "verb": v,
@@ -576,9 +673,16 @@ def print_svo(svo_spans: List[Dict]):
         role = s["svo_role"]
         emoji = SVO_EMOJI.get(role, "⚪")
         voice_info = ""
-        if role == "svo_verb":
+        if role in ("verb_trigger", "svo_verb"):
             voice_info = f" | voice={s['voice']} ({s['voice_prob']:.3f})"
+            if s.get('certainty'):
+                voice_info += f" cert={s['certainty']} ({s['certainty_prob']:.3f})"
+        gov_info = ""
+        if s.get("gov_verb_char_start") is not None:
+            gov_info = f" | gov@{s['gov_verb_char_start']}"
         morpho_parts = []
+        if s.get("person"):
+            morpho_parts.append(f"P{s['person']}({s['person_prob']:.2f})")
         if s.get("gender"):
             morpho_parts.append(f"G={s['gender']}({s['gender_prob']:.2f})")
         if s.get("number"):
@@ -587,7 +691,7 @@ def print_svo(svo_spans: List[Dict]):
         print(
             f"  {emoji} [{s['char_start']:>4}:{s['char_end']:<4}] "
             f"{s['text']!r:<30} | role={role:<12} ({s['svo_prob']:.3f})"
-            f" | p_svob={s['svo_boundary_prob']:.3f}{voice_info}{morpho_info}"
+            f" | p_svob={s['svo_boundary_prob']:.3f}{voice_info}{gov_info}{morpho_info}"
             f" | tok=[{s.get('tok_start')},{s.get('tok_end')}]"
         )
 
@@ -633,7 +737,7 @@ def main():
     parser.add_argument("--tau-none", type=float, default=0.99)
     parser.add_argument("--tau-coarse", type=float, default=0.00)
     parser.add_argument("--tau-fine", type=float, default=0.00)
-    parser.add_argument("--tau-svo-boundary", type=float, default=0.50,
+    parser.add_argument("--tau-svo-boundary", type=float, default=0.20,
                         help="Seuil pour détecter un span verbe/pronom (svo_boundary_head)")
     parser.add_argument("--topk-coarse", type=int, default=2)
     parser.add_argument("--min-char-len", type=int, default=2)
@@ -730,7 +834,7 @@ def main():
                     print_svo(svo)
 
                 if show_triplets:
-                    triplets = build_svo_triplets(svo)
+                    triplets = build_svo_triplets(svo, ner_spans=ner)
                     print("\n🔺 Triplets (S, V, O)")
                     print_triplets(triplets)
 
@@ -758,7 +862,7 @@ def main():
                 print_svo(svo)
 
             if show_triplets:
-                triplets = build_svo_triplets(svo)
+                triplets = build_svo_triplets(svo, ner_spans=ner)
                 print("\n🔺 Triplets (S, V, O)")
                 print_triplets(triplets)
 

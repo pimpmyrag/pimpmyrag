@@ -216,7 +216,7 @@ def predict_batch(model, tokenizer, texts: List[str], device: str) -> List[Dict]
                         best_score = score
                         # rôle SVO sur ce span NER
                         role_idx = int(torch.argmax(role_probs[i]))
-                        role_label = ID2ROLE.get(role_idx, "NONE") if role_idx < ROLE_NONE_ID else "NONE"
+                        role_label = ID2ROLE.get(role_idx, "NONE") if (0 <= role_idx != ROLE_NONE_ID) else "NONE"
                         # morpho
                         g_idx = int(torch.argmax(gender_probs[i]))
                         n_idx = int(torch.argmax(number_probs[i]))

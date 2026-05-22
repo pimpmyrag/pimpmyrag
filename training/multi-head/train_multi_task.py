@@ -771,9 +771,9 @@ def run_epoch(
                 all_f_true_pos.append(ft)
                 all_f_pred_pos.append(fp)
 
-        # SVO role metrics = spans avec rôle annoté (role < ROLE_NONE_ID)
+        # SVO role metrics = spans avec rôle annoté (role != NONE, inclut obliques étendus 7-11)
         for rt, rp in zip(role_true, role_pred_raw):
-            if rt < ROLE_NONE_ID:
+            if 0 <= rt != ROLE_NONE_ID:
                 all_svo_true.append(rt)
                 all_svo_pred.append(rp)
         for vt, vp in zip(voice_true, voice_pred_raw):
