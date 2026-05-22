@@ -38,7 +38,10 @@ METRIC_GROUPS = {
     ],
 }
 
-ALL_KEYS = ["epoch"] + [k for keys in METRIC_GROUPS.values() for k in keys]
+ALL_KEYS = ["epoch"] + [k for keys in METRIC_GROUPS.values() for k in keys] + [
+    "val/fine_concrete_f1", "val/fine_abstract_f1",
+    "train/fine_concrete_f1", "train/fine_abstract_f1",
+]
 
 def get_api():
     return wandb.Api(api_key=os.environ["WANDB_API_KEY"])
