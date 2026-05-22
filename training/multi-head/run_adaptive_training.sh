@@ -426,7 +426,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lambda-morpho     $L_MORPHO_NOW \
         --lambda-verb-ptr   $L_VPTR_NOW \
         --lambda-compat     $( [ "$NER_ONLY_BENCH" = "1" ] && echo "0.0" || echo "0.2" ) \
-        --focal-gamma 1.0 \
+        --focal-gamma 0.5 \
         --focal-fine-gamma $FOCAL_FINE_GAMMA \
         --focal-coarse-gamma $FOCAL_COARSE_GAMMA \
         --device $DEVICE \
