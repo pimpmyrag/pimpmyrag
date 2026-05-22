@@ -20,7 +20,7 @@ Qui lui-même lance run_adaptive_training.sh.
 import runpod, os, json, time, argparse
 
 # ── Config par défaut ─────────────────────────────────────────────────────────
-DEFAULT_GOLD_VERSION = "v8.7"  # ← seul endroit à mettre à jour entre versions
+DEFAULT_GOLD_VERSION = "v8.13"  # ← seul endroit à mettre à jour entre versions
 DEFAULT_BRANCH       = "main"   # branche ou SHA à cloner (surcharge avec --sha)
 DEFAULT_GPU_PRIORITY = [
     "NVIDIA GeForce RTX 3090",
