@@ -138,8 +138,8 @@ SOFT_FACTORS=( 1.0  1.25   1.5     2.0      2.0    2.0)
 # ── Lambdas NER (têtes principales, labels gold) ─────────────────────────────
 # lambda_boundary élevé = priorité absolue : c'est la tête la plus fragile.
 # lambda_fine=1.8 identifié empiriquement comme bon compromis fine vs coarse.
-L_BOUNDARY=2.5    # Restauré haut (1.0 avait causé -0.70 de F1 boundary)
-L_COARSE=1.0
+L_BOUNDARY=3.2    # Relevé 2.5→3.2 : run v8.18 plafonnait à 0.872 (cible 0.92), libère gradient boundary
+L_COARSE=0.75     # Réduit 1.0→0.75 : libère budget encodeur vers boundary sans sacrifier coarse (0.914 en v8.18)
 L_FINE=1.8        # Retour valeur v8.0 — 2.2 + focal_fine volait du budget à boundary
 # FOCAL_FINE_GAMMA=0.0 : désactivé — CWP(0.5) seul suffit pour gérer le déséquilibre des classes fine.
 # focal=1.0 + CWP = double amplification sur les classes rares difficiles (CW[rare]×(1-p)^1 × CE)
@@ -210,9 +210,9 @@ boundary_regression_count=0  # nb d'epochs consécutives où boundary < best_bou
 current_epoch=$START_EPOCH
 resume_arg=""
 # ── État trigger SVO (métriques-driven, v8.8) ────────────────────────────────
-svo_triggered=0          # 0=pas encore déclenché, 1=déclenché
-svo_pct=0                # % SVO courant : 0 → 20 → 40 → 60 → 80 → 100
-svo_trigger_epoch=0      # epoch à laquelle le trigger a été activé (bnd > SVO_TRIGGER_BND & coarse > SVO_TRIGGER_COARSE)
+svo_triggered=1          # 1=pré-déclenché : SVO démarre à 20% dès ep 1 sans attendre les seuils bnd/coarse
+svo_pct=20               # % SVO initial : 20% dès ep 1, puis +20% / SVO_TRIGGER_STEP_EPOCHS (ramp formula)
+svo_trigger_epoch=0      # epoch référence = 0 → ramp : ep12=40%, ep24=60%, ep36=80%, ep48=100%
 
 mkdir -p logs
 log_file="logs/adaptive.log"
@@ -252,7 +252,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="${GOLD_VERSION}-trig84-s12-l6-${TORCH_SHORT}"  # trig84=svotrigger0.84, s12=svostep12, l6=mxlvl6
+DATASET_VERSION="${GOLD_VERSION}-svo20-s12-l6-${TORCH_SHORT}"  # svo20=SVO dès 20% ep1, s12=step12epochs, l6=mxlvl6
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
