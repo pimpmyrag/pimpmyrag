@@ -91,9 +91,9 @@ BOUNDARY_WINDOW_DELTA=${BOUNDARY_WINDOW_DELTA:-0.003}  # progrès net minimal re
 # ── Détection de régression boundary (réaction immédiate à la baisse) ──────────────────────
 BOUNDARY_REGRESSION_WINDOW=${BOUNDARY_REGRESSION_WINDOW:-3}   # nb epochs consécutives sous le peak
 BOUNDARY_REGRESSION_DELTA=${BOUNDARY_REGRESSION_DELTA:-0.008} # chute tolérée depuis le peak avant rescue
-SVO_RAMP_EPOCHS=${SVO_RAMP_EPOCHS:-20}             # utilisé uniquement pour la ramp role (ROLE_DELAY → 100% en SVO_RAMP_EPOCHS epochs)
+SVO_RAMP_EPOCHS=${SVO_RAMP_EPOCHS:-20}             # utilis uniquement pour la ramp role (ROLE_DELAY → 100% en SVO_RAMP_EPOCHS epochs)
 MORPHO_RAMP_EPOCHS=${MORPHO_RAMP_EPOCHS:-20}       # Morpho : ramp sur 20 epochs multitask
-MORPHO_DELAY=${MORPHO_DELAY:-8}                    # Morpho démarre 8 epochs après fin warmup NER
+MORPHO_DELAY=${MORPHO_DELAY:-0}                    # 0 = dmarre ds ep 1 (training doux toutes ttes simultanes)
 # ── Trigger SVO basé sur les métriques (v8.8+) ──────────────────────────────
 # SVO ne démarre que quand boundary > thr_bnd ET coarse > thr_coarse → NER stable.
 # fine exclu du trigger : monte trop lentement (ep 20-25), ferait attendre inutilement.
@@ -172,7 +172,7 @@ L_CERTAINTY=0.30      # Relevé 0.12→0.30 : certainty=0.563 à ep32 (Δ=+0.007
 L_MORPHO=0.10         # Gender/Number/Person — calibré pour coverage v8.1 (77% vs 43% v8.0 → gradient ×1.8x)
 L_VERB_PTR=0.45       # Relevé 0.25→0.45 : verb_ptr=0.729 à ep32 (besoin ~11ep pour 0.80) mais SVO encore à 40% → L_VPTR_NOW=0.10 trop faible
 # 0.45×40%=0.18 à ep32 (vs 0.10 avant) ; 0.45×100%=0.45 en plein régime — convergence plus rapide
-ROLE_DELAY=${ROLE_DELAY:-12}  # Role démarre 12 epochs après fin warmup NER (v8.5: +4 vs v8.4c=8 car APPOS ×6 → gradient rôle fort)
+ROLE_DELAY=${ROLE_DELAY:-0}  # 0 = dmarre ds ep 1 (training doux toutes ttes simultanes ; ancienne valeur 12)
 
 # Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
 START_LEVEL=${START_LEVEL:-0}    # 0=easy — ramp SVO progressif par niveau (5%→15%→35%→60%→85%→100%)
@@ -252,7 +252,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="${GOLD_VERSION}-svo20-s12-l6-${TORCH_SHORT}"  # svo20=SVO dès 20% ep1, s12=step12epochs, l6=mxlvl6
+DATASET_VERSION="${GOLD_VERSION}-soft-s12-l6-${TORCH_SHORT}"  # soft=toutes ttes dès ep1 (svo20+role0+morpho0), s12=svostep12, l6=mxlvl6
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
