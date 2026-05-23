@@ -123,9 +123,10 @@ pimpmyrag/
 │   ├── .secrets.env                ← Credentials (NE PAS committer !)
 │   ├── venv/                       ← Python venv local
 │   └── data/                       ← Datasets (gérés par DVC, non committés)
-│       ├── train_v8.6.jsonl        ← Dataset courant (le + récent = actif)
-│       ├── val_v8.6.jsonl
-│       └── test_v8.6.jsonl
+│       ├── train_v8.18.jsonl       ← Dataset courant ✅ (v8.18 = actif)
+│       ├── val_v8.18.jsonl
+│       ├── test_v8.18.jsonl
+│       └── contrastive_v1_fixed.jsonl  ← ⚠️ EN ATTENTE REVIEW (ne pas intégrer)
 └── .github/
     └── copilot-instructions.md     ← CE FICHIER
 ```
@@ -149,12 +150,16 @@ pimpmyrag/
 |---------|--------------|--------|
 | v8.0/v8.1 | 443 | propre |
 | v8.2–v8.5 | 7 931–9 324 | corrompu (régression boundary !) |
-| **v8.6** | **64** | ✅ propre (64 = apostrophes, offsets OK) |
+| v8.6 | 64 | ✅ propre (64 = apostrophes, offsets OK) |
+| v8.7–v8.17 | — | améliorations successives (SVO, morpho, hard negatives) |
+| **v8.18** | **~0** | ✅ **VERSION COURANTE** (training actif) |
 
-**Version courante : `v8.6`**
-- 28 746 phrases train / 3 714 val / 3 643 test
-- Stanza spans revus par Claude Haiku (train + val + test)
-- Offsets corrigés : 8 315 spans repositionnés
+**Version courante : `v8.18`**
+- 31 328 phrases train
+- Extended spans Claude Haiku (`msgbatch_01XKMyCmzpRto1fSSmrg7BeG`)
+- Offsets corrigés, labels SVO + morpho complets
+
+**Prochaine version prévue : `v8.19`** (après review contrastive_v1_fixed.jsonl)
 
 **Stockage :** Cloudflare R2 via DVC
 - Remote DVC : `r2remote` (configuré dans `.dvc/config`)
@@ -232,6 +237,46 @@ Le script `/tmp/fix_all_errors_v86.py` est la référence pour corriger :
 1. Décalage ±2 chars
 2. Offset complètement déplacé (text.find nearest)
 3. Apostrophes U+2019 vs U+0027 (gardés tels quels, offsets OK)
+
+---
+
+## ⚠️ TRAVAIL EN COURS — NE PAS TOUCHER (maj 23 mai 2026)
+
+### Training de nuit — v8.18 (en cours / prévu)
+- **Dataset actif :** `v8.18` (train=31 328 phrases)
+- **Config :** `DEFAULT_GOLD_VERSION = "v8.18"` dans `launch_training.py`
+- **Scripts sh :** `GOLD_VERSION=v8.18` dans `setup_runpod.sh` et `run_adaptive_training.sh`
+- ⛔ **NE PAS changer GOLD_VERSION** ni re-builder le dataset avant la fin du run
+
+### Dataset contrastif — EN ATTENTE DE REVIEW HUMAINE
+Objectif : enrichir le dataset avec des paires contrastives pour améliorer la discrimination fine (hint_state vs hint_notion, hint_field vs hint_notion, etc.)
+
+**Fichiers produits (dans `training/multi-head/data/`) :**
+| Fichier | Lignes | État |
+|---------|--------|------|
+| `contrastive_v1_raw.jsonl` | 594 | Génération brute Claude Haiku |
+| `contrastive_v1_svo.jsonl` | 594 | + annotations SVO (Stanza) |
+| `_review_contrastive_v1_requests.jsonl` | 119 req | Batch Claude envoyé |
+| `contrastive_v1.jsonl` | 594 | Sortie batch (batch `msgbatch_01SGKuWZmd7xUkATvH1YN9Pp` ✅ ended) |
+| **`contrastive_v1_fixed.jsonl`** | **594** | ✅ **Post-fix appliqué — EN ATTENTE REVIEW** |
+
+**Fixes appliqués sur `contrastive_v1_fixed.jsonl` (`/tmp/fix_contrastive_v1.py`) :**
+- **P1** : 262 verbes mal labelisés NER → forcé `verb_trigger` ✅
+- **P2** : 218 `verb_trigger` sans `mood` → ajouté `indicative`/`infinitive` ✅
+- **P6** : morpho `gender`/`number` inférée via Stanza (127/249 gender, 213/250 number) ✅
+
+**Résidus connus (acceptables) :**
+- 122 spans avec `gender=null` (termes abstraits sans accord)
+- 37 spans avec `number=null`
+- 67 entités avec `svo_role=None` (hint_gpe, hint_time_date contextuels)
+
+**⛔ NE PAS intégrer `contrastive_v1_fixed.jsonl` dans le dataset** avant :
+1. Review humaine des exemples (vérifier que les labels contrastifs sont justes)
+2. Vérification offsets (script `/tmp/fix_all_errors_v86.py`)
+3. Fusion avec train_v8.18 → nouveau `train_v8.19.jsonl`
+4. DVC add/push + commit
+
+**Script d'inspection :** `/tmp/inspect_fixed.py` et `/tmp/deep_inspect_contrastive.py`
 
 ---
 
