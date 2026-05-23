@@ -29,6 +29,7 @@ from labels import (
     COARSE_LABELS, FINE_LABELS,
     SYN_LABELS, NUM_SYN, ROLE_LABELS, NUM_ROLE,
     NUM_VOICE, NUM_CERTAINTY, CERTAINTY_LABELS, NUM_GENDER, NUM_NUMBER, NUM_PERSON,
+    ROLE_COARSE_LABELS, NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID,
     PERSON_LABELS, ROLE_NONE_ID,
     FINE_CONCRETE_IDS, FINE_ABSTRACT_IDS,
     # compat
@@ -345,6 +346,7 @@ def run_epoch(
         lambda_svo_boundary=0.7,
         lambda_svo=0.6,
         lambda_role=0.6,
+        lambda_role_coarse=0.1,
         lambda_voice=0.15,
         lambda_certainty=0.4,
         lambda_morpho=0.3,
@@ -494,6 +496,11 @@ def run_epoch(
         svo_boundary_labels = batch["svo_boundary_labels"].to(device)
         syn_labels    = batch["syn_labels"].to(device)
         role_labels   = batch["role_labels"].to(device)
+        role_coarse_labels = batch.get("role_coarse_labels")
+        if role_coarse_labels is not None:
+            role_coarse_labels = role_coarse_labels.to(device)
+        else:
+            role_coarse_labels = torch.full_like(role_labels, ROLE_COARSE_NONE_ID)
         voice_labels  = batch["voice_labels"].to(device)
         certainty_labels = batch.get("certainty_labels")
         if certainty_labels is not None:
@@ -553,6 +560,7 @@ def run_epoch(
                     svo_boundary_labels_loss = svo_boundary_labels[si]
                     syn_labels_loss          = syn_labels[si]
                     role_labels_loss         = role_labels[si]
+                    role_coarse_labels_loss  = role_coarse_labels[si]
                     voice_labels_loss        = voice_labels[si]
                     certainty_labels_loss    = certainty_labels[si]
                     gender_labels_loss       = gender_labels[si]
@@ -567,6 +575,7 @@ def run_epoch(
                     svo_boundary_labels_loss = svo_boundary_labels
                     syn_labels_loss          = syn_labels
                     role_labels_loss         = role_labels
+                    role_coarse_labels_loss  = role_coarse_labels
                     voice_labels_loss        = voice_labels
                     certainty_labels_loss    = certainty_labels
                     gender_labels_loss       = gender_labels
@@ -602,6 +611,7 @@ def run_epoch(
                     svo_boundary_labels=svo_boundary_labels_loss,
                     syn_labels=syn_labels_loss,
                     role_labels=role_labels_loss,
+                    role_coarse_labels=role_coarse_labels_loss,
                     voice_labels=voice_labels_loss,
                     certainty_labels=certainty_labels_loss,
                     gender_labels=gender_labels_loss,
@@ -620,6 +630,7 @@ def run_epoch(
                     lambda_svo_boundary=lambda_svo_boundary,
                     lambda_svo=lambda_svo,
                     lambda_role=lambda_role,
+                    lambda_role_coarse=lambda_role_coarse,
                     lambda_voice=lambda_voice,
                     lambda_certainty=lambda_certainty,
                     lambda_morpho=lambda_morpho,
@@ -1041,7 +1052,9 @@ def main():
     parser.add_argument("--lambda-svo", type=float, default=0.6,
                         help="Pondération de la loss SVO (défaut=0.8)")
     parser.add_argument("--lambda-role", type=float, default=0.6,
-                        help="Pondération de la loss rôle SVO (défaut=0.6)")
+                        help="Pondération de la loss rôle SVO fin (défaut=0.6)")
+    parser.add_argument("--lambda-role-coarse", type=float, default=0.1,
+                        help="Pondération de la loss rôle SVO coarse SUBJ/OBJ/OBLIQ/OTHER (défaut=0.1)")
     parser.add_argument("--lambda-voice", type=float, default=0.15,
                         help="Pondération de la loss voice ACTIVE/PASSIVE (défaut=0.5)")
     parser.add_argument("--lambda-certainty", type=float, default=0.4,
@@ -1521,6 +1534,7 @@ def main():
             lambda_svo_boundary=args.lambda_svo_boundary,
             lambda_svo=args.lambda_svo,
             lambda_role=args.lambda_role,
+            lambda_role_coarse=args.lambda_role_coarse,
             lambda_voice=args.lambda_voice,
             lambda_certainty=args.lambda_certainty,
             lambda_morpho=args.lambda_morpho,
@@ -1576,6 +1590,7 @@ def main():
             lambda_svo_boundary=args.lambda_svo_boundary,
             lambda_svo=args.lambda_svo,
             lambda_role=args.lambda_role,
+            lambda_role_coarse=args.lambda_role_coarse,
             lambda_voice=args.lambda_voice,
             lambda_certainty=args.lambda_certainty,
             lambda_morpho=args.lambda_morpho,
@@ -1657,6 +1672,7 @@ def main():
                 "train/certainty_f1":   train_metrics["certainty_macro_f1"],
                 "train/gender_f1":      train_metrics["gender_macro_f1"],
                 "train/number_f1":      train_metrics["number_macro_f1"],
+                "train/person_f1":      train_metrics["person_macro_f1"],
                 "val/loss":             val_metrics["loss"],
                 "val/boundary_f1":      val_metrics["boundary_f1"],
                 "val/coarse_f1":        val_metrics["coarse_macro_f1"],
@@ -1796,6 +1812,7 @@ def main():
         lambda_svo_boundary=args.lambda_svo_boundary,
         lambda_svo=args.lambda_svo,
         lambda_role=args.lambda_role,
+        lambda_role_coarse=args.lambda_role_coarse,
         lambda_voice=args.lambda_voice,
         lambda_certainty=args.lambda_certainty,
         lambda_morpho=args.lambda_morpho,

@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from transformers import AutoModel
 from labels import (
     NUM_FINE, NUM_SYN, NUM_ROLE, NUM_VOICE, NUM_CERTAINTY,
+    NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID,
     NUM_GENDER, NUM_NUMBER, NUM_PERSON,
     SYN_NONE_ID, ROLE_NONE_ID, VOICE_NONE_ID, CERTAINTY_NONE_ID,
     COARSE_NONE_ID,
@@ -54,7 +55,8 @@ class SpanMultiTaskModel(nn.Module):
         # Heads syntaxiques v4
         self.svo_boundary_head = nn.Linear(span_hidden_dim, 2)        # détecte verb_trigger/pron
         self.syn_head          = nn.Linear(span_hidden_dim, NUM_SYN)  # verb_trigger/pron_subj/pron_obj
-        self.role_head         = nn.Linear(span_hidden_dim, NUM_ROLE) # rôle SVO sur NER + pronoms
+        self.role_head         = nn.Linear(span_hidden_dim, NUM_ROLE)        # rôle SVO fin (12 labels)
+        self.role_coarse_head  = nn.Linear(span_hidden_dim, NUM_ROLE_COARSE) # rôle SVO coarse SUBJ/OBJ/OBLIQ/OTHER
         self.voice_head        = nn.Linear(span_hidden_dim, NUM_VOICE)       # active/passive sur verb_trigger
         self.certainty_head    = nn.Linear(span_hidden_dim, NUM_CERTAINTY)   # certain/modal/denied
 
@@ -147,6 +149,7 @@ class SpanMultiTaskModel(nn.Module):
             "svo_boundary_logits": self.svo_boundary_head(span_h),
             "syn_logits":          self.syn_head(span_h),
             "role_logits":         self.role_head(span_h),
+            "role_coarse_logits":  self.role_coarse_head(span_h),
             "voice_logits":        self.voice_head(span_h),
             "certainty_logits":    self.certainty_head(span_h),
             "gender_logits":       self.gender_head(span_h),
@@ -166,6 +169,7 @@ class SpanMultiTaskModel(nn.Module):
             svo_boundary_labels,
             syn_labels,
             role_labels,
+            role_coarse_labels,
             voice_labels,
             certainty_labels,
             gender_labels,
@@ -183,7 +187,8 @@ class SpanMultiTaskModel(nn.Module):
             lambda_fine=1.2,
             lambda_svo_boundary=0.7,
             lambda_svo=0.5,        # syn type (verb_trigger / pron)
-            lambda_role=0.6,       # rôle SVO
+            lambda_role=0.6,       # rôle SVO fin
+            lambda_role_coarse=0.1, # rôle SVO coarse SUBJ/OBJ/OBLIQ/OTHER
             lambda_voice=0.5,
             lambda_certainty=0.4,
             lambda_morpho=0.3,
@@ -203,7 +208,8 @@ class SpanMultiTaskModel(nn.Module):
         f_logits       = outputs["fine_logits"]
         svo_b_logits   = outputs["svo_boundary_logits"]
         syn_logits     = outputs["syn_logits"]
-        role_logits    = outputs["role_logits"]
+        role_logits         = outputs["role_logits"]
+        role_coarse_logits  = outputs["role_coarse_logits"]
         voice_logits   = outputs["voice_logits"]
         cert_logits    = outputs["certainty_logits"]
         g_logits       = outputs["gender_logits"]
@@ -217,6 +223,7 @@ class SpanMultiTaskModel(nn.Module):
         svo_boundary_labels = svo_boundary_labels.to(device=device, dtype=torch.long)
         syn_labels          = syn_labels.to(device=device, dtype=torch.long)
         role_labels         = role_labels.to(device=device, dtype=torch.long)
+        role_coarse_labels  = role_coarse_labels.to(device=device, dtype=torch.long)
         voice_labels        = voice_labels.to(device=device, dtype=torch.long)
         certainty_labels    = certainty_labels.to(device=device, dtype=torch.long)
         gender_labels       = gender_labels.to(device=device, dtype=torch.long)
@@ -306,21 +313,26 @@ class SpanMultiTaskModel(nn.Module):
         else:
             loss_syn = torch.tensor(0.0, device=device)
 
-        # ── 6) Role (sur NER spans + pronoms qui ont un rôle != NONE) ─────
+        # ── 6) Role fin (sur NER spans + pronoms qui ont un rôle != NONE) ──
         role_mask = (role_labels >= 0) & (role_labels != ROLE_NONE_ID)   # exclut NONE (=6) et sentinelles <0 ; inclut obliques étendus 7-11
         if role_mask.any():
             loss_role_per = F.cross_entropy(role_logits[role_mask], role_labels[role_mask],
                                             weight=role_class_weights, reduction="none")
             if focal_role_gamma > 0.0:
-                # Focal modulation : réduit la contribution des exemples faciles
-                # sans amplifier les gradients des classes rares (≠ class weights)
-                # → Safe pour boundary car gradient magnitude inchangée sur les spans NER
                 probs_r = torch.softmax(role_logits[role_mask].detach(), dim=-1)
                 p_t_r = probs_r.gather(1, role_labels[role_mask].unsqueeze(1)).squeeze(1)
                 loss_role_per = loss_role_per * (1.0 - p_t_r) ** focal_role_gamma
             loss_role = (loss_role_per * sample_weights[role_mask]).mean()
         else:
             loss_role = torch.tensor(0.0, device=device)
+
+        # ── 6b) Role coarse (SUBJ/OBJ/OBLIQ/OTHER) ────────────────────────
+        rc_mask = (role_coarse_labels >= 0) & (role_coarse_labels < role_coarse_logits.size(-1))
+        if rc_mask.any():
+            loss_role_coarse = (F.cross_entropy(role_coarse_logits[rc_mask], role_coarse_labels[rc_mask], reduction="none")
+                                * sample_weights[rc_mask]).mean()
+        else:
+            loss_role_coarse = torch.tensor(0.0, device=device)
 
         # ── 7) Voice (sur verb_trigger uniquement) ─────────────────────────
         voice_mask = (voice_labels >= 0) & (voice_labels < voice_logits.size(-1))
@@ -397,6 +409,7 @@ class SpanMultiTaskModel(nn.Module):
             "svo_boundary": loss_svo_b,
             "svo":          loss_syn,
             "role":         loss_role,
+            "role_coarse":  loss_role_coarse,
             "voice":        loss_voice,
             "certainty":    loss_cert,
             "morpho":       loss_gender + loss_number + loss_person,
@@ -413,6 +426,7 @@ class SpanMultiTaskModel(nn.Module):
                 "svo_boundary": lambda_svo_boundary,
                 "svo":          lambda_svo,
                 "role":         lambda_role,
+                "role_coarse":  lambda_role_coarse,
                 "voice":        lambda_voice,
                 "certainty":    lambda_certainty,
                 "morpho":       lambda_morpho,
@@ -428,6 +442,7 @@ class SpanMultiTaskModel(nn.Module):
                 + lambda_svo_boundary * loss_svo_b
                 + lambda_svo          * loss_syn
                 + lambda_role         * loss_role
+                + lambda_role_coarse  * loss_role_coarse
                 + lambda_voice        * loss_voice
                 + lambda_certainty    * loss_cert
                 + lambda_morpho       * (loss_gender + loss_number + loss_person)
@@ -445,6 +460,7 @@ class SpanMultiTaskModel(nn.Module):
             "loss_svo_boundary":    loss_svo_b.detach(),
             "loss_syn":             loss_syn.detach(),
             "loss_role":            loss_role.detach(),
+            "loss_role_coarse":     loss_role_coarse.detach(),
             "loss_voice":           loss_voice.detach(),
             "loss_certainty":       loss_cert.detach(),
             "loss_compat":          loss_compat.detach(),

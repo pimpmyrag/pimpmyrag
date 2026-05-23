@@ -162,7 +162,8 @@ L_SVO_BOUNDARY=0.20   # Réduit 0.50→0.20 : svo_boundary_head couvre verb_trig
 # svo_boundary_head reste utile uniquement pour les verb_trigger spans (non-NER).
 # Libère ~0.30 de budget encodeur → profite à NER boundary.
 L_SVO=0.50            # Labels SVO (syn heads) — inchangé, supervise verb_trigger/pron_subj/pron_obj
-L_ROLE=0.15           # Réduit 0.35→0.15 : role_mask ~200k spans/ep → gradient volume élevé même à 0.35 ; 0.15 libère budget encodeur pour boundary sans perdre la supervision rôles
+L_ROLE=0.15           # Réduit 0.35→0.15 : role_mask ~200k spans/ep
+L_ROLE_COARSE=0.08    # Role coarse SUBJ/OBJ/OBLIQ/OTHER — force la discrimination large avant les sous-types
 L_VOICE=0.13        # Retour valeur v8.0 (0.20 trop fort → siphonnait gradient NER boundary)
 L_CERTAINTY=0.30      # Relevé 0.12→0.30 : certainty=0.563 à ep32 (Δ=+0.007/ep →≥20ep de plus pour converger)
 # À 40% SVO (ep32) L_CERTAINTY_NOW=0.048 était trop faible ; 0.30×40%=0.12 dès le milieu de ramp.
@@ -226,6 +227,7 @@ if [ "$NER_ONLY_BENCH" = "1" ]; then
     L_SVO_BOUNDARY=0.0
     L_SVO=0.0
     L_ROLE=0.0
+    L_ROLE_COARSE=0.0
     L_VOICE=0.0
     L_CERTAINTY=0.0
     L_MORPHO=0.0
@@ -356,6 +358,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         L_SVO_B_NOW=0.0000
         L_SVO_NOW=0.0000
         L_ROLE_NOW=0.0000
+        L_ROLE_COARSE_NOW=0.0000
         L_VOICE_NOW=0.0000
         L_CERTAINTY_NOW=0.0000
         L_MORPHO_NOW=0.0000
@@ -388,6 +391,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         role_ramp_epoch=$((ramp_epoch - ROLE_DELAY))
         role_progress=$(python3 -c "print(min(1.0, max(0.0, $role_ramp_epoch / $SVO_RAMP_EPOCHS)))")
         L_ROLE_NOW=$(python3  -c "print(f'{$L_ROLE * $role_progress:.4f}')")
+        L_ROLE_COARSE_NOW=$(python3 -c "print(f'{$L_ROLE_COARSE * $role_progress:.4f}')")
         L_VOICE_NOW=$(python3 -c "print(f'{$L_VOICE      * $svo_progress:.4f}')")
         L_CERTAINTY_NOW=$(python3 -c "print(f'{$L_CERTAINTY * $svo_progress:.4f}')")
         # Morpho ramp : démarre MORPHO_DELAY epochs après la fin du warmup, epoch-based
@@ -421,6 +425,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lambda-svo-boundary $L_SVO_B_NOW \
         --lambda-svo        $L_SVO_NOW \
         --lambda-role       $L_ROLE_NOW \
+        --lambda-role-coarse $L_ROLE_COARSE_NOW \
         --lambda-voice      $L_VOICE_NOW \
         --lambda-certainty  $L_CERTAINTY_NOW \
         --lambda-morpho     $L_MORPHO_NOW \

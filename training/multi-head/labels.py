@@ -269,6 +269,38 @@ NUM_ROLE     = len(ROLE_LABELS)
 ROLE_NONE_ID = ROLE2ID["NONE"]   # = 6
 
 # ─────────────────────────────────────────────────────────────
+# ROLE COARSE  (analogue au coarse NER — force la discrimination
+# SUBJ/OBJ/OBLIQ avant d'apprendre les sous-types fins)
+# ─────────────────────────────────────────────────────────────
+ROLE_COARSE_LABELS = [
+    "SUBJ",   # 0  ← SUBJECT
+    "OBJ",    # 1  ← OBJECT
+    "OBLIQ",  # 2  ← OBLIQUE + tous les OBLIQUE_* collapsés
+    "OTHER",  # 3  ← APPOS
+]
+ROLE_COARSE2ID      = {x: i for i, x in enumerate(ROLE_COARSE_LABELS)}
+ID2ROLE_COARSE      = {i: x for x, i in ROLE_COARSE2ID.items()}
+NUM_ROLE_COARSE     = len(ROLE_COARSE_LABELS)
+ROLE_COARSE_NONE_ID = NUM_ROLE_COARSE  # = 4  (sentinel : NONE + inconnu)
+
+# Mapping fine_role_id → coarse_role_id  (construit à partir de ROLE_LABELS)
+_RC = ROLE_COARSE2ID
+ROLE_FINE_TO_COARSE_ID: dict[int, int] = {
+    ROLE2ID["SUBJECT"]:            _RC["SUBJ"],
+    ROLE2ID["OBJECT"]:             _RC["OBJ"],
+    ROLE2ID["OBLIQUE"]:            _RC["OBLIQ"],
+    ROLE2ID["OBLIQUE_AGENT"]:      _RC["OBLIQ"],
+    ROLE2ID["OBLIQUE_CAUSE"]:      _RC["OBLIQ"],
+    ROLE2ID["OBLIQUE_ADVERSARY"]:  _RC["OBLIQ"],
+    ROLE2ID["OBLIQUE_BENEFICIARY"]:_RC["OBLIQ"],
+    ROLE2ID["OBLIQUE_COMITATIVE"]: _RC["OBLIQ"],
+    ROLE2ID["OBLIQUE_DOMAIN"]:     _RC["OBLIQ"],
+    ROLE2ID["OBLIQUE_SOURCE"]:     _RC["OBLIQ"],
+    ROLE2ID["APPOS"]:              _RC["OTHER"],
+    ROLE2ID["NONE"]:               ROLE_COARSE_NONE_ID,  # sentinel
+}
+
+# ─────────────────────────────────────────────────────────────
 # VOICE LABELS  (prédit sur les verb_trigger)
 # ─────────────────────────────────────────────────────────────
 

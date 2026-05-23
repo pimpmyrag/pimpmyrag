@@ -15,6 +15,7 @@ from labels import (
     COARSE_NONE_ID,
     SYN2ID, SYN_NONE_ID, ALL_SYN_LABELS,
     ROLE2ID, ROLE_NONE_ID,
+    ROLE_FINE_TO_COARSE_ID, ROLE_COARSE_NONE_ID,
     VOICE2ID, VOICE_NONE_ID,
     CERTAINTY2ID, CERTAINTY_NONE_ID,
     GENDER2ID, GENDER_NONE_ID,
@@ -112,6 +113,7 @@ def build_gold_candidates(row, tokenizer):
 
             # Rôle SVO du pronom + gov_verb_tok_start
             role_id          = ROLE2ID.get(sp.get("svo_role", "NONE"), ROLE_NONE_ID)
+            role_coarse_id   = ROLE_FINE_TO_COARSE_ID.get(role_id, ROLE_COARSE_NONE_ID)
             gov_verb_tok_start = -1
             gvs = sp.get("gov_verb_start")
             if gvs is not None:
@@ -134,7 +136,7 @@ def build_gold_candidates(row, tokenizer):
                 "fine_label_id":       FINE_NONE_ID,
                 "syn_label_id":        syn_id,
                 "role_label_id":       role_id,
-                "voice_label_id":      voice_id,
+                "role_coarse_label_id": role_coarse_id,
                 "certainty_label_id":  certainty_id,
                 "gender_label_id":     GENDER2ID.get(sp.get("gender"), GENDER_NONE_ID),
                 "number_label_id":     NUMBER2ID.get(sp.get("number"), NUMBER_NONE_ID),
@@ -160,6 +162,7 @@ def build_gold_candidates(row, tokenizer):
 
         # Rôle SVO annoté sur ce span NER
         role_id = ROLE2ID.get(sp.get("svo_role", "NONE"), ROLE_NONE_ID)
+        role_coarse_id = ROLE_FINE_TO_COARSE_ID.get(role_id, ROLE_COARSE_NONE_ID)
 
         # Pointeur vers le verbe gouverneur
         gov_verb_tok_start = -1
@@ -188,6 +191,7 @@ def build_gold_candidates(row, tokenizer):
             "fine_label_id":       fine_id,
             "syn_label_id":        SYN_NONE_ID,
             "role_label_id":       role_id,
+            "role_coarse_label_id": role_coarse_id,
             "voice_label_id":      VOICE_NONE_ID,
             "certainty_label_id":  CERTAINTY_NONE_ID,
             "gender_label_id":     GENDER2ID.get(sp.get("gender"), GENDER_NONE_ID),
@@ -219,6 +223,7 @@ def _make_negative(neg_type: str, char_start: int, char_end: int,
         "fine_label_id":       FINE_NONE_ID,
         "syn_label_id":        SYN_NONE_ID,
         "role_label_id":       ROLE_NONE_ID,
+        "role_coarse_label_id": ROLE_COARSE_NONE_ID,
         "voice_label_id":      VOICE_NONE_ID,
         "certainty_label_id":  CERTAINTY_NONE_ID,
         "gender_label_id":     GENDER_NONE_ID,
