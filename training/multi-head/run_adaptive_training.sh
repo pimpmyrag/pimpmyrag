@@ -138,9 +138,14 @@ SOFT_FACTORS=( 1.0  1.25   1.5     2.0      2.0    2.0)
 # ── Lambdas NER (têtes principales, labels gold) ─────────────────────────────
 # lambda_boundary élevé = priorité absolue : c'est la tête la plus fragile.
 # lambda_fine=1.8 identifié empiriquement comme bon compromis fine vs coarse.
-L_BOUNDARY=3.2    # Relevé 2.5→3.2 : run v8.18 plafonnait à 0.872 (cible 0.92), libère gradient boundary
-L_COARSE=0.75     # Réduit 1.0→0.75 : libère budget encodeur vers boundary sans sacrifier coarse (0.914 en v8.18)
-L_FINE=1.8        # Retour valeur v8.0 — 2.2 + focal_fine volait du budget à boundary
+L_BOUNDARY=5.0    # Relevé 3.2→5.0 : phase boundary-first, boundary domine jusqu'à 0.90 avant unlock coarse+fine
+L_COARSE=0.75     # Valeur CIBLE post-unlock (pendant phase boundary : L_COARSE_WARMUP=0.05)
+L_FINE=1.8        # Valeur CIBLE post-unlock (pendant phase boundary : L_FINE_WARMUP=0.15)
+# ── Phase boundary-first : coarse+fine démarrent bas, unlock progressif quand boundary >= seuil ─
+BND_UNLOCK_THRESHOLD=${BND_UNLOCK_THRESHOLD:-0.90}   # boundary cible avant de débloquer coarse+fine
+BND_UNLOCK_RAMP_EPOCHS=${BND_UNLOCK_RAMP_EPOCHS:-15} # nb epochs pour ramper de warmup → valeurs cibles
+L_COARSE_WARMUP=0.05   # lambda coarse pendant phase boundary (libère gradient encodeur)
+L_FINE_WARMUP=0.15     # lambda fine pendant phase boundary
 # FOCAL_FINE_GAMMA=0.0 : désactivé — CWP(0.5) seul suffit pour gérer le déséquilibre des classes fine.
 # focal=1.0 + CWP = double amplification sur les classes rares difficiles (CW[rare]×(1-p)^1 × CE)
 # → gradient fort sur span_mlp partagé → boundary paye. Identique au pattern L_FINE=2.2+focal
@@ -208,6 +213,8 @@ boundary_f1_window=()   # buffer fenêtre glissante pour détection plateau boun
 boundary_rescue_window=()  # buffer plus long (BOUNDARY_RESCUE_WINDOW) pour le NER rescue
 ner_rescue_applied=0       # 0=pas encore déclenché, 1=rescue appliqué (once-only)
 boundary_regression_count=0  # nb d'epochs consécutives où boundary < best_boundary - REGRESSION_DELTA
+coarse_fine_unlocked=0        # 0=phase boundary-first (coarse/fine bas), 1=unlock progressif actif
+coarse_fine_unlock_epoch=0    # epoch où le unlock coarse/fine a été déclenché
 current_epoch=$START_EPOCH
 resume_arg=""
 # ── État trigger SVO (métriques-driven, v8.8) ────────────────────────────────
@@ -254,7 +261,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="${GOLD_VERSION}-soft-s12-l6-${TORCH_SHORT}"  # soft=toutes ttes dès ep1 (svo20+role0+morpho0), s12=svostep12, l6=mxlvl6
+DATASET_VERSION="${GOLD_VERSION}-bndwarm-cf90-${TORCH_SHORT}"  # bndwarm=boundary-first(L=5), cf90=coarse+fine unlock@0.90, svo20+morpho dès ep1
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
@@ -363,8 +370,10 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         L_CERTAINTY_NOW=0.0000
         L_MORPHO_NOW=0.0000
         L_VPTR_NOW=0.0000
+        L_COARSE_NOW=$L_COARSE_WARMUP
+        L_FINE_NOW=$L_FINE_WARMUP
         echo "🏋️  Warmup NER-only ep $current_epoch/$NER_WARMUP_EPOCHS — SVO=0" | tee -a $log_file
-        echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE  fine=$L_FINE" | tee -a $log_file
+        echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE_NOW [warmup]  fine=$L_FINE_NOW [warmup]" | tee -a $log_file
     else
         # Phase multitask : rampup SVO linéaire sur epochs (v8.1)
         if [ $in_warmup -eq 0 ] && [ $current_epoch -eq $((NER_WARMUP_EPOCHS + 1)) ] \
@@ -400,8 +409,23 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         L_MORPHO_NOW=$(python3 -c "print(f'{$L_MORPHO * $morpho_progress:.4f}')")
         L_VPTR_NOW=$(python3  -c "print(f'{$L_VERB_PTR   * $svo_progress:.4f}')")
 
+        # ── Phase boundary-first : coarse+fine unlockés quand boundary >= BND_UNLOCK_THRESHOLD ──
+        if [ "$coarse_fine_unlocked" = "0" ]; then
+            L_COARSE_NOW=$L_COARSE_WARMUP
+            L_FINE_NOW=$L_FINE_WARMUP
+        else
+            cf_ramp_epoch=$((current_epoch - coarse_fine_unlock_epoch))
+            cf_progress=$(python3 -c "print(min(1.0, max(0.0, $cf_ramp_epoch / $BND_UNLOCK_RAMP_EPOCHS)))")
+            L_COARSE_NOW=$(python3 -c "print(f'{$L_COARSE_WARMUP + ($L_COARSE - $L_COARSE_WARMUP) * $cf_progress:.4f}')")
+            L_FINE_NOW=$(python3   -c "print(f'{$L_FINE_WARMUP   + ($L_FINE   - $L_FINE_WARMUP)   * $cf_progress:.4f}')")
+        fi
+
         echo "🎛️  Lambdas multitask (SVO trigger: ${svo_pct}% [triggered=${svo_triggered}, bnd>${SVO_TRIGGER_BND} coarse>${SVO_TRIGGER_COARSE}] morpho=${morpho_ramp_epoch}/${MORPHO_RAMP_EPOCHS} role=${role_ramp_epoch}/${SVO_RAMP_EPOCHS})" | tee -a $log_file
-        echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE  fine=$L_FINE" | tee -a $log_file
+        if [ "$coarse_fine_unlocked" = "0" ]; then
+            echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE_NOW [warmup, cible=$L_COARSE]  fine=$L_FINE_NOW [warmup, cible=$L_FINE]  🔒bnd<${BND_UNLOCK_THRESHOLD}" | tee -a $log_file
+        else
+            echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE_NOW  fine=$L_FINE_NOW  🔓(ramp ${cf_ramp_epoch}/${BND_UNLOCK_RAMP_EPOCHS})" | tee -a $log_file
+        fi
         echo "      SVO  : svo_boundary=$L_SVO_B_NOW  svo=$L_SVO_NOW  role=$L_ROLE_NOW  voice=$L_VOICE_NOW  certainty=$L_CERTAINTY_NOW  morpho=$L_MORPHO_NOW  verb_ptr=$L_VPTR_NOW" | tee -a $log_file
     fi
 
@@ -420,8 +444,8 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --warmup-epochs 0 \
         --max-grad-norm 1.0 \
         --lambda-boundary   $L_BOUNDARY \
-        --lambda-coarse     $L_COARSE \
-        --lambda-fine       $L_FINE \
+        --lambda-coarse     $L_COARSE_NOW \
+        --lambda-fine       $L_FINE_NOW \
         --lambda-svo-boundary $L_SVO_B_NOW \
         --lambda-svo        $L_SVO_NOW \
         --lambda-role       $L_ROLE_NOW \
@@ -629,6 +653,18 @@ except:
                 echo "📈 SVO +20% → ${new_svo_pct}% (ep $current_epoch, +${epochs_since_trigger} depuis trigger ep $svo_trigger_epoch)" | tee -a $log_file
                 svo_pct=$new_svo_pct
             fi
+        fi
+    fi
+
+    # ── Unlock coarse+fine : déclenché quand boundary atteint BND_UNLOCK_THRESHOLD ──────────────
+    if [ "$coarse_fine_unlocked" = "0" ] && [ "$boundary_f1" != "?" ]; then
+        bnd_unlock=$(python3 -c "print('yes' if float('$boundary_f1') >= $BND_UNLOCK_THRESHOLD else 'no')" 2>/dev/null || echo "no")
+        if [ "$bnd_unlock" = "yes" ]; then
+            coarse_fine_unlocked=1
+            coarse_fine_unlock_epoch=$current_epoch
+            echo "🔓 COARSE/FINE UNLOCK ep $current_epoch — boundary=$boundary_f1 >= $BND_UNLOCK_THRESHOLD → ramp coarse+fine sur $BND_UNLOCK_RAMP_EPOCHS epochs" | tee -a $log_file
+        else
+            echo "🔒 Coarse/Fine verrouillés : boundary=$boundary_f1 < $BND_UNLOCK_THRESHOLD (cible : $BND_UNLOCK_THRESHOLD)" | tee -a $log_file
         fi
     fi
 
