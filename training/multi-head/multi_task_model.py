@@ -70,6 +70,10 @@ class SpanMultiTaskModel(nn.Module):
         self.verb_ptr_query = nn.Linear(span_hidden_dim, _ptr_dim, bias=False)
         self.verb_ptr_key   = nn.Linear(hidden_size,     _ptr_dim, bias=False)
 
+        # SVO→NER cascade : injecte le score SVO du span conteneur dans la repr NER
+        # Permet aux têtes NER de savoir si ce span est dans une zone argumentale SVO.
+        self.svo_context_proj = nn.Linear(1, span_hidden_dim)
+
         self.register_buffer("coarse_fine_mask", build_coarse_to_fine_mask())
 
     def _bucket_width(self, width: int) -> int:
@@ -79,6 +83,7 @@ class SpanMultiTaskModel(nn.Module):
         reps = []
         span_indices = []
         span_batch_indices = []   # ← index batch pour chaque span (utile pour le pointer)
+        span_positions = []       # ← (tok_start, tok_end) pour la matrice de containment SVO→NER
         device = hidden_states.device
 
         for b_idx, sample_spans in enumerate(spans):
@@ -99,18 +104,21 @@ class SpanMultiTaskModel(nn.Module):
                 reps.append(torch.cat([start, end, mean, w_emb], dim=-1))
                 span_indices.append(len(reps) - 1)
                 span_batch_indices.append(b_idx)
+                span_positions.append((l, r))
 
         if not reps:
             return (
                 torch.zeros((0, self.span_mlp[0].in_features), device=device),
                 torch.empty((0,), dtype=torch.long, device=device),
                 torch.empty((0,), dtype=torch.long, device=device),
+                torch.empty((0, 2), dtype=torch.long, device=device),
             )
 
         return (
             torch.stack(reps),
             torch.arange(len(reps), device=device),
             torch.tensor(span_batch_indices, dtype=torch.long, device=device),
+            torch.tensor(span_positions,     dtype=torch.long, device=device),  # [N, 2]
         )
 
     def forward(self, batch):
@@ -120,8 +128,39 @@ class SpanMultiTaskModel(nn.Module):
         )
         hidden = enc.last_hidden_state  # [B, seq, H]
 
-        span_reps, span_indices, span_batch_idx = self._build_span_representations(hidden, batch["spans"])
+        span_reps, span_indices, span_batch_idx, span_positions = \
+            self._build_span_representations(hidden, batch["spans"])
         span_h = self.span_mlp(span_reps)
+
+        # ── SVO→NER cascade : SVO boundary d'abord ───────────────────────────────
+        # Pour chaque span, calcule le score SVO max des spans qui le CONTIENNENT
+        # (même phrase). Ce signal aide les têtes NER à savoir si le span est dans
+        # une zone argumentale, sans concurrence de gradient (SVO heads gardent span_h brut).
+        svo_boundary_logits = self.svo_boundary_head(span_h)  # [N, 2]
+
+        N = span_h.size(0)
+        if N > 0:
+            svo_probs = torch.softmax(svo_boundary_logits, dim=-1)[:, 1]  # [N]
+            starts = span_positions[:, 0]   # [N]
+            ends   = span_positions[:, 1]   # [N]
+            # contains[i, j] = True si span j CONTIENT le span i (même phrase)
+            # (starts[j] <= starts[i]) AND (ends[j] >= ends[i]) AND (j != i) AND (même batch)
+            same_sent  = (span_batch_idx.unsqueeze(1) == span_batch_idx.unsqueeze(0))  # [N,N]
+            j_contains_i = (
+                (starts.unsqueeze(1) <= starts.unsqueeze(0)) &   # starts[j] <= starts[i]
+                (ends.unsqueeze(1)   >= ends.unsqueeze(0))   &   # ends[j]   >= ends[i]
+                same_sent &
+                ~torch.eye(N, dtype=torch.bool, device=span_h.device)
+            )  # [N, N]  j_contains_i[i, j] = True si j contient i
+            # Pour chaque span i : max SVO prob sur les spans conteneurs j
+            # Si aucun conteneur → 0.0 (pas de contexte SVO)
+            svo_probs_expanded = svo_probs.unsqueeze(0).expand(N, N)  # [N, N]
+            containing_svo = (svo_probs_expanded * j_contains_i.float()).max(dim=1).values  # [N]
+            # Injecte le contexte SVO dans la représentation NER (résidu léger)
+            svo_ctx = self.svo_context_proj(containing_svo.unsqueeze(-1))  # [N, H]
+            span_h_ner = span_h + svo_ctx
+        else:
+            span_h_ner = span_h
 
         # ── Verb pointer : attention bilinéaire span_query · token_key ──────────
         # ptr_queries : [N, 64]
@@ -143,10 +182,12 @@ class SpanMultiTaskModel(nn.Module):
         return {
             "span_reps":           span_h,
             "span_indices":        span_indices,
-            "boundary_logits":     self.boundary_head(span_h),
-            "coarse_logits":       self.coarse_head(span_h),
-            "fine_logits":         self.fine_head(span_h),
-            "svo_boundary_logits": self.svo_boundary_head(span_h),
+            # NER heads : span_h_ner (enrichi du contexte SVO des spans conteneurs)
+            "boundary_logits":     self.boundary_head(span_h_ner),
+            "coarse_logits":       self.coarse_head(span_h_ner),
+            "fine_logits":         self.fine_head(span_h_ner),
+            # SVO heads : span_h brut (pas de dépendance circulaire)
+            "svo_boundary_logits": svo_boundary_logits,
             "syn_logits":          self.syn_head(span_h),
             "role_logits":         self.role_head(span_h),
             "role_coarse_logits":  self.role_coarse_head(span_h),
