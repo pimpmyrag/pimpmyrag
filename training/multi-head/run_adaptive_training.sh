@@ -142,7 +142,7 @@ L_BOUNDARY=5.0    # Relevé 3.2→5.0 : phase boundary-first, boundary domine ju
 L_COARSE=0.75     # Valeur CIBLE post-unlock (pendant phase boundary : L_COARSE_WARMUP=0.05)
 L_FINE=1.8        # Valeur CIBLE post-unlock (pendant phase boundary : L_FINE_WARMUP=0.15)
 # ── Phase boundary-first : coarse+fine démarrent bas, unlock progressif quand boundary >= seuil ─
-BND_UNLOCK_THRESHOLD=${BND_UNLOCK_THRESHOLD:-0.90}   # boundary cible avant de débloquer coarse+fine
+BND_UNLOCK_THRESHOLD=${BND_UNLOCK_THRESHOLD:-0.88}   # boundary cible avant de débloquer coarse+fine (0.88 : plateau observé ~ep26-28 sur bndwarm)
 BND_UNLOCK_RAMP_EPOCHS=${BND_UNLOCK_RAMP_EPOCHS:-15} # nb epochs pour ramper de warmup → valeurs cibles
 L_COARSE_WARMUP=0.05   # lambda coarse pendant phase boundary (libère gradient encodeur)
 L_FINE_WARMUP=0.15     # lambda fine pendant phase boundary
