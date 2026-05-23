@@ -458,6 +458,8 @@ def run_epoch(
 
     # svo_boundary
     all_svob_true, all_svob_pred = [], []
+    # role_coarse positive-only (spans avec role_coarse != ROLE_COARSE_NONE_ID)
+    all_rc_true, all_rc_pred = [], []
     # SVO positive-only (spans avec svo_label != SVO_NONE_ID)
     all_svo_true, all_svo_pred = [], []
     # voice positive-only (spans avec voice_label != VOICE_NONE_ID)
@@ -722,6 +724,7 @@ def run_epoch(
         f_pred = masked_fine_predictions(outputs["fine_logits"], c_pred, coarse_fine_mask)
         svob_pred    = outputs["svo_boundary_logits"].argmax(dim=-1).detach().cpu().tolist()
         role_pred_raw  = outputs["role_logits"].argmax(dim=-1).detach().cpu().tolist()
+        role_coarse_pred_raw = outputs["role_coarse_logits"].argmax(dim=-1).detach().cpu().tolist()
         voice_pred_raw = outputs["voice_logits"].argmax(dim=-1).detach().cpu().tolist()
         certainty_pred_raw = outputs["certainty_logits"].argmax(dim=-1).detach().cpu().tolist()
         gender_pred_raw = outputs["gender_logits"].argmax(dim=-1).detach().cpu().tolist()
@@ -739,6 +742,7 @@ def run_epoch(
             f_true    = fine_labels.detach().cpu()[si_cpu].tolist()
             svob_true = svo_boundary_labels.detach().cpu()[si_cpu].tolist()
             role_true = role_labels.detach().cpu()[si_cpu].tolist()
+            role_coarse_true = role_coarse_labels.detach().cpu()[si_cpu].tolist()
             voice_true   = voice_labels.detach().cpu()[si_cpu].tolist()
             certainty_true = certainty_labels.detach().cpu()[si_cpu].tolist()
             gender_true  = gender_labels.detach().cpu()[si_cpu].tolist()
@@ -751,6 +755,7 @@ def run_epoch(
             f_true    = fine_labels.detach().cpu().tolist()
             svob_true = svo_boundary_labels.detach().cpu().tolist()
             role_true = role_labels.detach().cpu().tolist()
+            role_coarse_true = role_coarse_labels.detach().cpu().tolist()
             voice_true   = voice_labels.detach().cpu().tolist()
             certainty_true = certainty_labels.detach().cpu().tolist()
             gender_true  = gender_labels.detach().cpu().tolist()
@@ -775,6 +780,12 @@ def run_epoch(
 
         all_svob_true.extend(svob_true)
         all_svob_pred.extend(svob_pred)
+
+        # Role coarse metrics = spans avec role_coarse annoté (< ROLE_COARSE_NONE_ID)
+        for rct, rcp in zip(role_coarse_true, role_coarse_pred_raw):
+            if 0 <= rct < ROLE_COARSE_NONE_ID:
+                all_rc_true.append(rct)
+                all_rc_pred.append(rcp)
 
         # Fine metrics = POSITIVE ONLY
         for bt, ft, fp in zip(b_true, f_true, f_pred):
@@ -904,6 +915,10 @@ def run_epoch(
             labels=[l for l in FINE_ABSTRACT_IDS if l in set(all_f_true_pos)]
         ) if any(l in FINE_ABSTRACT_IDS for l in all_f_true_pos) else 0.0,
         "svo_boundary_f1": safe_macro_f1_local(all_svob_true, all_svob_pred),
+        "role_coarse_macro_f1": safe_macro_f1_local(
+            all_rc_true, all_rc_pred,
+            labels=[l for l in range(NUM_ROLE_COARSE) if l in set(all_rc_true)]
+        ) if all_rc_true else 0.0,
         "svo_macro_f1": safe_macro_f1_local(
             all_svo_true, all_svo_pred,
             labels=[l for l in range(NUM_ROLE) if l in set(all_svo_true)]
@@ -1667,6 +1682,8 @@ def main():
                 "train/fine_f1":        train_metrics["fine_macro_f1"],
                 "train/fine_concrete_f1": train_metrics["fine_concrete_f1"],
                 "train/fine_abstract_f1": train_metrics["fine_abstract_f1"],
+                "train/svo_boundary_f1": train_metrics["svo_boundary_f1"],
+                "train/role_coarse_f1": train_metrics["role_coarse_macro_f1"],
                 "train/svo_f1":         train_metrics["svo_macro_f1"],
                 "train/voice_f1":       train_metrics["voice_macro_f1"],
                 "train/certainty_f1":   train_metrics["certainty_macro_f1"],
@@ -1679,6 +1696,8 @@ def main():
                 "val/fine_f1":          val_metrics["fine_macro_f1"],
                 "val/fine_concrete_f1": val_metrics["fine_concrete_f1"],
                 "val/fine_abstract_f1": val_metrics["fine_abstract_f1"],
+                "val/svo_boundary_f1":  val_metrics["svo_boundary_f1"],
+                "val/role_coarse_f1":   val_metrics["role_coarse_macro_f1"],
                 "val/svo_f1":           val_metrics["svo_macro_f1"],
                 "val/voice_f1":         val_metrics["voice_macro_f1"],
                 "val/certainty_f1":     val_metrics["certainty_macro_f1"],
