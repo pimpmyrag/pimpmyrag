@@ -20,7 +20,7 @@ Qui lui-même lance run_adaptive_training.sh.
 import runpod, os, json, time, argparse
 
 # ── Config par défaut ─────────────────────────────────────────────────────────
-DEFAULT_GOLD_VERSION = "v8.18"  # ← seul endroit à mettre à jour entre versions
+DEFAULT_GOLD_VERSION = "v8.12"  # ← seul endroit à mettre à jour entre versions
 DEFAULT_BRANCH       = "main"   # branche ou SHA à cloner (surcharge avec --sha)
 DEFAULT_GPU_PRIORITY = [
     "NVIDIA GeForce RTX 3090",
@@ -103,17 +103,12 @@ def main():
         print(f"   {start_cmd}")
         return
 
-    # Kill les pods en cours (sauf si --no-kill)
+    # Kill les pods en cours UNIQUEMENT si --kill explicite
+    # Par défaut : on ne tue RIEN — runs parallèles conservés
     print("\n🔍 Vérification des pods en cours...")
     existing = runpod.get_pods()
     killed = []
-    if args.no_kill:
-        active = [p for p in existing if p.get("desiredStatus") in ("RUNNING", "PENDING")]
-        if active:
-            print(f"  ℹ️  --no-kill : {len(active)} pod(s) conservé(s) ({', '.join(p['id'] for p in active)})")
-        else:
-            print("  ✅ Aucun pod actif.")
-    else:
+    if args.kill:
         for p in existing:
             if p.get("desiredStatus") in ("RUNNING", "PENDING"):
                 print(f"  🛑 Kill {p['id']} ({p.get('name', '?')})...")
@@ -126,6 +121,11 @@ def main():
             print(f"  ✅ {len(killed)} pod(s) terminé(s), attente 5s...")
             time.sleep(5)
         else:
+            print("  ✅ Aucun pod actif à tuer.")
+    else:
+        active = [p for p in existing if p.get("desiredStatus") in ("RUNNING", "PENDING")]
+        if active:
+            print(f"  ℹ️  {len(active)} pod(s) conservé(s) (utilise --kill pour les terminer) : {', '.join(p['id'] for p in active)}")
             print("  ✅ Aucun pod actif.")
 
     # Création du pod
