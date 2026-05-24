@@ -71,7 +71,8 @@ def main():
     parser.add_argument("--gpu",          default=None,                 help="GPU à mettre en tête de liste (ex: 'RTX 4090')")
     parser.add_argument("--loss-weighting", default="fixed",            help="Stratégie loss weighting: fixed|uncertainty|gradnorm")
     parser.add_argument("--dry-run",      action="store_true",          help="Affiche la config sans lancer le pod")
-    parser.add_argument("--no-kill",      action="store_true",          help="Ne PAS tuer les pods existants (runs parallèles)")
+    parser.add_argument("--no-kill",      action="store_true",          help="[OBSOLÈTE — désormais comportement par défaut] Ne PAS tuer les pods existants")
+    parser.add_argument("--kill",          action="store_true",          help="Tuer explicitement les pods existants avant de lancer (DANGEREUX — à utiliser consciemment)")
     args = parser.parse_args()
 
     load_secrets()
