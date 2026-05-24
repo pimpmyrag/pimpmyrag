@@ -70,6 +70,9 @@ if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
         NUM_WORKERS=4
     fi
     export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+    # Pré-tokenisation faite avant le fork des DataLoader workers → désactiver le Rust parallèle HF
+    # pour éviter les deadlocks et supprimer le warning "parallelism has already been used"
+    export TOKENIZERS_PARALLELISM="false"
     export TORCHINDUCTOR_CACHE_DIR="/tmp/torch_inductor_cache"
     echo "🚀 Device: CUDA (BS=$BS×accum=$ACCUM, BF16, workers=$NUM_WORKERS, VRAM=${VRAM_GB}GB)"
 elif python3 -c "import torch; assert torch.backends.mps.is_available()" 2>/dev/null; then
