@@ -636,7 +636,7 @@ def run_epoch(
                     fine_class_weights=fine_class_weights,
                     role_class_weights=role_class_weights,
                     certainty_class_weights=certainty_class_weights,
-                    oblique_class_weights=oblique_w,
+                    oblique_class_weights=oblique_class_weights,
                     lambda_boundary=lambda_boundary,
                     lambda_coarse=lambda_coarse,
                     lambda_fine=lambda_fine,
