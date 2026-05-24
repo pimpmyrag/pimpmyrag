@@ -40,19 +40,20 @@ if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     #   <28GB  (3090/24)      → BS=48  accum=2  (BF16) → batch effectif=96, 312 steps/ep
     AMP_FLAG="--amp"
     COMPILE_FLAG=""
+    GRAD_CKPT_FLAG=""
     if [ "$VRAM_GB" -ge 70 ] 2>/dev/null; then
-        # H100 / A100 80GB : BS=192 (spans variables → pics VRAM ~40-50GB BF16)
-        # ⚠️  BS=384 testé → OOM (78GB utilisés, spans pooling coûteux)
-        # ⚠️  torch.compile désactivé pour DeBERTa-v3 : attention disentanglée incompatible avec
-        #     CUDA graphs (mode=reduce-overhead) → crash au 1er forward (opérations non-traçables).
-        #     La vérification est aussi faite dans train_multi_task.py (_is_deberta guard).
-        #     --compile est passé mais Python l'ignorera pour DeBERTa ; utile si le modèle change.
+        # H100 / A100 80GB : BS=320 avec gradient checkpointing
+        # BS=384 → OOM (78GB) ; BS=192 → 55% GPU util (sous-saturé)
+        # gradient_checkpointing : réduit VRAM activations encodeur ~30% → BS 192→320
+        # Overhead backward ~+15% largement compensé par le gain de débit.
+        # torch.compile désactivé : DeBERTa attention disentanglée incompatible CUDA graphs.
         # num_workers=8 : pods H100 ont 16+ cœurs CPU
-        BS=192
+        BS=320
         ACCUM=1
         NUM_WORKERS=8
         COMPILE_FLAG="--compile"
-        echo "🔥 H100/A100-80GB détecté → BS=$BS (torch.compile ignoré pour DeBERTa, BF16 actif)"
+        GRAD_CKPT_FLAG="--gradient-checkpointing"
+        echo "🔥 H100/A100-80GB détecté → BS=$BS + gradient checkpointing (torch.compile ignoré pour DeBERTa, BF16 actif)"
     elif [ "$VRAM_GB" -ge 40 ] 2>/dev/null; then
         # A100 40GB / L40S (48GB) : BS=192 safe (même formule, moitié VRAM)
         BS=192
@@ -491,6 +492,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --hn-min-weight 0.3 \
         --num-workers $NUM_WORKERS \
         $COMPILE_FLAG \
+        $GRAD_CKPT_FLAG \
         --loss-weighting $LOSS_WEIGHTING \
         $( [ "$NER_ONLY_BENCH" = "1" ] && echo "--ner-only-score" ) \
         --wandb-run-name  "$WANDB_RUN_NAME" \

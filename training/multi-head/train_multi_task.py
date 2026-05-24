@@ -1149,6 +1149,9 @@ def main():
     parser.add_argument("--compile", action="store_true",
                         help="torch.compile(model, dynamic=True) — +20-40%% sur H100/A100 (PyTorch 2.0+). "
                              "dynamic=True gère les shapes variables de spans entre batches.")
+    parser.add_argument("--gradient-checkpointing", action="store_true",
+                        help="Active gradient checkpointing sur l'encodeur — réduit VRAM activations ~30%% "
+                             "(recompute forward partiel pendant backward). Permet BS plus élevé sur H100.")
     parser.add_argument("--warmup-epochs", type=int, default=1,
                         help="Nombre d'epochs de linear warmup LR")
     parser.add_argument("--patience", type=int, default=5,
@@ -1349,7 +1352,7 @@ def main():
         pin_memory=pin_memory,
         num_workers=num_workers,
         persistent_workers=persistent,
-        prefetch_factor=2 if num_workers > 0 else None,
+        prefetch_factor=4 if num_workers > 0 else None,
     )
     val_loader = DataLoader(
         val_ds,
@@ -1359,7 +1362,7 @@ def main():
         pin_memory=pin_memory,
         num_workers=num_workers,
         persistent_workers=persistent,
-        prefetch_factor=2 if num_workers > 0 else None,
+        prefetch_factor=4 if num_workers > 0 else None,
     )
     test_loader = DataLoader(
         test_ds,
@@ -1369,11 +1372,18 @@ def main():
         pin_memory=pin_memory,
         num_workers=num_workers,
         persistent_workers=persistent,
-        prefetch_factor=2 if num_workers > 0 else None,
+        prefetch_factor=4 if num_workers > 0 else None,
     )
     print(f"📦 DataLoaders: num_workers={num_workers}, pin_memory={pin_memory}, persistent={persistent}")
 
     model = SpanMultiTaskModel(model_name=args.model_name, num_coarse=len(COARSE_LABELS)).to(device).float()
+
+    # Gradient checkpointing — réduit VRAM activations encodeur ~30% (recompute pendant backward)
+    # Permet d'aller BS=192→320 sur H100 sans OOM. Overhead backward ~+15% acceptable.
+    if getattr(args, "gradient_checkpointing", False):
+        model.encoder.gradient_checkpointing_enable()
+        print("🔖 Gradient checkpointing activé sur l'encodeur (économie VRAM ~30%)")
+
     total_epochs = args.epochs
 
     # torch.compile — +20-40% sur H100/A100 (PyTorch 2.0+, CUDA 12+)
