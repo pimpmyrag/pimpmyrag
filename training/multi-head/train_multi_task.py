@@ -1379,12 +1379,24 @@ def main():
     # torch.compile — +20-40% sur H100/A100 (PyTorch 2.0+, CUDA 12+)
     # dynamic=True : gère les shapes variables (candidats spans différents par batch)
     # mode="reduce-overhead" : réduit le overhead PyTorch sans fullgraph (plus stable)
+    # ⚠️  DeBERTa-v3 INCOMPATIBLE avec torch.compile :
+    #     - attention disentangled utilise des opérations CUDA custom non-traçables
+    #     - mode="reduce-overhead" (CUDA graphs) exige des shapes statiques → crash au 1er forward
+    #     - compile de DeBERTa dépasse 15min et ne converge pas
+    _is_deberta = "deberta" in args.model_name.lower()
     if getattr(args, "compile", False) and device == "cuda":
-        try:
-            model = torch.compile(model, dynamic=True, mode="reduce-overhead")
-            print("⚡ torch.compile activé (dynamic=True, mode=reduce-overhead)")
-        except Exception as e:
-            print(f"⚠️  torch.compile échoué ({e}) — run sans compile")
+        if _is_deberta:
+            print(
+                f"⚠️  torch.compile ignoré pour DeBERTa ({args.model_name}) — "
+                "attention disentangled incompatible avec CUDA graphs (mode=reduce-overhead). "
+                "Le gain BF16 + batch size élevé suffit sur H100/A100."
+            )
+        else:
+            try:
+                model = torch.compile(model, dynamic=True, mode="reduce-overhead")
+                print("⚡ torch.compile activé (dynamic=True, mode=reduce-overhead)")
+            except Exception as e:
+                print(f"⚠️  torch.compile échoué ({e}) — run sans compile")
 
     # AMP BF16 — pas de GradScaler nécessaire (BF16 garde la même dynamique que FP32)
     # Supporté nativement sur Ampere+ (RTX 3090/4090/5090, A100…)
@@ -1395,8 +1407,6 @@ def main():
     else:
         print("🔢 FP32 (AMP désactivé)")
 
-    # torch.compile désactivé pour DeBERTa (attention disentangled trop complexe → >15min compile)
-    # Le gain bf16 + BS plus grand suffit sur RTX 5090
 
     # Differential LR avec layer-wise decay
     head_lr = args.lr * args.head_lr_multiplier

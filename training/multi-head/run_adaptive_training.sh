@@ -42,13 +42,16 @@ if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     COMPILE_FLAG=""
     if [ "$VRAM_GB" -ge 70 ] 2>/dev/null; then
         # H100 / A100 80GB : BS=384 exploite la VRAM (modèle ~1.4GB params → ~8GB activ. BF16 BS=384)
-        # torch.compile + dynamic=True : +20-40% sur H100 Hopper (PyTorch 2.4 + CUDA 12.4)
+        # ⚠️  torch.compile désactivé pour DeBERTa-v3 : attention disentangled incompatible avec
+        #     CUDA graphs (mode=reduce-overhead) → crash au 1er forward (opérations non-traçables).
+        #     La vérification est aussi faite dans train_multi_task.py (_is_deberta guard).
+        #     --compile est passé mais Python l'ignorera pour DeBERTa ; utile si le modèle change.
         # num_workers=8 : pods H100 ont 16+ cœurs CPU
         BS=384
         ACCUM=1
         NUM_WORKERS=8
         COMPILE_FLAG="--compile"
-        echo "🔥 H100/A100-80GB détecté → BS=$BS, torch.compile activé"
+        echo "🔥 H100/A100-80GB détecté → BS=$BS (torch.compile ignoré pour DeBERTa, BF16 actif)"
     elif [ "$VRAM_GB" -ge 40 ] 2>/dev/null; then
         # A100 40GB / L40S (48GB) : BS=192 safe (même formule, moitié VRAM)
         BS=192
