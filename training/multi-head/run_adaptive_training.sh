@@ -42,18 +42,17 @@ if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     COMPILE_FLAG=""
     GRAD_CKPT_FLAG=""
     if [ "$VRAM_GB" -ge 70 ] 2>/dev/null; then
-        # H100 / A100 80GB : BS=320 avec gradient checkpointing
-        # BS=384 → OOM (78GB) ; BS=192 → 55% GPU util (sous-saturé)
-        # gradient_checkpointing : réduit VRAM activations encodeur ~30% → BS 192→320
-        # Overhead backward ~+15% largement compensé par le gain de débit.
+        # H100 / A100 80GB : BS=160 SANS gradient checkpointing
+        # Gradient checkpointing testé → 15% VRAM, backward recompute 12 couches DeBERTa séquentiel = lent
+        # Sans checkpointing : BS=192 → 78GB OOM ; BS=160 → ~65GB safe (+ expandable_segments évite fragmentation)
         # torch.compile désactivé : DeBERTa attention disentanglée incompatible CUDA graphs.
         # num_workers=8 : pods H100 ont 16+ cœurs CPU
-        BS=320
+        BS=160
         ACCUM=1
         NUM_WORKERS=8
         COMPILE_FLAG="--compile"
-        GRAD_CKPT_FLAG="--gradient-checkpointing"
-        echo "🔥 H100/A100-80GB détecté → BS=$BS + gradient checkpointing (torch.compile ignoré pour DeBERTa, BF16 actif)"
+        GRAD_CKPT_FLAG=""
+        echo "🔥 H100/A100-80GB détecté → BS=$BS sans gradient checkpointing (torch.compile ignoré pour DeBERTa, BF16 actif)"
     elif [ "$VRAM_GB" -ge 40 ] 2>/dev/null; then
         # A100 40GB / L40S (48GB) : BS=192 safe (même formule, moitié VRAM)
         BS=192
