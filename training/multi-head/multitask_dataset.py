@@ -17,29 +17,35 @@ class MultiTaskSpanDataset(Dataset):
             for line in Path(path).read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
-        self.tokenizer = tokenizer
         self.max_length = max_length
+
+        # Pré-tokenisation vectorisée en __init__ — évite la tokenisation répétée à chaque __getitem__
+        # Sur 31k phrases courtes (NER), batch_encode_plus est ~50x plus rapide que appels séquentiels.
+        # Élimine le bottleneck CPU/DataLoader qui plafonnait le GPU à ~17% VRAM utilisée.
+        print(f"📦 Pré-tokenisation de {len(self.rows)} phrases...", flush=True)
+        texts = [row["text"] for row in self.rows]
+        encodings = tokenizer.batch_encode_plus(
+            texts,
+            return_offsets_mapping=False,
+            add_special_tokens=True,
+            truncation=True,
+            max_length=max_length,
+        )
+        self.input_ids_list     = [torch.tensor(ids,  dtype=torch.long) for ids  in encodings["input_ids"]]
+        self.attention_mask_list = [torch.tensor(mask, dtype=torch.long) for mask in encodings["attention_mask"]]
+        print(f"✅ Pré-tokenisation terminée.", flush=True)
 
     def __len__(self):
         return len(self.rows)
 
     def __getitem__(self, idx):
         row = self.rows[idx]
-        text = row["text"]
 
-        enc = self.tokenizer(
-            text,
-            return_offsets_mapping=False,
-            add_special_tokens=True,
-            truncation=True,
-            max_length=self.max_length,
-        )
-
-        input_ids = enc["input_ids"]
-        attention_mask = enc["attention_mask"]
+        input_ids      = self.input_ids_list[idx]
+        attention_mask = self.attention_mask_list[idx]
 
         # Longueur réelle de la séquence tokenisée AVEC special tokens
-        seq_len = len(input_ids)
+        seq_len = input_ids.size(0)
 
         # Hypothèse standard BERT-like: [CLS] ... [SEP]
         # Les spans du builder sont calculés SANS special tokens.
@@ -70,34 +76,35 @@ class MultiTaskSpanDataset(Dataset):
                 continue
 
             candidates.append({
-                "tok_start":           ts + 1,
-                "tok_end":             te + 1,
-                "boundary_label":      c["boundary_label"],
-                "svo_boundary_label":  c.get("svo_boundary_label", 0),
-                "coarse_label_id":     c["coarse_label_id"],
-                "fine_label_id":       c["fine_label_id"],
-                "syn_label_id":        c.get("syn_label_id", c.get("svo_label_id", SYN_NONE_ID)),
-                "role_label_id":       c.get("role_label_id",
-                                           ROLE2ID.get(c.get("svo_role", ""), ROLE_NONE_ID)),
-                "role_coarse_label_id": c.get("role_coarse_label_id", ROLE_COARSE_NONE_ID),
+                "tok_start":             ts + 1,
+                "tok_end":               te + 1,
+                "boundary_label":        c["boundary_label"],
+                "svo_boundary_label":    c.get("svo_boundary_label", 0),
+                "coarse_label_id":       c["coarse_label_id"],
+                "fine_label_id":         c["fine_label_id"],
+                "syn_label_id":          c.get("syn_label_id", c.get("svo_label_id", SYN_NONE_ID)),
+                "role_label_id":         c.get("role_label_id",
+                                              ROLE2ID.get(c.get("svo_role", ""), ROLE_NONE_ID)),
+                "role_coarse_label_id":  c.get("role_coarse_label_id", ROLE_COARSE_NONE_ID),
                 "role_oblique_label_id": c.get("role_oblique_label_id", ROLE_OBLIQUE_NONE_ID),
-                "certainty_label_id":  c.get("certainty_label_id", CERTAINTY_NONE_ID),
-                "gender_label_id":     c.get("gender_label_id", GENDER_NONE_ID),
-                "number_label_id":     c.get("number_label_id", NUMBER_NONE_ID),
-                "person_label_id":     c.get("person_label_id", PERSON_NONE_ID),
+                "voice_label_id":        c.get("voice_label_id", VOICE_NONE_ID),   # FIX: était absent → VOICE_NONE_ID forcé même si JSON l'avait
+                "certainty_label_id":    c.get("certainty_label_id", CERTAINTY_NONE_ID),
+                "gender_label_id":       c.get("gender_label_id", GENDER_NONE_ID),
+                "number_label_id":       c.get("number_label_id", NUMBER_NONE_ID),
+                "person_label_id":       c.get("person_label_id", PERSON_NONE_ID),
                 # +1 décalage CLS ; -1 = non supervisé ; clamp à max_length-1 (bornes DeBERTa)
-                "gov_verb_tok_start":  min(c["gov_verb_tok_start"] + 1, self.max_length - 1)
-                                       if c.get("gov_verb_tok_start", -1) >= 0 else -1,
-                "mod_of_tok_start":    min(c["mod_of_tok_start"] + 1, self.max_length - 1)
-                                       if c.get("mod_of_tok_start", -1) >= 0 else -1,
-                "sample_weight":       c.get("sample_weight", 1.0),
-                "neg_type":            c.get("neg_type", "unknown"),
+                "gov_verb_tok_start":    min(c["gov_verb_tok_start"] + 1, self.max_length - 1)
+                                         if c.get("gov_verb_tok_start", -1) >= 0 else -1,
+                "mod_of_tok_start":      min(c["mod_of_tok_start"] + 1, self.max_length - 1)
+                                         if c.get("mod_of_tok_start", -1) >= 0 else -1,
+                "sample_weight":         c.get("sample_weight", 1.0),
+                "neg_type":              c.get("neg_type", "unknown"),
             })
 
         return {
             "id": row["id"],
-            "input_ids": torch.tensor(input_ids, dtype=torch.long),
-            "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
             "candidates": candidates,
             "invalid_candidate_count": invalid_count,
         }
