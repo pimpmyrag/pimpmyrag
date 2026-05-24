@@ -140,25 +140,29 @@ class SpanMultiTaskModel(nn.Module):
 
         N = span_h.size(0)
         if N > 0:
-            svo_probs = torch.softmax(svo_boundary_logits, dim=-1)[:, 1]  # [N]
+            # detach : le gradient NER ne doit pas remonter à travers la cascade SVO
+            svo_probs = torch.softmax(svo_boundary_logits.detach(), dim=-1)[:, 1]  # [N]
             starts = span_positions[:, 0]   # [N]
             ends   = span_positions[:, 1]   # [N]
-            # contains[i, j] = True si span j CONTIENT le span i (même phrase)
-            # (starts[j] <= starts[i]) AND (ends[j] >= ends[i]) AND (j != i) AND (même batch)
-            same_sent  = (span_batch_idx.unsqueeze(1) == span_batch_idx.unsqueeze(0))  # [N,N]
-            j_contains_i = (
-                (starts.unsqueeze(1) <= starts.unsqueeze(0)) &   # starts[j] <= starts[i]
-                (ends.unsqueeze(1)   >= ends.unsqueeze(0))   &   # ends[j]   >= ends[i]
-                same_sent &
-                ~torch.eye(N, dtype=torch.bool, device=span_h.device)
-            )  # [N, N]  j_contains_i[i, j] = True si j contient i
-            # Pour chaque span i : max SVO prob sur les spans conteneurs j
-            # Si aucun conteneur → 0.0 (pas de contexte SVO)
-            svo_probs_expanded = svo_probs.unsqueeze(0).expand(N, N)  # [N, N]
-            containing_svo = (svo_probs_expanded * j_contains_i.float()).max(dim=1).values  # [N]
-            # Injecte le contexte SVO dans la représentation NER (résidu léger)
-            svo_ctx = self.svo_context_proj(containing_svo.unsqueeze(-1))  # [N, H]
-            span_h_ner = span_h + svo_ctx
+            # Gate qualité : n'injecte le contexte SVO que si il y a un signal fort
+            # (max prob > 0.6) — évite d'injecter du bruit en début de training
+            svo_max_conf = svo_probs.max().item()
+            if svo_max_conf > 0.6:
+                # contains[i, j] = True si span j CONTIENT le span i (même phrase)
+                same_sent  = (span_batch_idx.unsqueeze(1) == span_batch_idx.unsqueeze(0))
+                j_contains_i = (
+                    (starts.unsqueeze(1) <= starts.unsqueeze(0)) &
+                    (ends.unsqueeze(1)   >= ends.unsqueeze(0))   &
+                    same_sent &
+                    ~torch.eye(N, dtype=torch.bool, device=span_h.device)
+                )
+                svo_probs_expanded = svo_probs.unsqueeze(0).expand(N, N)
+                containing_svo = (svo_probs_expanded * j_contains_i.float()).max(dim=1).values
+                svo_ctx = self.svo_context_proj(containing_svo.unsqueeze(-1))
+                span_h_ner = span_h + svo_ctx
+            else:
+                # SVO pas encore fiable → pas d'injection (évite le bruit early training)
+                span_h_ner = span_h
         else:
             span_h_ner = span_h
 
