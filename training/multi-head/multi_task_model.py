@@ -52,6 +52,7 @@ class SpanMultiTaskModel(nn.Module):
         self.boundary_head     = nn.Linear(span_hidden_dim, 2)
         self.coarse_head       = nn.Linear(span_hidden_dim, num_coarse)
         self.fine_head         = nn.Linear(span_hidden_dim, NUM_FINE)
+        num_fine = NUM_FINE  # utilisé pour ner_fine_to_oblique
 
         # Heads syntaxiques v4
         self.svo_boundary_head = nn.Linear(span_hidden_dim, 2)        # détecte verb_trigger/pron
@@ -59,8 +60,12 @@ class SpanMultiTaskModel(nn.Module):
         self.role_head         = nn.Linear(span_hidden_dim, NUM_ROLE)        # rôle SVO fin (12 labels)
         self.role_coarse_head  = nn.Linear(span_hidden_dim, NUM_ROLE_COARSE) # rôle SVO coarse SUBJ/OBJ/OBLIQ/APPOS
         # Tête oblique fine : classifie les sous-types d'oblique (uniquement si role_coarse=OBLIQ)
-        # Reçoit span_h + projection du coarse NER (signal sémantique sur le type d'entité)
-        self.ner_coarse_to_oblique = nn.Linear(num_coarse, span_hidden_dim, bias=False)
+        # Reçoit span_h + projection du FINE NER (38 labels) — plus discriminant que coarse (7 familles)
+        # Ex: hint_time_date/clock/duration → OBLIQUE_TIME ; hint_gpe/loc_generic/fac → OBLIQUE_LOC
+        # hint_doctrine/notion/field vs hint_org_name → OBLIQUE_DOMAIN vs OBLIQUE_AGENT
+        # Cohérent avec le dataset builder qui infère OBLIQUE_TIME/LOC depuis les labels NER fine.
+        # Timing OK : L_ROLE_OBLIQUE_NOW=0 jusqu'à ep26 (ramp role_progress) → bruit early epochs sans coût.
+        self.ner_fine_to_oblique = nn.Linear(num_fine, span_hidden_dim, bias=False)
         self.role_oblique_head = nn.Linear(span_hidden_dim, NUM_ROLE_OBLIQUE)
         self.voice_head        = nn.Linear(span_hidden_dim, NUM_VOICE)       # active/passive sur verb_trigger
         self.certainty_head    = nn.Linear(span_hidden_dim, NUM_CERTAINTY)   # certain/modal/denied
@@ -200,11 +205,11 @@ class SpanMultiTaskModel(nn.Module):
             "syn_logits":          self.syn_head(span_h),
             "role_logits":         self.role_head(span_h),
             "role_coarse_logits":  self.role_coarse_head(span_h),
-            # Tête oblique fine : span_h enrichi du signal NER coarse (détaché)
-            # Le type NER de l'entité (TIME/LOC/ORG…) aide à discriminer les sous-types obliques
+            # Tête oblique fine : span_h enrichi du signal NER fine détaché (38 labels)
+            # Cohérent avec dataset builder : OBLIQUE_TIME/LOC inférés depuis labels NER fine
             "role_oblique_logits": self.role_oblique_head(
-                span_h + self.ner_coarse_to_oblique(
-                    torch.softmax(self.coarse_head(span_h).detach(), dim=-1)
+                span_h + self.ner_fine_to_oblique(
+                    torch.softmax(self.fine_head(span_h_ner).detach(), dim=-1)
                 )
             ),
             "voice_logits":        self.voice_head(span_h),
