@@ -104,7 +104,10 @@ SVO_TRIGGER_BND=${SVO_TRIGGER_BND:-0.84}               # seuil boundary : relev�
 # corrèlent exactement avec ralentissement boundary : Δbnd 0.010→0.005→0.002→0.001
 # Chaque palier SVO vole du gradient boundary. En retardant le trigger à 0.84,
 # boundary a ~8 epochs de plus pour croître librement → cible 0.90+ avant premier palier SVO.
-SVO_TRIGGER_COARSE=${SVO_TRIGGER_COARSE:-0.87}         # seuil coarse  : confirme que l'encodeur est ancr
+SVO_TRIGGER_COARSE=${SVO_TRIGGER_COARSE:-0.82}         # seuil coarse : abaissé 0.87→0.82 (bndwarm)
+# Avec bndwarm, coarse reste à λ=0.05 jusqu'à boundary≥0.88 (~ep26) → coarse ~0.80 à ce moment.
+# À 0.87, le trigger ne se déclenche qu'après l'unlock + ramp (ep40+) → 100% SVO seulement ep58 (32ep cascade).
+# À 0.82, le trigger coïncide avec l'unlock (~ep26) → 100% SVO dès ep44 (46ep cascade, +14ep).
 SVO_TRIGGER_STEP_EPOCHS=${SVO_TRIGGER_STEP_EPOCHS:-6}  # +20% SVO tous les N epochs après trigger — réduit 12→6 : 100% SVO à ep24 (SVO boundary prouvée fiable dès ep20)
 # Comparaison : step=5 → voice effondrement @ 60%→80% ; step=8 → plateau boundary 0.874 ;
 # step=12 → 20%(ep0), 40%(ep12), 60%(ep24), 80%(ep36), 100%(ep48) — donne boundary plus de temps
@@ -143,7 +146,7 @@ L_COARSE=0.75     # Valeur CIBLE post-unlock (pendant phase boundary : L_COARSE_
 L_FINE=1.8        # Valeur CIBLE post-unlock (pendant phase boundary : L_FINE_WARMUP=0.15)
 # ── Phase boundary-first : coarse+fine démarrent bas, unlock progressif quand boundary >= seuil ─
 BND_UNLOCK_THRESHOLD=${BND_UNLOCK_THRESHOLD:-0.88}   # boundary cible avant de débloquer coarse+fine (0.88 : plateau observé ~ep26-28 sur bndwarm)
-BND_UNLOCK_RAMP_EPOCHS=${BND_UNLOCK_RAMP_EPOCHS:-15} # nb epochs pour ramper de warmup → valeurs cibles
+BND_UNLOCK_RAMP_EPOCHS=${BND_UNLOCK_RAMP_EPOCHS:-18} # relevé 15→18 : ramp plus douce coarse/fine → moins de dip boundary lors du déverrouillage
 L_COARSE_WARMUP=0.05   # lambda coarse pendant phase boundary (libère gradient encodeur)
 L_FINE_WARMUP=0.15     # lambda fine pendant phase boundary
 # FOCAL_FINE_GAMMA=0.0 : désactivé — CWP(0.5) seul suffit pour gérer le déséquilibre des classes fine.
@@ -258,7 +261,7 @@ echo "📊 Test source    : $TEST_SILVER ($(wc -l < "$TEST_SILVER") phrases)"   
 # ── Nom du run W&B — lisible et traçable ─────────────────────────────────────
 # Format : v6.3-deberta-bs160-RTX_5090-0503-1430
 TORCH_SHORT=$(python3 -c "import torch; v=torch.__version__.split('+')[0]; print('t'+''.join(v.split('.')[:2]))" 2>/dev/null || echo "t26")
-DATASET_VERSION="${GOLD_VERSION}-bndwarm-cf90-${TORCH_SHORT}"  # bndwarm=boundary-first(L=5), cf90=coarse+fine unlock@0.90, svo20+morpho dès ep1
+DATASET_VERSION="${GOLD_VERSION}-bndwarm-oblique-${TORCH_SHORT}"  # bndwarm=boundary-first(L=5), oblique=role_oblique head+cascade SVO→NER, svo_trigger_coarse=0.82
 GPU_SHORT=$(python3 -c "import torch; n=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'; print(n.replace('NVIDIA GeForce ','').replace(' ','_'))" 2>/dev/null || echo "gpu")
 WANDB_RUN_NAME="${DATASET_VERSION}-deberta-bs${BS}-${GPU_SHORT}-$(date +%m%d-%H%M)"
 WANDB_TAGS="${DATASET_VERSION},deberta-v3,fp32,adaptive"
