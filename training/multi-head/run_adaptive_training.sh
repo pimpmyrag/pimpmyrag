@@ -105,7 +105,7 @@ SVO_TRIGGER_BND=${SVO_TRIGGER_BND:-0.84}               # seuil boundary : relev�
 # Chaque palier SVO vole du gradient boundary. En retardant le trigger à 0.84,
 # boundary a ~8 epochs de plus pour croître librement → cible 0.90+ avant premier palier SVO.
 SVO_TRIGGER_COARSE=${SVO_TRIGGER_COARSE:-0.87}         # seuil coarse  : confirme que l'encodeur est ancr
-SVO_TRIGGER_STEP_EPOCHS=${SVO_TRIGGER_STEP_EPOCHS:-12} # +20% SVO tous les N epochs après trigger — relevé 8→12 : ramp plus lente
+SVO_TRIGGER_STEP_EPOCHS=${SVO_TRIGGER_STEP_EPOCHS:-6}  # +20% SVO tous les N epochs après trigger — réduit 12→6 : 100% SVO à ep24 (SVO boundary prouvée fiable dès ep20)
 # Comparaison : step=5 → voice effondrement @ 60%→80% ; step=8 → plateau boundary 0.874 ;
 # step=12 → 20%(ep0), 40%(ep12), 60%(ep24), 80%(ep36), 100%(ep48) — donne boundary plus de temps
 
@@ -166,18 +166,13 @@ L_SVO_BOUNDARY=0.20   # Réduit 0.50→0.20 : svo_boundary_head couvre verb_trig
 # entités (SUBJECT/OBJECT) sont DÉJÀ supervisés par boundary_head (NER) → redondance partielle.
 # svo_boundary_head reste utile uniquement pour les verb_trigger spans (non-NER).
 # Libère ~0.30 de budget encodeur → profite à NER boundary.
-L_SVO=0.50            # Labels SVO (syn heads) — inchangé, supervise verb_trigger/pron_subj/pron_obj
-L_ROLE=0.15           # Réduit 0.35→0.15 : role_mask ~200k spans/ep
-L_ROLE_COARSE=0.08    # Role coarse SUBJ/OBJ/OBLIQ/OTHER — force la discrimination large avant les sous-types
-L_VOICE=0.13        # Retour valeur v8.0 (0.20 trop fort → siphonnait gradient NER boundary)
-L_CERTAINTY=0.30      # Relevé 0.12→0.30 : certainty=0.563 à ep32 (Δ=+0.007/ep →≥20ep de plus pour converger)
-# À 40% SVO (ep32) L_CERTAINTY_NOW=0.048 était trop faible ; 0.30×40%=0.12 dès le milieu de ramp.
-# Tête auxiliaire (silver), risque boundary minimal.
-# lms8mkna : certainty=0.563 à ep32 (fin training), Δ=+0.007/ep → besoin ~20ep de plus
-# 0.12 = 2.4x plus de gradient, impact boundary minimal (tête auxiliaire silver)
-L_MORPHO=0.10         # Gender/Number/Person — calibré pour coverage v8.1 (77% vs 43% v8.0 → gradient ×1.8x)
-L_VERB_PTR=0.45       # Relevé 0.25→0.45 : verb_ptr=0.729 à ep32 (besoin ~11ep pour 0.80) mais SVO encore à 40% → L_VPTR_NOW=0.10 trop faible
-# 0.45×40%=0.18 à ep32 (vs 0.10 avant) ; 0.45×100%=0.45 en plein régime — convergence plus rapide
+L_SVO=0.70            # Relevé 0.50→0.70 : SVO boundary prouvée fiable (0.889), SVO mérite plus de gradient
+L_ROLE=0.25           # Relevé 0.15→0.25 : clé pour les structures verb-slot
+L_ROLE_COARSE=0.08    # Role coarse SUBJ/OBJ/OBLIQ/OTHER — inchangé
+L_VOICE=0.13          # Inchangé
+L_CERTAINTY=0.30      # Inchangé
+L_MORPHO=0.10         # Inchangé
+L_VERB_PTR=0.60       # Relevé 0.45→0.60 : verb pointer = lien fondamental span→verbe pour le RAG
 ROLE_DELAY=${ROLE_DELAY:-0}  # 0 = dmarre ds ep 1 (training doux toutes ttes simultanes ; ancienne valeur 12)
 
 # Reprise: START_LEVEL=1 START_EPOCH=13 KEEP_CHECKPOINT=1 ./run_adaptive_training.sh
