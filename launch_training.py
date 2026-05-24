@@ -23,17 +23,22 @@ import runpod, os, json, time, argparse
 DEFAULT_GOLD_VERSION = "v8.12"  # ← seul endroit à mettre à jour entre versions
 DEFAULT_BRANCH       = "main"   # branche ou SHA à cloner (surcharge avec --sha)
 DEFAULT_GPU_PRIORITY = [
-    "NVIDIA GeForce RTX 3090",
-    "NVIDIA GeForce RTX 3090 Ti",
-    "NVIDIA GeForce RTX 4090",
-    "NVIDIA RTX A5000",
-    "NVIDIA RTX A6000",
-    "NVIDIA A40",
-    "NVIDIA A100-SXM4-40GB",
+    # Classé par ratio qualité/prix pour ce training (DeBERTa-v3-base, ~31K phrases, 90ep)
+    # RTX 4090  : 2.5x plus rapide que 3090, moins cher en absolu (~$3.20 vs ~$5.10/run)
+    # H100 SXM  : 10x plus rapide, ~$4.20/run — meilleur pour itération rapide
+    "NVIDIA GeForce RTX 4090",       # ~4-5 min/ep  $0.49/hr → ~$3.20 total  ← MEILLEUR RATIO
+    "NVIDIA H100 80GB HBM3",         # ~45-60s/ep   $3.49/hr → ~$4.20 total  (SXM, compile+BS=384)
+    "NVIDIA H100 PCIe",              # ~1-1.5 min/ep $2.99/hr → ~$4.50 total (80GB, BS=384)
+    "NVIDIA L40S",                   # ~3-4 min/ep  $0.75/hr → ~$3.75 total  (48GB, BS=192)
+    "NVIDIA A100-SXM4-80GB",         # ~1.5-2 min/ep $1.99/hr → ~$5.00 total (BS=384)
     "NVIDIA A100 80GB PCIe",
-    "NVIDIA A100-SXM4-80GB",
+    "NVIDIA A100-SXM4-40GB",         # ~2.5-3 min/ep $1.39/hr → ~$5.56 total (BS=192)
+    "NVIDIA RTX A6000",              # 48GB, proche L40S
+    "NVIDIA GeForce RTX 3090 Ti",
+    "NVIDIA GeForce RTX 3090",       # fallback — 10 min/ep, ~$5.10 total
+    "NVIDIA RTX A5000",
+    "NVIDIA A40",
     "NVIDIA RTX 4000 Ada Generation",
-    "NVIDIA L40S",
 ]
 REPO_URL   = "https://github.com/pimpmyrag/pimpmyrag.git"
 IMAGE_NAME = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"

@@ -39,23 +39,31 @@ if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     #   28-40GB (5090/32)     → BS=96  accum=1  (BF16)
     #   <28GB  (3090/24)      → BS=48  accum=2  (BF16) → batch effectif=96, 312 steps/ep
     AMP_FLAG="--amp"
+    COMPILE_FLAG=""
     if [ "$VRAM_GB" -ge 70 ] 2>/dev/null; then
-        # A100 80GB : exploiter la VRAM (BS=96 = ~15% util → ~8x sous-utilisé)
-        # BS=192 → ~30% VRAM, ~2x throughput, clock bas A100 compensé par volume
+        # H100 / A100 80GB : BS=384 exploite la VRAM (modèle ~1.4GB params → ~8GB activ. BF16 BS=384)
+        # torch.compile + dynamic=True : +20-40% sur H100 Hopper (PyTorch 2.4 + CUDA 12.4)
+        # num_workers=8 : pods H100 ont 16+ cœurs CPU
+        BS=384
+        ACCUM=1
+        NUM_WORKERS=8
+        COMPILE_FLAG="--compile"
+        echo "🔥 H100/A100-80GB détecté → BS=$BS, torch.compile activé"
+    elif [ "$VRAM_GB" -ge 40 ] 2>/dev/null; then
+        # A100 40GB / L40S (48GB) : BS=192 safe (même formule, moitié VRAM)
         BS=192
         ACCUM=1
-    elif [ "$VRAM_GB" -ge 40 ] 2>/dev/null; then
-        BS=96
-        ACCUM=1
+        NUM_WORKERS=6
     elif [ "$VRAM_GB" -ge 28 ] 2>/dev/null; then
         BS=96
         ACCUM=1
+        NUM_WORKERS=4
     else
-        # RTX 3090 / 4090 24 GB — BF16 permet BS=48 avec 2× accum = 96 effectif
+        # RTX 3090 / 4090 24GB — BF16 permet BS=48 avec 2× accum = 96 effectif
         BS=48
         ACCUM=2
+        NUM_WORKERS=4
     fi
-    NUM_WORKERS=4
     export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
     export TORCHINDUCTOR_CACHE_DIR="/tmp/torch_inductor_cache"
     echo "🚀 Device: CUDA (BS=$BS×accum=$ACCUM, BF16, workers=$NUM_WORKERS, VRAM=${VRAM_GB}GB)"
@@ -478,6 +486,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --hn-max-weight 8.0 \
         --hn-min-weight 0.3 \
         --num-workers $NUM_WORKERS \
+        $COMPILE_FLAG \
         --loss-weighting $LOSS_WEIGHTING \
         $( [ "$NER_ONLY_BENCH" = "1" ] && echo "--ner-only-score" ) \
         --wandb-run-name  "$WANDB_RUN_NAME" \

@@ -1146,6 +1146,9 @@ def main():
                         help="Decay LR par couche (1.0=désactivé, 0.9=recommandé)")
     parser.add_argument("--ema-decay", type=float, default=0.999,
                         help="Decay EMA (0.0=désactivé, 0.999=recommandé)")
+    parser.add_argument("--compile", action="store_true",
+                        help="torch.compile(model, dynamic=True) — +20-40%% sur H100/A100 (PyTorch 2.0+). "
+                             "dynamic=True gère les shapes variables de spans entre batches.")
     parser.add_argument("--warmup-epochs", type=int, default=1,
                         help="Nombre d'epochs de linear warmup LR")
     parser.add_argument("--patience", type=int, default=5,
@@ -1372,6 +1375,16 @@ def main():
 
     model = SpanMultiTaskModel(model_name=args.model_name, num_coarse=len(COARSE_LABELS)).to(device).float()
     total_epochs = args.epochs
+
+    # torch.compile — +20-40% sur H100/A100 (PyTorch 2.0+, CUDA 12+)
+    # dynamic=True : gère les shapes variables (candidats spans différents par batch)
+    # mode="reduce-overhead" : réduit le overhead PyTorch sans fullgraph (plus stable)
+    if getattr(args, "compile", False) and device == "cuda":
+        try:
+            model = torch.compile(model, dynamic=True, mode="reduce-overhead")
+            print("⚡ torch.compile activé (dynamic=True, mode=reduce-overhead)")
+        except Exception as e:
+            print(f"⚠️  torch.compile échoué ({e}) — run sans compile")
 
     # AMP BF16 — pas de GradScaler nécessaire (BF16 garde la même dynamique que FP32)
     # Supporté nativement sur Ampere+ (RTX 3090/4090/5090, A100…)
