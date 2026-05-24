@@ -276,12 +276,13 @@ ROLE_COARSE_LABELS = [
     "SUBJ",   # 0  ← SUBJECT
     "OBJ",    # 1  ← OBJECT
     "OBLIQ",  # 2  ← OBLIQUE + tous les OBLIQUE_* collapsés
-    "OTHER",  # 3  ← APPOS
+    "APPOS",  # 3  ← APPOS (relation appositionnelle explicite)
+    "OTHER",  # 4  ← spans NER gold sans svo_role annoté (entité hors argument explicite)
 ]
 ROLE_COARSE2ID      = {x: i for i, x in enumerate(ROLE_COARSE_LABELS)}
 ID2ROLE_COARSE      = {i: x for x, i in ROLE_COARSE2ID.items()}
 NUM_ROLE_COARSE     = len(ROLE_COARSE_LABELS)
-ROLE_COARSE_NONE_ID = NUM_ROLE_COARSE  # = 4  (sentinel : NONE + inconnu)
+ROLE_COARSE_NONE_ID = NUM_ROLE_COARSE  # = 5  (sentinel : spans négatifs, verb_trigger, inconnu)
 
 # Mapping fine_role_id → coarse_role_id  (construit à partir de ROLE_LABELS)
 _RC = ROLE_COARSE2ID
@@ -296,9 +297,47 @@ ROLE_FINE_TO_COARSE_ID: dict[int, int] = {
     ROLE2ID["OBLIQUE_COMITATIVE"]: _RC["OBLIQ"],
     ROLE2ID["OBLIQUE_DOMAIN"]:     _RC["OBLIQ"],
     ROLE2ID["OBLIQUE_SOURCE"]:     _RC["OBLIQ"],
-    ROLE2ID["APPOS"]:              _RC["OTHER"],
-    ROLE2ID["NONE"]:               ROLE_COARSE_NONE_ID,  # sentinel
+    ROLE2ID["APPOS"]:              _RC["APPOS"],
+    ROLE2ID["NONE"]:               _RC["OTHER"],  # NER gold sans svo_role → OTHER (pas sentinel!)
 }
+
+# ─────────────────────────────────────────────────────────────
+# ROLE OBLIQUE FINE  (tête fine conditionnée sur OBLIQ coarse)
+# Supervise uniquement les spans où role_coarse = OBLIQ
+# ─────────────────────────────────────────────────────────────
+ROLE_OBLIQUE_LABELS = [
+    "OBLIQUE",              # 0  oblique générique (sous-type non spécifié)
+    "OBLIQUE_AGENT",        # 1  agent de passif ("par la France", "de la part de…")
+    "OBLIQUE_CAUSE",        # 2  cause ("en raison de", "suite à…")
+    "OBLIQUE_ADVERSARY",    # 3  adversaire ("contre", "face à…")
+    "OBLIQUE_BENEFICIARY",  # 4  bénéficiaire ("pour", "en faveur de…")
+    "OBLIQUE_COMITATIVE",   # 5  comitatif ("avec", "aux côtés de…")
+    "OBLIQUE_DOMAIN",       # 6  domaine / thème ("sur", "concernant…")
+    "OBLIQUE_SOURCE",       # 7  source épistémique ("selon", "d'après…")
+    "OBLIQUE_TIME",         # 8  NEW — inféré de hint_time_* en position oblique
+    "OBLIQUE_LOC",          # 9  NEW — inféré de hint_loc_*/hint_gpe/hint_fac_name en oblique
+]
+ROLE_OBLIQUE2ID      = {x: i for i, x in enumerate(ROLE_OBLIQUE_LABELS)}
+ID2ROLE_OBLIQUE      = {i: x for x, i in ROLE_OBLIQUE2ID.items()}
+NUM_ROLE_OBLIQUE     = len(ROLE_OBLIQUE_LABELS)
+ROLE_OBLIQUE_NONE_ID = NUM_ROLE_OBLIQUE  # = 10 (sentinel : non-oblique ou non supervisé)
+
+# Mapping role fine → oblique fine id (pour les spans OBLIQUE_*)
+ROLE_TO_OBLIQUE_ID: dict[int, int] = {
+    ROLE2ID["OBLIQUE"]:            ROLE_OBLIQUE2ID["OBLIQUE"],
+    ROLE2ID["OBLIQUE_AGENT"]:      ROLE_OBLIQUE2ID["OBLIQUE_AGENT"],
+    ROLE2ID["OBLIQUE_CAUSE"]:      ROLE_OBLIQUE2ID["OBLIQUE_CAUSE"],
+    ROLE2ID["OBLIQUE_ADVERSARY"]:  ROLE_OBLIQUE2ID["OBLIQUE_ADVERSARY"],
+    ROLE2ID["OBLIQUE_BENEFICIARY"]:ROLE_OBLIQUE2ID["OBLIQUE_BENEFICIARY"],
+    ROLE2ID["OBLIQUE_COMITATIVE"]: ROLE_OBLIQUE2ID["OBLIQUE_COMITATIVE"],
+    ROLE2ID["OBLIQUE_DOMAIN"]:     ROLE_OBLIQUE2ID["OBLIQUE_DOMAIN"],
+    ROLE2ID["OBLIQUE_SOURCE"]:     ROLE_OBLIQUE2ID["OBLIQUE_SOURCE"],
+    # OBLIQUE_TIME et OBLIQUE_LOC inférés dans build_multitask_dataset.py via NER label
+}
+
+# Labels NER qui permettent d'inférer le type oblique
+NER_TIME_LABELS = {"hint_time_date", "hint_time_clock", "hint_time_duration"}
+NER_LOC_LABELS  = {"hint_loc_generic", "hint_gpe", "hint_fac_name", "hint_infra"}
 
 # ─────────────────────────────────────────────────────────────
 # VOICE LABELS  (prédit sur les verb_trigger)

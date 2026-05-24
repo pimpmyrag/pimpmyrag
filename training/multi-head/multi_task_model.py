@@ -8,6 +8,7 @@ from transformers import AutoModel
 from labels import (
     NUM_FINE, NUM_SYN, NUM_ROLE, NUM_VOICE, NUM_CERTAINTY,
     NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID,
+    NUM_ROLE_OBLIQUE, ROLE_OBLIQUE_NONE_ID,
     NUM_GENDER, NUM_NUMBER, NUM_PERSON,
     SYN_NONE_ID, ROLE_NONE_ID, VOICE_NONE_ID, CERTAINTY_NONE_ID,
     COARSE_NONE_ID,
@@ -56,7 +57,11 @@ class SpanMultiTaskModel(nn.Module):
         self.svo_boundary_head = nn.Linear(span_hidden_dim, 2)        # détecte verb_trigger/pron
         self.syn_head          = nn.Linear(span_hidden_dim, NUM_SYN)  # verb_trigger/pron_subj/pron_obj
         self.role_head         = nn.Linear(span_hidden_dim, NUM_ROLE)        # rôle SVO fin (12 labels)
-        self.role_coarse_head  = nn.Linear(span_hidden_dim, NUM_ROLE_COARSE) # rôle SVO coarse SUBJ/OBJ/OBLIQ/OTHER
+        self.role_coarse_head  = nn.Linear(span_hidden_dim, NUM_ROLE_COARSE) # rôle SVO coarse SUBJ/OBJ/OBLIQ/APPOS
+        # Tête oblique fine : classifie les sous-types d'oblique (uniquement si role_coarse=OBLIQ)
+        # Reçoit span_h + projection du coarse NER (signal sémantique sur le type d'entité)
+        self.ner_coarse_to_oblique = nn.Linear(num_coarse, span_hidden_dim, bias=False)
+        self.role_oblique_head = nn.Linear(span_hidden_dim, NUM_ROLE_OBLIQUE)
         self.voice_head        = nn.Linear(span_hidden_dim, NUM_VOICE)       # active/passive sur verb_trigger
         self.certainty_head    = nn.Linear(span_hidden_dim, NUM_CERTAINTY)   # certain/modal/denied
 
@@ -195,6 +200,13 @@ class SpanMultiTaskModel(nn.Module):
             "syn_logits":          self.syn_head(span_h),
             "role_logits":         self.role_head(span_h),
             "role_coarse_logits":  self.role_coarse_head(span_h),
+            # Tête oblique fine : span_h enrichi du signal NER coarse (détaché)
+            # Le type NER de l'entité (TIME/LOC/ORG…) aide à discriminer les sous-types obliques
+            "role_oblique_logits": self.role_oblique_head(
+                span_h + self.ner_coarse_to_oblique(
+                    torch.softmax(self.coarse_head(span_h).detach(), dim=-1)
+                )
+            ),
             "voice_logits":        self.voice_head(span_h),
             "certainty_logits":    self.certainty_head(span_h),
             "gender_logits":       self.gender_head(span_h),

@@ -16,6 +16,8 @@ from labels import (
     SYN2ID, SYN_NONE_ID, ALL_SYN_LABELS,
     ROLE2ID, ROLE_NONE_ID,
     ROLE_FINE_TO_COARSE_ID, ROLE_COARSE_NONE_ID,
+    ROLE_TO_OBLIQUE_ID, ROLE_OBLIQUE2ID, ROLE_OBLIQUE_NONE_ID,
+    NER_TIME_LABELS, NER_LOC_LABELS,
     VOICE2ID, VOICE_NONE_ID,
     CERTAINTY2ID, CERTAINTY_NONE_ID,
     GENDER2ID, GENDER_NONE_ID,
@@ -137,6 +139,7 @@ def build_gold_candidates(row, tokenizer):
                 "syn_label_id":        syn_id,
                 "role_label_id":       role_id,
                 "role_coarse_label_id": role_coarse_id,
+                "role_oblique_label_id": ROLE_OBLIQUE_NONE_ID,  # syn spans = non-oblique
                 "certainty_label_id":  certainty_id,
                 "gender_label_id":     GENDER2ID.get(sp.get("gender"), GENDER_NONE_ID),
                 "number_label_id":     NUMBER2ID.get(sp.get("number"), NUMBER_NONE_ID),
@@ -162,7 +165,25 @@ def build_gold_candidates(row, tokenizer):
 
         # Rôle SVO annoté sur ce span NER
         role_id = ROLE2ID.get(sp.get("svo_role", "NONE"), ROLE_NONE_ID)
+        # NER gold sans svo_role → OTHER (entité hors argument annoté, pas sentinel)
+        # ROLE_FINE_TO_COARSE_ID mappe NONE→OTHER pour les spans NER gold
         role_coarse_id = ROLE_FINE_TO_COARSE_ID.get(role_id, ROLE_COARSE_NONE_ID)
+
+        # Rôle oblique fin (tête hiérarchique, maskée aux spans OBLIQ coarse)
+        # Auto-inférence depuis le label NER quand svo_role=OBLIQUE générique
+        svo_role_str = sp.get("svo_role", "NONE") or "NONE"
+        if role_id in ROLE_TO_OBLIQUE_ID:
+            role_oblique_id = ROLE_TO_OBLIQUE_ID[role_id]
+        elif svo_role_str == "OBLIQUE":
+            # Inférence depuis le type NER
+            if label in NER_TIME_LABELS:
+                role_oblique_id = ROLE_OBLIQUE2ID["OBLIQUE_TIME"]
+            elif label in NER_LOC_LABELS:
+                role_oblique_id = ROLE_OBLIQUE2ID["OBLIQUE_LOC"]
+            else:
+                role_oblique_id = ROLE_OBLIQUE2ID["OBLIQUE"]
+        else:
+            role_oblique_id = ROLE_OBLIQUE_NONE_ID  # non-oblique
 
         # Pointeur vers le verbe gouverneur
         gov_verb_tok_start = -1
@@ -192,6 +213,7 @@ def build_gold_candidates(row, tokenizer):
             "syn_label_id":        SYN_NONE_ID,
             "role_label_id":       role_id,
             "role_coarse_label_id": role_coarse_id,
+            "role_oblique_label_id": role_oblique_id,
             "voice_label_id":      VOICE_NONE_ID,
             "certainty_label_id":  CERTAINTY_NONE_ID,
             "gender_label_id":     GENDER2ID.get(sp.get("gender"), GENDER_NONE_ID),
@@ -224,6 +246,7 @@ def _make_negative(neg_type: str, char_start: int, char_end: int,
         "syn_label_id":        SYN_NONE_ID,
         "role_label_id":       ROLE_NONE_ID,
         "role_coarse_label_id": ROLE_COARSE_NONE_ID,
+        "role_oblique_label_id": ROLE_OBLIQUE_NONE_ID,
         "voice_label_id":      VOICE_NONE_ID,
         "certainty_label_id":  CERTAINTY_NONE_ID,
         "gender_label_id":     GENDER_NONE_ID,
