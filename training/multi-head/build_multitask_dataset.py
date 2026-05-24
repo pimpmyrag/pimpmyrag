@@ -140,6 +140,7 @@ def build_gold_candidates(row, tokenizer):
                 "role_label_id":       role_id,
                 "role_coarse_label_id": role_coarse_id,
                 "role_oblique_label_id": ROLE_OBLIQUE_NONE_ID,  # syn spans = non-oblique
+                "voice_label_id":      voice_id,     # FIX: était absent → VOICE_NONE_ID forcé
                 "certainty_label_id":  certainty_id,
                 "gender_label_id":     GENDER2ID.get(sp.get("gender"), GENDER_NONE_ID),
                 "number_label_id":     NUMBER2ID.get(sp.get("number"), NUMBER_NONE_ID),
