@@ -231,6 +231,7 @@ if [ "$NER_ONLY_BENCH" = "1" ]; then
     L_SVO=0.0
     L_ROLE=0.0
     L_ROLE_COARSE=0.0
+    L_ROLE_OBLIQUE=0.0
     L_VOICE=0.0
     L_CERTAINTY=0.0
     L_MORPHO=0.0
@@ -362,6 +363,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         L_SVO_NOW=0.0000
         L_ROLE_NOW=0.0000
         L_ROLE_COARSE_NOW=0.0000
+        L_ROLE_OBLIQUE_NOW=0.0000
         L_VOICE_NOW=0.0000
         L_CERTAINTY_NOW=0.0000
         L_MORPHO_NOW=0.0000
@@ -397,6 +399,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         role_progress=$(python3 -c "print(min(1.0, max(0.0, $role_ramp_epoch / $SVO_RAMP_EPOCHS)))")
         L_ROLE_NOW=$(python3  -c "print(f'{$L_ROLE * $role_progress:.4f}')")
         L_ROLE_COARSE_NOW=$(python3 -c "print(f'{$L_ROLE_COARSE * $role_progress:.4f}')")
+        L_ROLE_OBLIQUE_NOW=$(python3 -c "print(f'{$L_ROLE_OBLIQUE * $role_progress:.4f}')")
         L_VOICE_NOW=$(python3 -c "print(f'{$L_VOICE      * $svo_progress:.4f}')")
         L_CERTAINTY_NOW=$(python3 -c "print(f'{$L_CERTAINTY * $svo_progress:.4f}')")
         # Morpho ramp : démarre MORPHO_DELAY epochs après la fin du warmup, epoch-based
@@ -422,7 +425,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         else
             echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE_NOW  fine=$L_FINE_NOW  🔓(ramp ${cf_ramp_epoch}/${BND_UNLOCK_RAMP_EPOCHS})" | tee -a $log_file
         fi
-        echo "      SVO  : svo_boundary=$L_SVO_B_NOW  svo=$L_SVO_NOW  role=$L_ROLE_NOW  voice=$L_VOICE_NOW  certainty=$L_CERTAINTY_NOW  morpho=$L_MORPHO_NOW  verb_ptr=$L_VPTR_NOW" | tee -a $log_file
+        echo "      SVO  : svo_boundary=$L_SVO_B_NOW  svo=$L_SVO_NOW  role=$L_ROLE_NOW  role_coarse=$L_ROLE_COARSE_NOW  role_oblique=$L_ROLE_OBLIQUE_NOW  voice=$L_VOICE_NOW  certainty=$L_CERTAINTY_NOW  morpho=$L_MORPHO_NOW  verb_ptr=$L_VPTR_NOW" | tee -a $log_file
     fi
 
     python3 train_multi_task.py \
@@ -446,7 +449,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lambda-svo        $L_SVO_NOW \
         --lambda-role       $L_ROLE_NOW \
         --lambda-role-coarse $L_ROLE_COARSE_NOW \
-        --lambda-role-oblique $L_ROLE_OBLIQUE \
+        --lambda-role-oblique $L_ROLE_OBLIQUE_NOW \
         --lambda-voice      $L_VOICE_NOW \
         --lambda-certainty  $L_CERTAINTY_NOW \
         --lambda-morpho     $L_MORPHO_NOW \
@@ -467,6 +470,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --hn-boost-fine 3.0 \
         --hn-boost-fp-svo $( [ "$NER_ONLY_BENCH" = "1" ] || [ "$in_warmup" = "1" ] && echo "0.0" || echo "3.0" ) \
         --hn-boost-fn-svo $( [ "$NER_ONLY_BENCH" = "1" ] || [ "$in_warmup" = "1" ] && echo "0.0" || echo "2.0" ) \
+        --hn-boost-role-coarse 1.5 \
         --hn-decay 0.85 \
         --hn-max-weight 8.0 \
         --hn-min-weight 0.3 \

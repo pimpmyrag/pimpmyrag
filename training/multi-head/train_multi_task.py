@@ -891,7 +891,15 @@ def run_epoch(
                 else:
                     svo_b_err = None
 
-                raw_results[in_idx] = (err, pred_coarse, pred_fine, svo_b_err)
+                # Role coarse mining : erreur sur SUBJ/OBJ/OBLIQ annoté
+                # → la cascade SVO→NER dépend de la qualité des rôles coarse
+                rcp_i = role_coarse_pred_raw[out_idx]; rct_i = role_coarse_true[out_idx]
+                if 0 <= rct_i < ROLE_COARSE_NONE_ID and rcp_i != rct_i:
+                    role_coarse_err = "ROLE_COARSE_ERR"
+                else:
+                    role_coarse_err = None
+
+                raw_results[in_idx] = (err, pred_coarse, pred_fine, svo_b_err, role_coarse_err)
 
             per_row: dict[int, list] = defaultdict(list)
             for in_idx, bi in enumerate(pos_map):
@@ -1043,8 +1051,8 @@ def apply_inline_hn(
                 stats["decayed"] += 1
                 continue
 
-            err, pred_coarse, pred_fine, svo_b_err = entry
-            if err is None and svo_b_err is None:
+            err, pred_coarse, pred_fine, svo_b_err, role_coarse_err = entry if len(entry) == 5 else (*entry, None)
+            if err is None and svo_b_err is None and role_coarse_err is None:
                 w = c.get("sample_weight", 1.0)
                 c["sample_weight"] = max(min_weight, 1.0 + (w - 1.0) * decay)
                 stats["decayed"] += 1
@@ -1065,6 +1073,12 @@ def apply_inline_hn(
                     if "neg_type" not in c or c.get("neg_type") == "unknown":
                         c["neg_type"] = svo_b_err
                     stats[svo_b_err] += 1
+                if role_coarse_err is not None:
+                    rc_base = boosts.get(role_coarse_err, 1.5)
+                    new_w *= rc_base
+                    if "neg_type" not in c or c.get("neg_type") == "unknown":
+                        c["neg_type"] = role_coarse_err
+                    stats[role_coarse_err] += 1
                 c["sample_weight"] = min(max_weight, new_w)
 
     return dict(stats)
@@ -1202,6 +1216,8 @@ def main():
                         help="Boost FP_SVO_BOUNDARY : span prédit verbe/pronom mais pas gold (défaut=3.0)")
     parser.add_argument("--hn-boost-fn-svo",  type=float, default=2.0,
                         help="Boost FN_SVO_BOUNDARY : span gold verbe/pronom non détecté (défaut=2.0)")
+    parser.add_argument("--hn-boost-role-coarse", type=float, default=1.5,
+                        help="Boost ROLE_COARSE_ERR : erreur SUBJ/OBJ/OBLIQ — modéré car signal cascade SVO→NER (défaut=1.5)")
     parser.add_argument("--hn-decay",        type=float, default=0.85,
                         help="Décroissance des poids bien prédits (défaut=0.85)")
     parser.add_argument("--hn-max-weight",   type=float, default=8.0,
@@ -1489,6 +1505,7 @@ def main():
         "FINE_ERR":        args.hn_boost_fine,
         "FP_SVO_BOUNDARY": args.hn_boost_fp_svo,
         "FN_SVO_BOUNDARY": args.hn_boost_fn_svo,
+        "ROLE_COARSE_ERR": args.hn_boost_role_coarse,
     }
     use_inline_hn = args.hn_every > 0
     if use_inline_hn:
