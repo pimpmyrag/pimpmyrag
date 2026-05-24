@@ -227,6 +227,7 @@ class SpanMultiTaskModel(nn.Module):
             syn_labels,
             role_labels,
             role_coarse_labels,
+            role_oblique_labels,
             voice_labels,
             certainty_labels,
             gender_labels,
@@ -239,13 +240,15 @@ class SpanMultiTaskModel(nn.Module):
             fine_class_weights=None,
             role_class_weights=None,
             certainty_class_weights=None,
+            oblique_class_weights=None,
             lambda_boundary=1.0,
             lambda_coarse=1.0,
             lambda_fine=1.2,
             lambda_svo_boundary=0.7,
-            lambda_svo=0.5,        # syn type (verb_trigger / pron)
-            lambda_role=0.6,       # rôle SVO fin
-            lambda_role_coarse=0.1, # rôle SVO coarse SUBJ/OBJ/OBLIQ/OTHER
+            lambda_svo=0.5,
+            lambda_role=0.6,
+            lambda_role_coarse=0.1,
+            lambda_role_oblique=0.15,  # rôle oblique fin (maskée sur spans OBLIQ)
             lambda_voice=0.5,
             lambda_certainty=0.4,
             lambda_morpho=0.3,
@@ -264,9 +267,10 @@ class SpanMultiTaskModel(nn.Module):
         c_logits       = outputs["coarse_logits"]
         f_logits       = outputs["fine_logits"]
         svo_b_logits   = outputs["svo_boundary_logits"]
-        syn_logits     = outputs["syn_logits"]
+        syn_logits          = outputs["syn_logits"]
         role_logits         = outputs["role_logits"]
         role_coarse_logits  = outputs["role_coarse_logits"]
+        role_oblique_logits = outputs["role_oblique_logits"]
         voice_logits   = outputs["voice_logits"]
         cert_logits    = outputs["certainty_logits"]
         g_logits       = outputs["gender_logits"]
@@ -281,6 +285,7 @@ class SpanMultiTaskModel(nn.Module):
         syn_labels          = syn_labels.to(device=device, dtype=torch.long)
         role_labels         = role_labels.to(device=device, dtype=torch.long)
         role_coarse_labels  = role_coarse_labels.to(device=device, dtype=torch.long)
+        role_oblique_labels = role_oblique_labels.to(device=device, dtype=torch.long)
         voice_labels        = voice_labels.to(device=device, dtype=torch.long)
         certainty_labels    = certainty_labels.to(device=device, dtype=torch.long)
         gender_labels       = gender_labels.to(device=device, dtype=torch.long)
@@ -299,6 +304,8 @@ class SpanMultiTaskModel(nn.Module):
             role_class_weights = role_class_weights.to(device=device, dtype=torch.float32)
         if certainty_class_weights is not None:
             certainty_class_weights = certainty_class_weights.to(device=device, dtype=torch.float32)
+        if oblique_class_weights is not None:
+            oblique_class_weights = oblique_class_weights.to(device=device, dtype=torch.float32)
 
         # ── 1) NER Boundary ────────────────────────────────────────────────
         loss_b_per = F.cross_entropy(b_logits, boundary_labels,
@@ -383,13 +390,24 @@ class SpanMultiTaskModel(nn.Module):
         else:
             loss_role = torch.tensor(0.0, device=device)
 
-        # ── 6b) Role coarse (SUBJ/OBJ/OBLIQ/OTHER) ────────────────────────
+        # ── 6b) Role coarse (SUBJ/OBJ/OBLIQ/APPOS/OTHER) ─────────────────────
         rc_mask = (role_coarse_labels >= 0) & (role_coarse_labels < role_coarse_logits.size(-1))
         if rc_mask.any():
             loss_role_coarse = (F.cross_entropy(role_coarse_logits[rc_mask], role_coarse_labels[rc_mask], reduction="none")
                                 * sample_weights[rc_mask]).mean()
         else:
             loss_role_coarse = torch.tensor(0.0, device=device)
+
+        # ── 6c) Role oblique fin (maské aux spans OBLIQ, avec CWP) ────────────
+        # Supervisé uniquement sur spans où role_oblique_label < ROLE_OBLIQUE_NONE_ID
+        ro_mask = (role_oblique_labels >= 0) & (role_oblique_labels < role_oblique_logits.size(-1))
+        if ro_mask.any():
+            _obl_w = oblique_class_weights if oblique_class_weights is not None else None
+            loss_role_oblique = (F.cross_entropy(role_oblique_logits[ro_mask], role_oblique_labels[ro_mask],
+                                                 weight=_obl_w, reduction="none")
+                                 * sample_weights[ro_mask]).mean()
+        else:
+            loss_role_oblique = torch.tensor(0.0, device=device)
 
         # ── 7) Voice (sur verb_trigger uniquement) ─────────────────────────
         voice_mask = (voice_labels >= 0) & (voice_labels < voice_logits.size(-1))
@@ -467,6 +485,7 @@ class SpanMultiTaskModel(nn.Module):
             "svo":          loss_syn,
             "role":         loss_role,
             "role_coarse":  loss_role_coarse,
+            "role_oblique": loss_role_oblique,
             "voice":        loss_voice,
             "certainty":    loss_cert,
             "morpho":       loss_gender + loss_number + loss_person,
@@ -484,6 +503,7 @@ class SpanMultiTaskModel(nn.Module):
                 "svo":          lambda_svo,
                 "role":         lambda_role,
                 "role_coarse":  lambda_role_coarse,
+                "role_oblique": lambda_role_oblique,
                 "voice":        lambda_voice,
                 "certainty":    lambda_certainty,
                 "morpho":       lambda_morpho,
@@ -500,6 +520,7 @@ class SpanMultiTaskModel(nn.Module):
                 + lambda_svo          * loss_syn
                 + lambda_role         * loss_role
                 + lambda_role_coarse  * loss_role_coarse
+                + lambda_role_oblique * loss_role_oblique
                 + lambda_voice        * loss_voice
                 + lambda_certainty    * loss_cert
                 + lambda_morpho       * (loss_gender + loss_number + loss_person)
@@ -509,7 +530,7 @@ class SpanMultiTaskModel(nn.Module):
 
         return {
             "loss":                 total_loss,
-            "raw_losses":           raw_losses,  # with grad (for GradNorm)
+            "raw_losses":           raw_losses,
             "raw_losses_detached":  {k: v.detach() for k, v in raw_losses.items()},
             "loss_boundary":        loss_b.detach(),
             "loss_coarse":          loss_c.detach(),
@@ -518,11 +539,13 @@ class SpanMultiTaskModel(nn.Module):
             "loss_syn":             loss_syn.detach(),
             "loss_role":            loss_role.detach(),
             "loss_role_coarse":     loss_role_coarse.detach(),
+            "loss_role_oblique":    loss_role_oblique.detach(),
             "loss_voice":           loss_voice.detach(),
             "loss_certainty":       loss_cert.detach(),
             "loss_compat":          loss_compat.detach(),
             "num_positive_spans":   int(pos_mask.sum().item()),
             "num_syn_spans":        int(syn_mask.sum().item()),
             "num_role_spans":       int(role_mask.sum().item()),
+            "num_oblique_spans":    int(ro_mask.sum().item()),
         }
 

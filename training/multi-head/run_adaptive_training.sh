@@ -169,6 +169,7 @@ L_SVO_BOUNDARY=0.20   # Réduit 0.50→0.20 : svo_boundary_head couvre verb_trig
 L_SVO=0.70            # Relevé 0.50→0.70 : SVO boundary prouvée fiable (0.889), SVO mérite plus de gradient
 L_ROLE=0.25           # Relevé 0.15→0.25 : clé pour les structures verb-slot
 L_ROLE_COARSE=0.08    # Role coarse SUBJ/OBJ/OBLIQ/OTHER — inchangé
+L_ROLE_OBLIQUE=0.15  # Role oblique fin 10 sous-types (ADVERSARY, SOURCE, TIME, LOC...) avec CWP
 L_VOICE=0.13          # Inchangé
 L_CERTAINTY=0.30      # Inchangé
 L_MORPHO=0.10         # Inchangé
@@ -445,6 +446,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lambda-svo        $L_SVO_NOW \
         --lambda-role       $L_ROLE_NOW \
         --lambda-role-coarse $L_ROLE_COARSE_NOW \
+        --lambda-role-oblique $L_ROLE_OBLIQUE \
         --lambda-voice      $L_VOICE_NOW \
         --lambda-certainty  $L_CERTAINTY_NOW \
         --lambda-morpho     $L_MORPHO_NOW \
