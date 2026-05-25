@@ -377,7 +377,7 @@ class SpanMultiTaskModel(nn.Module):
         # ── 6) Role coarse (SUBJ/OBJ/OBLIQ/APPOS/OTHER) ─────────────────────
         rc_mask = (role_coarse_labels >= 0) & (role_coarse_labels < role_coarse_logits.size(-1))
         if rc_mask.any():
-            _rc_w = role_coarse_class_weights if role_coarse_class_weights is not None else None
+            _rc_w = role_coarse_class_weights.to(device) if role_coarse_class_weights is not None else None
             loss_role_coarse = (F.cross_entropy(role_coarse_logits[rc_mask], role_coarse_labels[rc_mask],
                                                 weight=_rc_w, reduction="none")
                                 * sample_weights[rc_mask]).mean()
