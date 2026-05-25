@@ -365,7 +365,15 @@ def main():
             f.write(msg + "\n")
 
     log(f"🚀 Démarrage training adaptatif — {datetime.now().isoformat()}")
+
+    # Traçabilité : git SHA + config dump
+    git_sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True).stdout.strip() or "?"
+    git_msg = subprocess.run(["git", "log", "--oneline", "-1"],
+                             capture_output=True, text=True).stdout.strip() or "?"
+    log(f"📌 Git : {git_sha}  ({git_msg})")
     log(f"   Config : {args.config}  |  Dataset : {gold_version}  |  GPU : {hw['gpu_name']}")
+    log(f"   Lambdas : {json.dumps(cfg['lambdas'], indent=None)}")
 
     # État adaptatif
     levels = cfg["difficulty_levels"]
