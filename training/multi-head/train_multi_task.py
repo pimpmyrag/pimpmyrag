@@ -29,7 +29,7 @@ from labels import (
     COARSE_LABELS, FINE_LABELS,
     SYN_LABELS, NUM_SYN,
     NUM_VOICE, NUM_CERTAINTY, CERTAINTY_LABELS, NUM_GENDER, NUM_NUMBER, NUM_PERSON,
-    ROLE_COARSE_LABELS, NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID,
+    ROLE_COARSE_LABELS, NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID, ROLE_COARSE_OTHER_ID,
     ROLE_OBLIQUE_LABELS, NUM_ROLE_OBLIQUE, ROLE_OBLIQUE_NONE_ID,
     ROLE_COARSE2ID,
     PERSON_LABELS,
@@ -777,9 +777,10 @@ def run_epoch(
         all_svob_true.extend(svob_true)
         all_svob_pred.extend(svob_pred)
 
-        # Role coarse metrics = spans avec role_coarse annoté (< ROLE_COARSE_NONE_ID)
+        # Role coarse metrics = spans avec vrai rôle SVO (< ROLE_COARSE_NONE_ID, != OTHER)
+        # OTHER est dans le softmax pour cascade inférence mais exclu du training + métriques
         for rct, rcp in zip(role_coarse_true, role_coarse_pred_raw):
-            if 0 <= rct < ROLE_COARSE_NONE_ID:
+            if 0 <= rct < ROLE_COARSE_NONE_ID and rct != ROLE_COARSE_OTHER_ID:
                 all_rc_true.append(rct)
                 all_rc_pred.append(rcp)
 
@@ -974,11 +975,11 @@ def run_epoch(
             labels=[0, 1], target_names=["non_verb", "verb_trigger"],
             digits=3, zero_division=0
         ) if all_svob_true else "N/A",
-        # role_coarse : SUBJ / OBJ / OBLIQ / APPOS / OTHER — tous les labels toujours affichés
+        # role_coarse : SUBJ / OBJ / OBLIQ / APPOS (OTHER exclu du training + métriques)
         "role_coarse_report": classification_report(
             all_rc_true, all_rc_pred,
-            labels=list(range(NUM_ROLE_COARSE)),
-            target_names=ROLE_COARSE_LABELS,
+            labels=[i for i in range(NUM_ROLE_COARSE) if i != ROLE_COARSE_OTHER_ID],
+            target_names=[l for i, l in enumerate(ROLE_COARSE_LABELS) if i != ROLE_COARSE_OTHER_ID],
             digits=3, zero_division=0
         ) if all_rc_true else "N/A",
         # role_oblique : tous les 10 sous-types affichés (y compris OBLIQUE_TIME/LOC à zéro)
