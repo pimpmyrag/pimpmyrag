@@ -175,14 +175,14 @@ def build_gold_candidates(row, tokenizer):
         svo_role_str = sp.get("svo_role", "NONE") or "NONE"
         if role_id in ROLE_TO_OBLIQUE_ID:
             role_oblique_id = ROLE_TO_OBLIQUE_ID[role_id]
-        elif svo_role_str == "OBLIQUE":
-            # Inférence depuis le type NER
-            if label in NER_TIME_LABELS:
-                role_oblique_id = ROLE_OBLIQUE2ID["OBLIQUE_TIME"]
-            elif label in NER_LOC_LABELS:
-                role_oblique_id = ROLE_OBLIQUE2ID["OBLIQUE_LOC"]
-            else:
-                role_oblique_id = ROLE_OBLIQUE2ID["OBLIQUE"]
+            # Pour OBLIQUE générique seulement : affiner selon le label NER
+            # (OBLIQUE_AGENT/CAUSE/etc. sont déjà spécifiques, pas d'inférence)
+            if role_id == ROLE2ID["OBLIQUE"]:
+                if label in NER_TIME_LABELS:
+                    role_oblique_id = ROLE_OBLIQUE2ID["OBLIQUE_TIME"]
+                elif label in NER_LOC_LABELS:
+                    role_oblique_id = ROLE_OBLIQUE2ID["OBLIQUE_LOC"]
+                # else: garde OBLIQUE générique (ID 0)
         else:
             role_oblique_id = ROLE_OBLIQUE_NONE_ID  # non-oblique
 
