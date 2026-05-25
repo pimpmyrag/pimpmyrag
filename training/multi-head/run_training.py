@@ -122,7 +122,7 @@ def compute_lambdas(cfg: dict, state: dict) -> dict:
     else:
         phase2_prog = 0.0
 
-    l_role_coarse = round(L["role_coarse"]  * phase2_prog, 4)
+    l_role_coarse = L["role_coarse"] if phase2_trigger_ep is not None else 0.0  # pas de ramp, direct à 0.06
     l_svo         = round(L["svo"]          * phase2_prog, 4)
     l_voice       = round(state.get("l_voice", L["voice"]) * phase2_prog, 4)
     l_certainty   = round(L["certainty"]    * phase2_prog, 4)
