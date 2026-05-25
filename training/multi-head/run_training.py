@@ -253,21 +253,22 @@ def run_epoch(cfg: dict, hw: dict, state: dict, lambdas: dict,
     print(f"🎛️  Lambdas : bnd={lambdas['boundary']}  crs={lambdas['coarse']}  fin={lambdas['fine']}")
     print(f"             svo_b={lambdas['svo_boundary']}  svo={lambdas['svo']}  "
           f"rc={lambdas['role_coarse']}  ro={lambdas['role_oblique']}")
-    print(f"             voice={lambdas['voice']}  cert={lambdas['certainty']}  "
-          f"morpho={lambdas['morpho']}  vptr={lambdas['verb_ptr']}")
+    log_path = log_dir / f"epoch_{epoch}.log"
+    # ...existing code (prints lambdas)...
     sys.stdout.flush()
 
+    # Exécution directe (pas de pipe → pas de deadlock stdout buffer)
+    # Les logs vont dans le fichier ET stdout via tee dans le sh appelant
     with open(log_path, "w") as lf:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, bufsize=1)
-        output_lines = []
-        for line in proc.stdout:
-            print(line, end="")
-            lf.write(line)
-            output_lines.append(line)
-        proc.wait()
+        proc = subprocess.run(cmd, stdout=lf, stderr=subprocess.STDOUT, text=True)
 
-    return "".join(output_lines)
+    output = log_path.read_text(encoding="utf-8", errors="replace")
+    # Afficher les dernières lignes pertinentes
+    lines = output.splitlines()
+    for line in lines[-30:]:
+        print(line)
+
+    return output
 
 
 # ─────────────────────────────────────────────────────
