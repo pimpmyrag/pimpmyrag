@@ -6,11 +6,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModel
 from labels import (
-    NUM_FINE, NUM_SYN, NUM_ROLE, NUM_VOICE, NUM_CERTAINTY,
+    NUM_FINE, NUM_SYN, NUM_VOICE, NUM_CERTAINTY,
     NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID,
     NUM_ROLE_OBLIQUE, ROLE_OBLIQUE_NONE_ID,
     NUM_GENDER, NUM_NUMBER, NUM_PERSON,
-    SYN_NONE_ID, ROLE_NONE_ID, VOICE_NONE_ID, CERTAINTY_NONE_ID,
+    SYN_NONE_ID, VOICE_NONE_ID, CERTAINTY_NONE_ID,
     COARSE_NONE_ID,
     build_coarse_to_fine_mask,
     # compat
@@ -57,7 +57,6 @@ class SpanMultiTaskModel(nn.Module):
         # Heads syntaxiques v4
         self.svo_boundary_head = nn.Linear(span_hidden_dim, 2)        # détecte verb_trigger/pron
         self.syn_head          = nn.Linear(span_hidden_dim, NUM_SYN)  # verb_trigger/pron_subj/pron_obj
-        self.role_head         = nn.Linear(span_hidden_dim, NUM_ROLE)        # rôle SVO fin (12 labels)
         self.role_coarse_head  = nn.Linear(span_hidden_dim, NUM_ROLE_COARSE) # rôle SVO coarse SUBJ/OBJ/OBLIQ/APPOS
         # Tête oblique fine : classifie les sous-types d'oblique (uniquement si role_coarse=OBLIQ)
         # Reçoit span_h + projection du FINE NER (38 labels) — plus discriminant que coarse (7 familles)
@@ -201,10 +200,9 @@ class SpanMultiTaskModel(nn.Module):
             "coarse_logits":       self.coarse_head(span_h_ner),
             "fine_logits":         self.fine_head(span_h_ner),
             # SVO heads : span_h brut (pas de dépendance circulaire)
-            "svo_boundary_logits": svo_boundary_logits,
-            "syn_logits":          self.syn_head(span_h),
-            "role_logits":         self.role_head(span_h),
-            "role_coarse_logits":  self.role_coarse_head(span_h),
+            "svo_boundary_logits":  self.svo_boundary_head(span_h),
+            "syn_logits":           self.syn_head(span_h),
+            "role_coarse_logits":   self.role_coarse_head(span_h),
             # Tête oblique fine : span_h enrichi du signal NER fine détaché (38 labels)
             # Cohérent avec dataset builder : OBLIQUE_TIME/LOC inférés depuis labels NER fine
             "role_oblique_logits": self.role_oblique_head(
@@ -230,7 +228,6 @@ class SpanMultiTaskModel(nn.Module):
             fine_labels,
             svo_boundary_labels,
             syn_labels,
-            role_labels,
             role_coarse_labels,
             role_oblique_labels,
             voice_labels,
@@ -243,7 +240,6 @@ class SpanMultiTaskModel(nn.Module):
             boundary_class_weights=None,
             coarse_class_weights=None,
             fine_class_weights=None,
-            role_class_weights=None,
             certainty_class_weights=None,
             oblique_class_weights=None,
             lambda_boundary=1.0,
@@ -251,7 +247,6 @@ class SpanMultiTaskModel(nn.Module):
             lambda_fine=1.2,
             lambda_svo_boundary=0.7,
             lambda_svo=0.5,
-            lambda_role=0.6,
             lambda_role_coarse=0.1,
             lambda_role_oblique=0.15,  # rôle oblique fin (maskée sur spans OBLIQ)
             lambda_voice=0.5,
@@ -262,7 +257,7 @@ class SpanMultiTaskModel(nn.Module):
             focal_gamma=0.0,
             focal_coarse_gamma=0.0, # Focal loss sur tête coarse — positifs seulement (≠NONE)
             focal_fine_gamma=0.0,   # Focal loss sur tête fine (séparé de boundary)
-            focal_role_gamma=0.0,   # Focal loss sur tête role (SUBJECT/OBJECT/MODIFIER…)
+            focal_role_gamma=0.0,   # kept for API compat, unused
             ignore_coarse_none=False,  # Si True, exclut spans NONE de la loss coarse (positifs only)
             weighting=None,  # Dynamic loss weighting module (UncertaintyWeighting / GradNormWeighting)
     ):
@@ -273,7 +268,6 @@ class SpanMultiTaskModel(nn.Module):
         f_logits       = outputs["fine_logits"]
         svo_b_logits   = outputs["svo_boundary_logits"]
         syn_logits          = outputs["syn_logits"]
-        role_logits         = outputs["role_logits"]
         role_coarse_logits  = outputs["role_coarse_logits"]
         role_oblique_logits = outputs["role_oblique_logits"]
         voice_logits   = outputs["voice_logits"]
@@ -288,7 +282,6 @@ class SpanMultiTaskModel(nn.Module):
         fine_labels         = fine_labels.to(device=device, dtype=torch.long)
         svo_boundary_labels = svo_boundary_labels.to(device=device, dtype=torch.long)
         syn_labels          = syn_labels.to(device=device, dtype=torch.long)
-        role_labels         = role_labels.to(device=device, dtype=torch.long)
         role_coarse_labels  = role_coarse_labels.to(device=device, dtype=torch.long)
         role_oblique_labels = role_oblique_labels.to(device=device, dtype=torch.long)
         voice_labels        = voice_labels.to(device=device, dtype=torch.long)
@@ -305,8 +298,6 @@ class SpanMultiTaskModel(nn.Module):
             coarse_class_weights = coarse_class_weights.to(device=device, dtype=torch.float32)
         if fine_class_weights is not None:
             fine_class_weights = fine_class_weights.to(device=device, dtype=torch.float32)
-        if role_class_weights is not None:
-            role_class_weights = role_class_weights.to(device=device, dtype=torch.float32)
         if certainty_class_weights is not None:
             certainty_class_weights = certainty_class_weights.to(device=device, dtype=torch.float32)
         if oblique_class_weights is not None:
@@ -382,20 +373,7 @@ class SpanMultiTaskModel(nn.Module):
         else:
             loss_syn = torch.tensor(0.0, device=device)
 
-        # ── 6) Role fin (sur NER spans + pronoms qui ont un rôle != NONE) ──
-        role_mask = (role_labels >= 0) & (role_labels != ROLE_NONE_ID)   # exclut NONE (=6) et sentinelles <0 ; inclut obliques étendus 7-11
-        if role_mask.any():
-            loss_role_per = F.cross_entropy(role_logits[role_mask], role_labels[role_mask],
-                                            weight=role_class_weights, reduction="none")
-            if focal_role_gamma > 0.0:
-                probs_r = torch.softmax(role_logits[role_mask].detach(), dim=-1)
-                p_t_r = probs_r.gather(1, role_labels[role_mask].unsqueeze(1)).squeeze(1)
-                loss_role_per = loss_role_per * (1.0 - p_t_r) ** focal_role_gamma
-            loss_role = (loss_role_per * sample_weights[role_mask]).mean()
-        else:
-            loss_role = torch.tensor(0.0, device=device)
-
-        # ── 6b) Role coarse (SUBJ/OBJ/OBLIQ/APPOS/OTHER) ─────────────────────
+        # ── 6) Role coarse (SUBJ/OBJ/OBLIQ/APPOS/OTHER) ─────────────────────
         rc_mask = (role_coarse_labels >= 0) & (role_coarse_labels < role_coarse_logits.size(-1))
         if rc_mask.any():
             loss_role_coarse = (F.cross_entropy(role_coarse_logits[rc_mask], role_coarse_labels[rc_mask], reduction="none")
@@ -443,9 +421,9 @@ class SpanMultiTaskModel(nn.Module):
         loss_person = (F.cross_entropy(p_logits[person_mask], person_labels[person_mask], reduction="none")
                        * sample_weights[person_mask]).mean() if person_mask.any() else torch.tensor(0.0, device=device)
 
-        # ── 10) Verb pointer (spans avec gov_verb_labels != -1) ────────────
+        # ── 10) Verb pointer — fires sur spans avec un rôle coarse annoté ────
         seq_len  = vptr_logits.size(1)
-        ptr_mask = (gov_verb_labels >= 0) & (gov_verb_labels < seq_len) & (role_labels >= 0) & (role_labels != ROLE_NONE_ID)
+        ptr_mask = (gov_verb_labels >= 0) & (gov_verb_labels < seq_len) & (role_coarse_labels >= 0) & (role_coarse_labels < ROLE_COARSE_NONE_ID)
         if ptr_mask.any() and vptr_logits.size(0) > 0:
             loss_verb_ptr = (F.cross_entropy(vptr_logits[ptr_mask], gov_verb_labels[ptr_mask], reduction="none")
                              * sample_weights[ptr_mask]).mean()
@@ -457,7 +435,7 @@ class SpanMultiTaskModel(nn.Module):
         # A) role → boundary :
         #    Un span participant (role != NONE) est forcément un span NER (boundary=1).
         #    Si boundary manque ce span, l'eventlet est cassé.
-        role_active_mask = (role_labels >= 0) & (role_labels != ROLE_NONE_ID)
+        role_active_mask = (role_coarse_labels >= 0) & (role_coarse_labels < ROLE_COARSE_NONE_ID)
         if lambda_compat > 0.0 and role_active_mask.any():
             forced_boundary = torch.ones(
                 role_active_mask.sum(), device=device, dtype=torch.long
@@ -488,7 +466,6 @@ class SpanMultiTaskModel(nn.Module):
             "fine":         loss_f,
             "svo_boundary": loss_svo_b,
             "svo":          loss_syn,
-            "role":         loss_role,
             "role_coarse":  loss_role_coarse,
             "role_oblique": loss_role_oblique,
             "voice":        loss_voice,
@@ -506,7 +483,6 @@ class SpanMultiTaskModel(nn.Module):
                 "fine":         lambda_fine,
                 "svo_boundary": lambda_svo_boundary,
                 "svo":          lambda_svo,
-                "role":         lambda_role,
                 "role_coarse":  lambda_role_coarse,
                 "role_oblique": lambda_role_oblique,
                 "voice":        lambda_voice,
@@ -523,7 +499,6 @@ class SpanMultiTaskModel(nn.Module):
                 + lambda_fine         * loss_f
                 + lambda_svo_boundary * loss_svo_b
                 + lambda_svo          * loss_syn
-                + lambda_role         * loss_role
                 + lambda_role_coarse  * loss_role_coarse
                 + lambda_role_oblique * loss_role_oblique
                 + lambda_voice        * loss_voice
@@ -542,15 +517,8 @@ class SpanMultiTaskModel(nn.Module):
             "loss_fine":            loss_f.detach(),
             "loss_svo_boundary":    loss_svo_b.detach(),
             "loss_syn":             loss_syn.detach(),
-            "loss_role":            loss_role.detach(),
-            "loss_role_coarse":     loss_role_coarse.detach(),
-            "loss_role_oblique":    loss_role_oblique.detach(),
-            "loss_voice":           loss_voice.detach(),
-            "loss_certainty":       loss_cert.detach(),
-            "loss_compat":          loss_compat.detach(),
             "num_positive_spans":   int(pos_mask.sum().item()),
             "num_syn_spans":        int(syn_mask.sum().item()),
-            "num_role_spans":       int(role_mask.sum().item()),
             "num_oblique_spans":    int(ro_mask.sum().item()),
         }
 

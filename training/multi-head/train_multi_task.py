@@ -27,12 +27,12 @@ from multitask_model import SpanMultiTaskModel
 from loss_weighting import create_weighting, FixedWeighting, TASK_KEYS
 from labels import (
     COARSE_LABELS, FINE_LABELS,
-    SYN_LABELS, NUM_SYN, ROLE_LABELS, NUM_ROLE,
+    SYN_LABELS, NUM_SYN,
     NUM_VOICE, NUM_CERTAINTY, CERTAINTY_LABELS, NUM_GENDER, NUM_NUMBER, NUM_PERSON,
     ROLE_COARSE_LABELS, NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID,
     ROLE_OBLIQUE_LABELS, NUM_ROLE_OBLIQUE, ROLE_OBLIQUE_NONE_ID,
     ROLE_COARSE2ID,
-    PERSON_LABELS, ROLE_NONE_ID,
+    PERSON_LABELS,
     FINE_CONCRETE_IDS, FINE_ABSTRACT_IDS,
     # compat
     SVO_LABELS, NUM_SVO,
@@ -201,7 +201,6 @@ def get_layerwise_param_groups(model, base_lr: float, head_lr: float, decay: flo
         + list(model.width_emb.parameters())
         + list(model.syn_head.parameters())
         + list(model.svo_boundary_head.parameters())
-        + list(model.role_head.parameters())
         + list(model.voice_head.parameters())
         + list(model.certainty_head.parameters())
         + list(model.gender_head.parameters())
@@ -258,12 +257,11 @@ def get_layerwise_param_groups(model, base_lr: float, head_lr: float, decay: flo
 def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
     """
     Calcule des poids de classes à partir du dataset multitask enrichi.
-    Retourne weights pour boundary, coarse, fine, role, certainty, role_oblique.
+    Retourne weights pour boundary, coarse, fine, certainty, role_oblique.
     """
     boundary_counts = Counter()
     coarse_counts = Counter()
     fine_counts = Counter()
-    role_counts = Counter()
     certainty_counts = Counter()
     oblique_counts = Counter()
 
@@ -274,7 +272,6 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
                 boundary_counts[c["boundary_label"]] += 1
                 coarse_counts[c["coarse_label_id"]] += 1
                 fine_counts[c["fine_label_id"]] += 1
-                role_counts[c["role_label_id"]] += 1
                 cert_id = c.get("certainty_label_id", -1)
                 if cert_id >= 0:
                     certainty_counts[cert_id] += 1
@@ -301,14 +298,11 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
         make_weights(boundary_counts, 2, power=power),
         make_weights(coarse_counts, len(COARSE_LABELS), power=0.0),
         make_weights(fine_counts, len(FINE_LABELS), power=power),
-        make_weights(role_counts, NUM_ROLE, power=0.0),
         make_weights(certainty_counts, NUM_CERTAINTY, power=power),
-        # CWP sur obliques spécialisées : compense la rareté (ADVERSARY~6, SOURCE~5)
         make_weights(oblique_counts, NUM_ROLE_OBLIQUE, power=power),
         boundary_counts,
         coarse_counts,
         fine_counts,
-        role_counts,
         certainty_counts,
         oblique_counts,
     )
@@ -336,14 +330,12 @@ def run_epoch(
         boundary_class_weights=None,
         coarse_class_weights=None,
         fine_class_weights=None,
-        role_class_weights=None,
         certainty_class_weights=None,
         lambda_boundary=2.5,
         lambda_coarse=1.0,
         lambda_fine=1.8,
         lambda_svo_boundary=0.7,
         lambda_svo=0.6,
-        lambda_role=0.6,
         lambda_role_coarse=0.1,
         lambda_role_oblique=0.15,
         oblique_class_weights=None,
@@ -462,8 +454,6 @@ def run_epoch(
     all_rc_true, all_rc_pred = [], []
     # role_oblique positive-only (spans avec role_oblique < ROLE_OBLIQUE_NONE_ID)
     all_ro_true, all_ro_pred = [], []
-    # SVO positive-only (spans avec svo_label != SVO_NONE_ID)
-    all_svo_true, all_svo_pred = [], []
     # voice positive-only (spans avec voice_label != VOICE_NONE_ID)
     all_voice_true, all_voice_pred = [], []
     # certainty positive-only (spans avec certainty_label != CERTAINTY_NONE_ID)
@@ -634,7 +624,6 @@ def run_epoch(
                     boundary_class_weights=boundary_class_weights,
                     coarse_class_weights=coarse_class_weights,
                     fine_class_weights=fine_class_weights,
-                    role_class_weights=role_class_weights,
                     certainty_class_weights=certainty_class_weights,
                     oblique_class_weights=oblique_class_weights,
                     lambda_boundary=lambda_boundary,
@@ -642,7 +631,6 @@ def run_epoch(
                     lambda_fine=lambda_fine,
                     lambda_svo_boundary=lambda_svo_boundary,
                     lambda_svo=lambda_svo,
-                    lambda_role=lambda_role,
                     lambda_role_coarse=lambda_role_coarse,
                     lambda_role_oblique=lambda_role_oblique,
                     lambda_voice=lambda_voice,
@@ -673,7 +661,7 @@ def run_epoch(
                         ramp_lambdas = {
                             "boundary": lambda_boundary, "coarse": lambda_coarse,
                             "fine": lambda_fine, "svo_boundary": lambda_svo_boundary,
-                            "svo": lambda_svo, "role": lambda_role,
+                            "svo": lambda_svo,
                             "voice": lambda_voice, "certainty": lambda_certainty,
                             "morpho": lambda_morpho, "verb_ptr": lambda_verb_ptr,
                             "compat": lambda_compat,
@@ -735,7 +723,6 @@ def run_epoch(
         c_pred = outputs["coarse_logits"].argmax(dim=-1).detach().cpu().tolist()
         f_pred = masked_fine_predictions(outputs["fine_logits"], c_pred, coarse_fine_mask)
         svob_pred    = outputs["svo_boundary_logits"].argmax(dim=-1).detach().cpu().tolist()
-        role_pred_raw  = outputs["role_logits"].argmax(dim=-1).detach().cpu().tolist()
         role_coarse_pred_raw = outputs["role_coarse_logits"].argmax(dim=-1).detach().cpu().tolist()
         role_oblique_pred_raw = outputs["role_oblique_logits"].argmax(dim=-1).detach().cpu().tolist()
         voice_pred_raw = outputs["voice_logits"].argmax(dim=-1).detach().cpu().tolist()
@@ -754,7 +741,6 @@ def run_epoch(
             c_true    = coarse_labels.detach().cpu()[si_cpu].tolist()
             f_true    = fine_labels.detach().cpu()[si_cpu].tolist()
             svob_true = svo_boundary_labels.detach().cpu()[si_cpu].tolist()
-            role_true = role_labels.detach().cpu()[si_cpu].tolist()
             role_coarse_true = role_coarse_labels.detach().cpu()[si_cpu].tolist()
             role_oblique_true = role_oblique_labels.detach().cpu()[si_cpu].tolist()
             voice_true   = voice_labels.detach().cpu()[si_cpu].tolist()
@@ -768,7 +754,6 @@ def run_epoch(
             c_true    = coarse_labels.detach().cpu().tolist()
             f_true    = fine_labels.detach().cpu().tolist()
             svob_true = svo_boundary_labels.detach().cpu().tolist()
-            role_true = role_labels.detach().cpu().tolist()
             role_coarse_true = role_coarse_labels.detach().cpu().tolist()
             role_oblique_true = role_oblique_labels.detach().cpu().tolist()
             voice_true   = voice_labels.detach().cpu().tolist()
@@ -815,10 +800,6 @@ def run_epoch(
                 all_f_pred_pos.append(fp)
 
         # SVO role metrics = spans avec rôle annoté (role != NONE, inclut obliques étendus 7-11)
-        for rt, rp in zip(role_true, role_pred_raw):
-            if 0 <= rt != ROLE_NONE_ID:
-                all_svo_true.append(rt)
-                all_svo_pred.append(rp)
         for vt, vp in zip(voice_true, voice_pred_raw):
             if vt < NUM_VOICE:
                 all_voice_true.append(vt)
@@ -952,10 +933,6 @@ def run_epoch(
             all_ro_true, all_ro_pred,
             labels=[l for l in range(NUM_ROLE_OBLIQUE) if l in set(all_ro_true)]
         ) if all_ro_true else 0.0,
-        "svo_macro_f1": safe_macro_f1_local(
-            all_svo_true, all_svo_pred,
-            labels=[l for l in range(NUM_ROLE) if l in set(all_svo_true)]
-        ) if all_svo_true else 0.0,
         "voice_macro_f1": safe_macro_f1_local(all_voice_true, all_voice_pred) if all_voice_true else 0.0,
         "certainty_macro_f1": safe_macro_f1_local(
             all_certainty_true, all_certainty_pred,
@@ -995,11 +972,6 @@ def run_epoch(
             labels=list(range(len(FINE_LABELS))),
             target_names=FINE_LABELS, digits=3, zero_division=0
         ) if all_f_true_pos else "N/A",
-        "svo_report": classification_report(
-            all_svo_true, all_svo_pred,
-            labels=list(range(NUM_ROLE)),
-            target_names=ROLE_LABELS, digits=3, zero_division=0
-        ) if all_svo_true else "N/A",
         # svo_boundary : tête binaire VERB / non-VERB (verb_trigger + pron vs tout le reste)
         "svo_boundary_report": classification_report(
             all_svob_true, all_svob_pred,
@@ -1125,8 +1097,6 @@ def main():
     parser.add_argument("--lambda-fine", type=float, default=1.8)
     parser.add_argument("--lambda-svo", type=float, default=0.6,
                         help="Pondération de la loss SVO (défaut=0.8)")
-    parser.add_argument("--lambda-role", type=float, default=0.6,
-                        help="Pondération de la loss rôle SVO fin (défaut=0.6)")
     parser.add_argument("--lambda-role-coarse", type=float, default=0.1,
                         help="Pondération de la loss rôle SVO coarse SUBJ/OBJ/OBLIQ/OTHER (défaut=0.1)")
     parser.add_argument("--lambda-role-oblique", type=float, default=0.15,
@@ -1441,7 +1411,7 @@ def main():
     initial_lambdas = {
         "boundary": args.lambda_boundary, "coarse": args.lambda_coarse,
         "fine": args.lambda_fine, "svo_boundary": args.lambda_svo_boundary,
-        "svo": args.lambda_svo, "role": args.lambda_role,
+        "svo": args.lambda_svo,
         "voice": args.lambda_voice, "certainty": args.lambda_certainty,
         "morpho": args.lambda_morpho, "verb_ptr": args.lambda_verb_ptr,
         "compat": args.lambda_compat,
@@ -1474,13 +1444,11 @@ def main():
             boundary_w,
             coarse_w,
             fine_w,
-            role_w,
             certainty_w,
             oblique_w,
             boundary_counts,
             coarse_counts,
             fine_counts,
-            role_counts,
             certainty_counts,
             oblique_counts,
         ) = compute_class_weights_from_multitask_jsonl(
@@ -1520,10 +1488,6 @@ def main():
         for i, name in enumerate(FINE_LABELS):
             print(f"  {name:<22} count={fine_counts.get(i, 0):>8} weight={fine_w[i].item():.6f}")
 
-        print("\n[role counts / weights]")
-        for i, name in enumerate(ROLE_LABELS):
-            print(f"  {name:<15} count={role_counts.get(i, 0):>8} weight={role_w[i].item():.6f}")
-
         print("\n[certainty counts / weights]")
         for i, name in enumerate(CERTAINTY_LABELS):
             print(f"  {name:<15} count={certainty_counts.get(i, 0):>8} weight={certainty_w[i].item():.6f}")
@@ -1536,7 +1500,6 @@ def main():
         boundary_w = None
         coarse_w = None
         fine_w = None
-        role_w = None
         certainty_w = None
         oblique_w = None
 
@@ -1645,14 +1608,12 @@ def main():
             boundary_class_weights=boundary_w,
             coarse_class_weights=coarse_w,
             fine_class_weights=fine_w,
-            role_class_weights=role_w,
             certainty_class_weights=certainty_w,
             lambda_boundary=args.lambda_boundary,
             lambda_coarse=args.lambda_coarse,
             lambda_fine=args.lambda_fine,
             lambda_svo_boundary=args.lambda_svo_boundary,
             lambda_svo=args.lambda_svo,
-            lambda_role=args.lambda_role,
             lambda_role_coarse=args.lambda_role_coarse,
             lambda_role_oblique=args.lambda_role_oblique,
             oblique_class_weights=oblique_w,
@@ -1703,14 +1664,12 @@ def main():
             boundary_class_weights=boundary_w,
             coarse_class_weights=coarse_w,
             fine_class_weights=fine_w,
-            role_class_weights=role_w,
             certainty_class_weights=certainty_w,
             lambda_boundary=args.lambda_boundary,
             lambda_coarse=args.lambda_coarse,
             lambda_fine=args.lambda_fine,
             lambda_svo_boundary=args.lambda_svo_boundary,
             lambda_svo=args.lambda_svo,
-            lambda_role=args.lambda_role,
             lambda_role_coarse=args.lambda_role_coarse,
             lambda_role_oblique=args.lambda_role_oblique,
             oblique_class_weights=oblique_w,
@@ -1745,11 +1704,10 @@ def main():
             ) / 4.5
         else:
             score = (
-                val_metrics["boundary_f1"] * 1.5   # +0.5 vs avant : boundary est la tête la plus fragile
+                val_metrics["boundary_f1"] * 1.5
                 + val_metrics["coarse_macro_f1"] * 1.0
                 + val_metrics["fine_macro_f1"] * 2.0
-                + val_metrics["svo_macro_f1"] * 0.5
-            ) / 5.0
+            ) / 4.5
 
         print(f"\n📅 Epoch {epoch}")
         print(
@@ -1757,7 +1715,6 @@ def main():
             f"Boundary F1={train_metrics['boundary_f1']:.4f} | "
             f"Coarse F1={train_metrics['coarse_macro_f1']:.4f} | "
             f"Fine F1={train_metrics['fine_macro_f1']:.4f} | "
-            f"SVO F1={train_metrics['svo_macro_f1']:.4f} | "
             f"Voice F1={train_metrics['voice_macro_f1']:.4f} | "
             f"Certainty F1={train_metrics['certainty_macro_f1']:.4f} | "
             f"Gender F1={train_metrics['gender_macro_f1']:.4f} | "
@@ -1769,7 +1726,6 @@ def main():
             f"Boundary F1={val_metrics['boundary_f1']:.4f} | "
             f"Coarse F1={val_metrics['coarse_macro_f1']:.4f} | "
             f"Fine F1={val_metrics['fine_macro_f1']:.4f} | "
-            f"SVO F1={val_metrics['svo_macro_f1']:.4f} | "
             f"Voice F1={val_metrics['voice_macro_f1']:.4f} | "
             f"Certainty F1={val_metrics['certainty_macro_f1']:.4f} | "
             f"Gender F1={val_metrics['gender_macro_f1']:.4f} | "
@@ -1793,7 +1749,6 @@ def main():
                 "train/svo_boundary_f1": train_metrics["svo_boundary_f1"],
                 "train/role_coarse_f1": train_metrics["role_coarse_macro_f1"],
                 "train/role_oblique_f1": train_metrics["role_oblique_macro_f1"],
-                "train/svo_f1":         train_metrics["svo_macro_f1"],
                 "train/voice_f1":       train_metrics["voice_macro_f1"],
                 "train/certainty_f1":   train_metrics["certainty_macro_f1"],
                 "train/gender_f1":      train_metrics["gender_macro_f1"],
@@ -1808,7 +1763,6 @@ def main():
                 "val/svo_boundary_f1":  val_metrics["svo_boundary_f1"],
                 "val/role_coarse_f1":   val_metrics["role_coarse_macro_f1"],
                 "val/role_oblique_f1":  val_metrics["role_oblique_macro_f1"],
-                "val/svo_f1":           val_metrics["svo_macro_f1"],
                 "val/voice_f1":         val_metrics["voice_macro_f1"],
                 "val/certainty_f1":     val_metrics["certainty_macro_f1"],
                 "val/gender_f1":        val_metrics["gender_macro_f1"],
@@ -1843,7 +1797,7 @@ def main():
                 ramp_lambdas = {
                     "boundary": args.lambda_boundary, "coarse": args.lambda_coarse,
                     "fine": args.lambda_fine, "svo_boundary": args.lambda_svo_boundary,
-                    "svo": args.lambda_svo, "role": args.lambda_role,
+                    "svo": args.lambda_svo,
                     "voice": args.lambda_voice, "certainty": args.lambda_certainty,
                     "morpho": args.lambda_morpho, "verb_ptr": args.lambda_verb_ptr,
                     "compat": args.lambda_compat,
@@ -1869,12 +1823,9 @@ def main():
                 print(f"  {item['label']}  recall={item['recall']:.3f} support={item['support']} top_confusion={item['top_confused_with']} ({item['top_confused_count']})")
         if val_metrics.get("fine_confusion_csv"):
             print(f"[VAL fine exports] csv={val_metrics['fine_confusion_csv']} json={val_metrics['fine_diagnostics_json']}")
-        print("[VAL svo boundary (verb_trigger)]")
-        print(val_metrics["svo_boundary_report"])
+        print("[VAL svo boundary (verb_trigger)]")        print(val_metrics["svo_boundary_report"])
         print("[VAL role coarse (SUBJ/OBJ/OBLIQ/APPOS)]")
         print(val_metrics["role_coarse_report"])
-        print("[VAL svo fine]")
-        print(val_metrics["svo_report"])
         if val_metrics.get("role_oblique_report") and val_metrics["role_oblique_report"] != "N/A":
             print("[VAL role oblique (sous-types OBLIQ)]")
             print(val_metrics["role_oblique_report"])
@@ -1943,14 +1894,12 @@ def main():
         boundary_class_weights=boundary_w,
         coarse_class_weights=coarse_w,
         fine_class_weights=fine_w,
-        role_class_weights=role_w,
         certainty_class_weights=certainty_w,
         lambda_boundary=args.lambda_boundary,
         lambda_coarse=args.lambda_coarse,
         lambda_fine=args.lambda_fine,
         lambda_svo_boundary=args.lambda_svo_boundary,
         lambda_svo=args.lambda_svo,
-        lambda_role=args.lambda_role,
         lambda_role_coarse=args.lambda_role_coarse,
         lambda_role_oblique=args.lambda_role_oblique,
         oblique_class_weights=oblique_w,
@@ -1975,7 +1924,6 @@ def main():
     print(f"Boundary F1={test_metrics['boundary_f1']:.4f}")
     print(f"Coarse   F1={test_metrics['coarse_macro_f1']:.4f}")
     print(f"Fine     F1={test_metrics['fine_macro_f1']:.4f}")
-    print(f"SVO      F1={test_metrics['svo_macro_f1']:.4f}")
     print(f"Voice    F1={test_metrics['voice_macro_f1']:.4f}")
     print(f"Certainty F1={test_metrics['certainty_macro_f1']:.4f}")
     print(f"Gender   F1={test_metrics['gender_macro_f1']:.4f}")
@@ -2002,8 +1950,6 @@ def main():
     print(test_metrics["svo_boundary_report"])
     print("[TEST role coarse (SUBJ/OBJ/OBLIQ/APPOS)]")
     print(test_metrics["role_coarse_report"])
-    print("[TEST svo fine]")
-    print(test_metrics["svo_report"])
     if test_metrics.get("role_oblique_report") and test_metrics["role_oblique_report"] != "N/A":
         print("[TEST role oblique (sous-types OBLIQ)]")
         print(test_metrics["role_oblique_report"])
@@ -2018,7 +1964,7 @@ def main():
             "test/fine_f1":          test_metrics["fine_macro_f1"],
             "test/fine_concrete_f1": test_metrics["fine_concrete_f1"],
             "test/fine_abstract_f1": test_metrics["fine_abstract_f1"],
-            "test/svo_f1":       test_metrics["svo_macro_f1"],
+            "test/svo_boundary_f1": test_metrics["svo_boundary_f1"],
             "test/voice_f1":     test_metrics["voice_macro_f1"],
             "test/certainty_f1": test_metrics["certainty_macro_f1"],
             "test/gender_f1":    test_metrics["gender_macro_f1"],

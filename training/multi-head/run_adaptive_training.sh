@@ -185,7 +185,6 @@ L_SVO_BOUNDARY=0.20   # Réduit 0.50→0.20 : svo_boundary_head couvre verb_trig
 # svo_boundary_head reste utile uniquement pour les verb_trigger spans (non-NER).
 # Libère ~0.30 de budget encodeur → profite à NER boundary.
 L_SVO=0.70            # Relevé 0.50→0.70 : SVO boundary prouvée fiable (0.889), SVO mérite plus de gradient
-L_ROLE=0.25           # Relevé 0.15→0.25 : clé pour les structures verb-slot
 L_ROLE_COARSE=0.08    # Role coarse SUBJ/OBJ/OBLIQ/OTHER — inchangé
 L_ROLE_OBLIQUE=0.15  # Role oblique fin 10 sous-types (ADVERSARY, SOURCE, TIME, LOC...) avec CWP
 L_VOICE=0.13          # Inchangé
@@ -247,7 +246,6 @@ if [ "$NER_ONLY_BENCH" = "1" ]; then
     echo "🧪 Mode NER-only benchmark activé" | tee -a $log_file
     L_SVO_BOUNDARY=0.0
     L_SVO=0.0
-    L_ROLE=0.0
     L_ROLE_COARSE=0.0
     L_ROLE_OBLIQUE=0.0
     L_VOICE=0.0
@@ -379,7 +377,6 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         in_warmup=1
         L_SVO_B_NOW=0.0000
         L_SVO_NOW=0.0000
-        L_ROLE_NOW=0.0000
         L_ROLE_COARSE_NOW=0.0000
         L_ROLE_OBLIQUE_NOW=0.0000
         L_VOICE_NOW=0.0000
@@ -415,7 +412,6 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         # cwp=0 sur role : APPOS/OBLIQUE rares (~1%) boostaient trop → régression boundary via encodeur partagé
         role_ramp_epoch=$((ramp_epoch - ROLE_DELAY))
         role_progress=$(python3 -c "print(min(1.0, max(0.0, $role_ramp_epoch / $SVO_RAMP_EPOCHS)))")
-        L_ROLE_NOW=$(python3  -c "print(f'{$L_ROLE * $role_progress:.4f}')")
         L_ROLE_COARSE_NOW=$(python3 -c "print(f'{$L_ROLE_COARSE * $role_progress:.4f}')")
         L_ROLE_OBLIQUE_NOW=$(python3 -c "print(f'{$L_ROLE_OBLIQUE * $role_progress:.4f}')")
         L_VOICE_NOW=$(python3 -c "print(f'{$L_VOICE      * $svo_progress:.4f}')")
@@ -443,7 +439,7 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         else
             echo "      NER  : boundary=$L_BOUNDARY  coarse=$L_COARSE_NOW  fine=$L_FINE_NOW  🔓(ramp ${cf_ramp_epoch}/${BND_UNLOCK_RAMP_EPOCHS})" | tee -a $log_file
         fi
-        echo "      SVO  : svo_boundary=$L_SVO_B_NOW  svo=$L_SVO_NOW  role=$L_ROLE_NOW  role_coarse=$L_ROLE_COARSE_NOW  role_oblique=$L_ROLE_OBLIQUE_NOW  voice=$L_VOICE_NOW  certainty=$L_CERTAINTY_NOW  morpho=$L_MORPHO_NOW  verb_ptr=$L_VPTR_NOW" | tee -a $log_file
+        echo "      SVO  : svo_boundary=$L_SVO_B_NOW  svo=$L_SVO_NOW  role_coarse=$L_ROLE_COARSE_NOW  role_oblique=$L_ROLE_OBLIQUE_NOW  voice=$L_VOICE_NOW  certainty=$L_CERTAINTY_NOW  morpho=$L_MORPHO_NOW  verb_ptr=$L_VPTR_NOW" | tee -a $log_file
     fi
 
     python3 train_multi_task.py \
@@ -465,7 +461,6 @@ while [ $current_epoch -le $MAX_EPOCHS ]; do
         --lambda-fine       $L_FINE_NOW \
         --lambda-svo-boundary $L_SVO_B_NOW \
         --lambda-svo        $L_SVO_NOW \
-        --lambda-role       $L_ROLE_NOW \
         --lambda-role-coarse $L_ROLE_COARSE_NOW \
         --lambda-role-oblique $L_ROLE_OBLIQUE_NOW \
         --lambda-voice      $L_VOICE_NOW \
