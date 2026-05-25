@@ -1998,8 +1998,15 @@ def main():
             print(f"  {item['label']}  recall={item['recall']:.3f} support={item['support']} top_confusion={item['top_confused_with']} ({item['top_confused_count']})")
     if test_metrics.get("fine_confusion_csv"):
         print(f"[TEST fine exports] csv={test_metrics['fine_confusion_csv']} json={test_metrics['fine_diagnostics_json']}")
-    print("[TEST svo]")
+    print("[TEST svo boundary (verb_trigger)]")
+    print(test_metrics["svo_boundary_report"])
+    print("[TEST role coarse (SUBJ/OBJ/OBLIQ/APPOS)]")
+    print(test_metrics["role_coarse_report"])
+    print("[TEST svo fine]")
     print(test_metrics["svo_report"])
+    if test_metrics.get("role_oblique_report") and test_metrics["role_oblique_report"] != "N/A":
+        print("[TEST role oblique (sous-types OBLIQ)]")
+        print(test_metrics["role_oblique_report"])
     if test_metrics.get("gender_macro_f1", 0) > 0:
         print(f"[TEST morpho]  Gender F1={test_metrics['gender_macro_f1']:.4f}  Number F1={test_metrics['number_macro_f1']:.4f}  Person F1={test_metrics['person_macro_f1']:.4f}")
 
