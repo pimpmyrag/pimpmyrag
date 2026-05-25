@@ -1822,6 +1822,10 @@ def main():
             print(f"[VAL fine exports] csv={val_metrics['fine_confusion_csv']} json={val_metrics['fine_diagnostics_json']}")
         print("[VAL svo boundary (verb_trigger)]")
         print(val_metrics["svo_boundary_report"])
+        # ⚠️ Ces lignes sont parsées par run_training.py extract_metric() pour la cascade SVO-first
+        # Format EXACT requis : "Val SVO Bnd F1=0.xxxx" et "Val Role Crs F1=0.xxxx"
+        print(f"Val SVO Bnd F1={val_metrics['svo_boundary_f1']:.4f}")
+        print(f"Val Role Crs F1={val_metrics.get('role_coarse_macro_f1', 0.0):.4f}")
         print("[VAL role coarse (SUBJ/OBJ/OBLIQ/APPOS)]")
         print(val_metrics["role_coarse_report"])
         if val_metrics.get("role_oblique_report") and val_metrics["role_oblique_report"] != "N/A":
