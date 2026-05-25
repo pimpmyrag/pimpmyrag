@@ -1,0 +1,129 @@
+{
+  "_comment": "Config bndwarm-oblique — boundary-first (L=5) + role_oblique head + SVO cascade NER",
+  "_version": "v8.18",
+
+  "run": {
+    "name_suffix": "bndwarm-oblique",
+    "max_epochs": 90,
+    "model": "microsoft/deberta-v3-base",
+    "loss_weighting": "fixed",
+    "ner_only_bench": false
+  },
+
+  "optimizer": {
+    "lr": 8e-6,
+    "head_lr_multiplier": 4.0,
+    "warmup_epochs": 0,
+    "max_grad_norm": 1.0,
+    "layer_lr_decay": 0.9,
+    "ema_decay": 0.999,
+    "class_weight_power": 0.5
+  },
+
+  "lambdas": {
+    "_comment": "Valeurs CIBLES plein régime. Les ramps sont gérées par run_training.py.",
+    "boundary":     5.0,
+    "coarse":       0.75,
+    "fine":         1.8,
+    "svo_boundary": 0.20,
+    "svo":          0.70,
+    "role_coarse":  0.08,
+    "role_oblique": 0.15,
+    "voice":        0.13,
+    "certainty":    0.30,
+    "morpho":       0.10,
+    "verb_ptr":     0.60,
+    "compat":       0.2
+  },
+
+  "focal": {
+    "boundary_gamma":  0.5,
+    "fine_gamma":      0.0,
+    "coarse_gamma":    0.0
+  },
+
+  "boundary_first": {
+    "_comment": "Phase boundary-first : coarse+fine démarrent bas, unlock progressif quand boundary >= seuil",
+    "enabled": true,
+    "unlock_threshold":    0.88,
+    "unlock_ramp_epochs":  18,
+    "coarse_warmup_lambda": 0.05,
+    "fine_warmup_lambda":   0.15
+  },
+
+  "svo_trigger": {
+    "_comment": "SVO ne démarre qu'après boundary > thr_bnd ET coarse > thr_coarse",
+    "pre_triggered": true,
+    "initial_pct": 20,
+    "step_epochs":  6,
+    "thr_bnd":    0.84,
+    "thr_coarse": 0.82,
+    "ramp_epochs": 20
+  },
+
+  "morpho": {
+    "delay_epochs": 0,
+    "ramp_epochs":  20
+  },
+
+  "role": {
+    "delay_epochs": 0
+  },
+
+  "boundary_rescue": {
+    "_comment": "Si boundary stagne, réduit les lambdas compétiteurs (once-only)",
+    "window":          5,
+    "target":          0.90,
+    "min_delta":       0.003,
+    "factor_vptr_voice": 0.65,
+    "factor_coarse":     0.75,
+    "bnd_boost":         1.20
+  },
+
+  "boundary_plateau": {
+    "window":       5,
+    "min_delta":    0.003,
+    "regression_window": 3,
+    "regression_delta":  0.008
+  },
+
+  "hard_negatives": {
+    "every_n_epochs": 1,
+    "decay":          0.85,
+    "max_weight":     8.0,
+    "min_weight":     0.3,
+    "boost_fp":       5.0,
+    "boost_fn":       2.0,
+    "boost_coarse":   2.5,
+    "boost_fine":     3.0,
+    "boost_fp_svo":   3.0,
+    "boost_fn_svo":   2.0,
+    "boost_role_coarse": 1.5
+  },
+
+  "difficulty_levels": {
+    "_comment": "6 niveaux progressifs. hard_per_gold = nb négatifs durs par gold. soft_factor = ratio spans soft.",
+    "names":         ["easy", "easy+", "medium", "medium+", "hard", "full"],
+    "hard_per_gold": [2,      2,       3,        4,         5,      6],
+    "soft_factors":  [1.0,    1.25,    1.5,      2.0,       2.0,    2.0],
+    "max_epochs_per_level":   6,
+    "min_delta_for_progress": 0.0003,
+    "patience": 5
+  },
+
+  "early_stopping": {
+    "patience":   5,
+    "min_delta":  0.0003
+  },
+
+  "hardware": {
+    "_comment": "Overridé par détection VRAM dans run_training.py. Valeurs de référence.",
+    "h100_80gb":  {"bs": 160, "accum": 1, "workers": 8},
+    "a100_40gb":  {"bs":  96, "accum": 1, "workers": 6},
+    "l40s_48gb":  {"bs":  96, "accum": 1, "workers": 6},
+    "rtx_4090":   {"bs":  48, "accum": 2, "workers": 4},
+    "rtx_3090":   {"bs":  48, "accum": 2, "workers": 4},
+    "default":    {"bs":  16, "accum": 2, "workers": 0}
+  }
+}
+
