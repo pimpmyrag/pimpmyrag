@@ -24,7 +24,7 @@ class MultiTaskSpanDataset(Dataset):
         # Élimine le bottleneck CPU/DataLoader qui plafonnait le GPU à ~17% VRAM utilisée.
         print(f"📦 Pré-tokenisation de {len(self.rows)} phrases...", flush=True)
         texts = [row["text"] for row in self.rows]
-        encodings = tokenizer.batch_encode_plus(
+        encodings = tokenizer(
             texts,
             return_offsets_mapping=False,
             add_special_tokens=True,

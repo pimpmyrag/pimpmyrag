@@ -281,18 +281,25 @@ def rebuild_dataset(level: int, cfg: dict, gold_version: str, state: dict):
     name = levels["names"][level]
     suffix = state.get("run_suffix", "adaptive")
     print(f"\n📦 Rebuild dataset niveau {name} (hard={hard}, soft={soft})")
-    cmd = [
+
+    # Build train adaptatif (hard negatives selon niveau)
+    subprocess.run([
         "python3", "build_multitask_dataset.py",
-        "--train",       f"data/train_{gold_version}.jsonl",
-        "--val",         f"data/val_{gold_version}.jsonl",
-        "--test",        f"data/test_{gold_version}.jsonl",
-        "--out-train",   f"data/train.{suffix}.multitask.jsonl",
-        "--out-val",     "data/val.multitask.jsonl",
-        "--out-test",    "data/test.multitask.jsonl",
+        "--input",         f"data/train_{gold_version}.jsonl",
+        "--output",        f"data/train.{suffix}.multitask.jsonl",
         "--hard-per-gold", str(hard),
         "--soft-factor",   str(soft),
-    ]
-    subprocess.run(cmd, check=True)
+    ], check=True)
+
+    # Build val + test (niveau fixe : hard=2, soft=1.0 — évaluation stable)
+    for split in ["val", "test"]:
+        subprocess.run([
+            "python3", "build_multitask_dataset.py",
+            "--input",  f"data/{split}_{gold_version}.jsonl",
+            "--output", f"data/{split}.multitask.jsonl",
+            "--hard-per-gold", "2",
+            "--soft-factor",   "1.0",
+        ], check=True)
 
 
 # ─────────────────────────────────────────────────────

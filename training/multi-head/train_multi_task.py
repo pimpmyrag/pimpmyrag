@@ -489,17 +489,16 @@ def run_epoch(
         fine_labels = batch["fine_labels"].to(device)
         svo_boundary_labels = batch["svo_boundary_labels"].to(device)
         syn_labels    = batch["syn_labels"].to(device)
-        role_labels   = batch["role_labels"].to(device)
         role_coarse_labels = batch.get("role_coarse_labels")
         if role_coarse_labels is not None:
             role_coarse_labels = role_coarse_labels.to(device)
         else:
-            role_coarse_labels = torch.full_like(role_labels, ROLE_COARSE_NONE_ID)
+            role_coarse_labels = torch.full_like(syn_labels, ROLE_COARSE_NONE_ID)
         role_oblique_labels = batch.get("role_oblique_labels")
         if role_oblique_labels is not None:
             role_oblique_labels = role_oblique_labels.to(device)
         else:
-            role_oblique_labels = torch.full_like(role_labels, ROLE_OBLIQUE_NONE_ID)
+            role_oblique_labels = torch.full_like(syn_labels, ROLE_OBLIQUE_NONE_ID)
         voice_labels  = batch["voice_labels"].to(device)
         certainty_labels = batch.get("certainty_labels")
         if certainty_labels is not None:
@@ -523,7 +522,7 @@ def run_epoch(
                 == svo_boundary_labels.size(0)
                 == syn_labels.size(0)
                 == voice_labels.size(0)
-                == role_labels.size(0)
+                == role_coarse_labels.size(0)
                 == certainty_labels.size(0)
                 == gender_labels.size(0)
                 == number_labels.size(0)
@@ -558,7 +557,6 @@ def run_epoch(
                     fine_labels_loss         = fine_labels[si]
                     svo_boundary_labels_loss = svo_boundary_labels[si]
                     syn_labels_loss          = syn_labels[si]
-                    role_labels_loss         = role_labels[si]
                     role_coarse_labels_loss  = role_coarse_labels[si]
                     role_oblique_labels_loss = role_oblique_labels[si]
                     voice_labels_loss        = voice_labels[si]
@@ -574,7 +572,6 @@ def run_epoch(
                     fine_labels_loss         = fine_labels
                     svo_boundary_labels_loss = svo_boundary_labels
                     syn_labels_loss          = syn_labels
-                    role_labels_loss         = role_labels
                     role_coarse_labels_loss  = role_coarse_labels
                     role_oblique_labels_loss = role_oblique_labels
                     voice_labels_loss        = voice_labels
@@ -611,7 +608,6 @@ def run_epoch(
                     fine_labels=fine_labels_loss,
                     svo_boundary_labels=svo_boundary_labels_loss,
                     syn_labels=syn_labels_loss,
-                    role_labels=role_labels_loss,
                     role_coarse_labels=role_coarse_labels_loss,
                     role_oblique_labels=role_oblique_labels_loss,
                     voice_labels=voice_labels_loss,
@@ -810,8 +806,8 @@ def run_epoch(
                 all_certainty_true.append(ct)
                 all_certainty_pred.append(cp)
         # Morpho : sur spans avec gender/number/person annotés
-        for rt, gt, gp, nt, np_, pt, pp in zip(
-            role_true, gender_true, gender_pred_raw,
+        for _rt, gt, gp, nt, np_, pt, pp in zip(
+            role_coarse_true, gender_true, gender_pred_raw,
             number_true, number_pred_raw,
             person_true, person_pred_raw
         ):
@@ -1823,7 +1819,8 @@ def main():
                 print(f"  {item['label']}  recall={item['recall']:.3f} support={item['support']} top_confusion={item['top_confused_with']} ({item['top_confused_count']})")
         if val_metrics.get("fine_confusion_csv"):
             print(f"[VAL fine exports] csv={val_metrics['fine_confusion_csv']} json={val_metrics['fine_diagnostics_json']}")
-        print("[VAL svo boundary (verb_trigger)]")        print(val_metrics["svo_boundary_report"])
+        print("[VAL svo boundary (verb_trigger)]")
+        print(val_metrics["svo_boundary_report"])
         print("[VAL role coarse (SUBJ/OBJ/OBLIQ/APPOS)]")
         print(val_metrics["role_coarse_report"])
         if val_metrics.get("role_oblique_report") and val_metrics["role_oblique_report"] != "N/A":
