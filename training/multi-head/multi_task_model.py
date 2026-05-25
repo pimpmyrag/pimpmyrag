@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from transformers import AutoModel
 from labels import (
     NUM_FINE, NUM_SYN, NUM_VOICE, NUM_CERTAINTY,
-    NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID,
+    NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID, ROLE_COARSE_OTHER_ID,
     NUM_ROLE_OBLIQUE, ROLE_OBLIQUE_NONE_ID,
     NUM_GENDER, NUM_NUMBER, NUM_PERSON,
     SYN_NONE_ID, VOICE_NONE_ID, CERTAINTY_NONE_ID,
@@ -375,7 +375,10 @@ class SpanMultiTaskModel(nn.Module):
             loss_syn = torch.tensor(0.0, device=device)
 
         # ── 6) Role coarse (SUBJ/OBJ/OBLIQ/APPOS/OTHER) ─────────────────────
-        rc_mask = (role_coarse_labels >= 0) & (role_coarse_labels < role_coarse_logits.size(-1))
+        # OTHER (ID=4) est dans le softmax pour la cascade inférence, mais EXCLU
+        # de la loss — le gradient vient seulement des 4 vrais rôles.
+        # Le softmax apprend implicitement OTHER = "pas SUBJ/OBJ/OBLIQ/APPOS".
+        rc_mask = (role_coarse_labels >= 0) & (role_coarse_labels < role_coarse_logits.size(-1)) & (role_coarse_labels != ROLE_COARSE_OTHER_ID)
         if rc_mask.any():
             _rc_w = role_coarse_class_weights.to(device) if role_coarse_class_weights is not None else None
             loss_role_coarse = (F.cross_entropy(role_coarse_logits[rc_mask], role_coarse_labels[rc_mask],

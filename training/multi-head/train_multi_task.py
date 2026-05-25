@@ -29,7 +29,7 @@ from labels import (
     COARSE_LABELS, FINE_LABELS,
     SYN_LABELS, NUM_SYN,
     NUM_VOICE, NUM_CERTAINTY, CERTAINTY_LABELS, NUM_GENDER, NUM_NUMBER, NUM_PERSON,
-    ROLE_COARSE_LABELS, NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID, ROLE_COARSE_OTHER_ID,
+    ROLE_COARSE_LABELS, NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID,
     ROLE_OBLIQUE_LABELS, NUM_ROLE_OBLIQUE, ROLE_OBLIQUE_NONE_ID,
     ROLE_COARSE2ID,
     PERSON_LABELS,
@@ -264,7 +264,6 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
     fine_counts = Counter()
     certainty_counts = Counter()
     oblique_counts = Counter()
-    role_coarse_counts = Counter()
 
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -279,9 +278,6 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
                 obl_id = c.get("role_oblique_label_id", ROLE_OBLIQUE_NONE_ID)
                 if obl_id < ROLE_OBLIQUE_NONE_ID:
                     oblique_counts[obl_id] += 1
-                rc_id = c.get("role_coarse_label_id", ROLE_COARSE_NONE_ID)
-                if rc_id < ROLE_COARSE_NONE_ID:
-                    role_coarse_counts[rc_id] += 1
 
     def make_weights(counts, num_classes, power=0.5):
         total = sum(counts.values())
@@ -304,13 +300,11 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
         make_weights(fine_counts, len(FINE_LABELS), power=power),
         make_weights(certainty_counts, NUM_CERTAINTY, power=power),
         make_weights(oblique_counts, NUM_ROLE_OBLIQUE, power=power),
-        make_weights(role_coarse_counts, NUM_ROLE_COARSE, power=min(power, 0.25)),
         boundary_counts,
         coarse_counts,
         fine_counts,
         certainty_counts,
         oblique_counts,
-        role_coarse_counts,
     )
 
 
@@ -337,7 +331,6 @@ def run_epoch(
         coarse_class_weights=None,
         fine_class_weights=None,
         certainty_class_weights=None,
-        role_coarse_class_weights=None,
         lambda_boundary=2.5,
         lambda_coarse=1.0,
         lambda_fine=1.8,
@@ -358,7 +351,6 @@ def run_epoch(
         ema: "ModelEMA | None" = None,
         collect_hn: bool = False,
         scaler=None,           # torch.GradScaler pour AMP (None = FP32)
-        use_amp: bool = False, # BF16 autocast (sans GradScaler)
         eval_split: str | None = None,
         focal_fine_gamma: float = 0.0,   # Focal loss sur tête fine
         focal_coarse_gamma: float = 0.0, # Focal loss sur tête coarse (positifs seulement)
@@ -485,7 +477,7 @@ def run_epoch(
 
     coarse_fine_mask = coarse_fine_mask.to(device)
 
-    amp_enabled = (device == "cuda") and (use_amp or scaler is not None)
+    amp_enabled = (device == "cuda") and (scaler is not None)
 
     for step, batch in enumerate(loader, start=1):
         input_ids = batch["input_ids"].to(device)
@@ -630,7 +622,6 @@ def run_epoch(
                     fine_class_weights=fine_class_weights,
                     certainty_class_weights=certainty_class_weights,
                     oblique_class_weights=oblique_class_weights,
-                    role_coarse_class_weights=role_coarse_class_weights,
                     lambda_boundary=lambda_boundary,
                     lambda_coarse=lambda_coarse,
                     lambda_fine=lambda_fine,
@@ -816,7 +807,7 @@ def run_epoch(
                 all_certainty_pred.append(cp)
         # Morpho : sur spans avec gender/number/person annotés
         for rt, gt, gp, nt, np_, pt, pp in zip(
-            role_coarse_true, gender_true, gender_pred_raw,
+            role_true, gender_true, gender_pred_raw,
             number_true, number_pred_raw,
             person_true, person_pred_raw
         ):
@@ -1255,12 +1246,6 @@ def main():
 
     print(f"✅ device = {device}")
 
-    # Performance CUDA
-    if device == "cuda":
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
-        print("⚡ cudnn.benchmark=True, bf16 matmul reduction=True")
-
     # ── W&B init ─────────────────────────────────────────────────────────────
     _wandb_enabled = False
     if _WANDB_AVAILABLE and args.wandb_project:
@@ -1449,7 +1434,7 @@ def main():
         print(f"   {g.get('name', '?'):<20} lr={g['lr']:.2e}")
     print(f"📐 Focal gamma: {args.focal_gamma}")
 
-    boundary_w = coarse_w = fine_w = certainty_w = oblique_w = role_coarse_w = None
+    boundary_w = coarse_w = fine_w = certainty_w = oblique_w = None
     if args.class_weights == "auto":
         (
             boundary_w,
@@ -1457,13 +1442,11 @@ def main():
             fine_w,
             certainty_w,
             oblique_w,
-            role_coarse_w,
             boundary_counts,
             coarse_counts,
             fine_counts,
             certainty_counts,
             oblique_counts,
-            role_coarse_counts,
         ) = compute_class_weights_from_multitask_jsonl(
             args.train,
             power=args.class_weight_power,
@@ -1482,13 +1465,6 @@ def main():
             fine_none_idx,
             args.min_fine_none_weight,
         )
-
-        # Plafonner OTHER (classe 4) à un poids très bas :
-        # OTHER = ~49% des spans role_coarse, sans plafond il noie SUBJ/OBJ/OBLIQ/APPOS
-        _OTHER_MAX_WEIGHT = 0.15
-        if role_coarse_w is not None and role_coarse_w[ROLE_COARSE_OTHER_ID].item() > _OTHER_MAX_WEIGHT:
-            role_coarse_w = role_coarse_w.clone()
-            role_coarse_w[ROLE_COARSE_OTHER_ID] = _OTHER_MAX_WEIGHT
 
         print("⚖️ class weights auto activés")
         print(f"   class_weight_power       = {args.class_weight_power}")
@@ -1515,10 +1491,6 @@ def main():
         print("\n[oblique fine counts / weights]  (CWP compense rareté ADVERSARY/SOURCE...)")
         for i, name in enumerate(ROLE_OBLIQUE_LABELS):
             print(f"  {name:<25} count={oblique_counts.get(i, 0):>6} weight={oblique_w[i].item():.6f}")
-
-        print("\n[role coarse counts / weights]  (OTHER plafonné à 0.15)")
-        for i, name in enumerate(ROLE_COARSE_LABELS):
-            print(f"  {name:<10} count={role_coarse_counts.get(i, 0):>8} weight={role_coarse_w[i].item():.6f}")
     else:
         print("⚖️ class weights désactivés")
         boundary_w = None
@@ -1633,7 +1605,6 @@ def main():
             coarse_class_weights=coarse_w,
             fine_class_weights=fine_w,
             certainty_class_weights=certainty_w,
-            role_coarse_class_weights=role_coarse_w,
             lambda_boundary=args.lambda_boundary,
             lambda_coarse=args.lambda_coarse,
             lambda_fine=args.lambda_fine,
@@ -1654,7 +1625,6 @@ def main():
             ema=ema,
             collect_hn=use_inline_hn and (epoch % args.hn_every == 0),
             scaler=scaler,
-            use_amp=use_amp,
             focal_fine_gamma=args.focal_fine_gamma,
             focal_coarse_gamma=args.focal_coarse_gamma,
             focal_role_gamma=args.focal_role_gamma,
@@ -1691,7 +1661,6 @@ def main():
             coarse_class_weights=coarse_w,
             fine_class_weights=fine_w,
             certainty_class_weights=certainty_w,
-            role_coarse_class_weights=role_coarse_w,
             lambda_boundary=args.lambda_boundary,
             lambda_coarse=args.lambda_coarse,
             lambda_fine=args.lambda_fine,
@@ -1715,7 +1684,6 @@ def main():
             focal_role_gamma=args.focal_role_gamma,
             ignore_coarse_none=args.ignore_coarse_none,
             weighting=weighting,
-            use_amp=use_amp,
         )
 
         if use_ema:
@@ -1754,8 +1722,6 @@ def main():
             f"Boundary F1={val_metrics['boundary_f1']:.4f} | "
             f"Coarse F1={val_metrics['coarse_macro_f1']:.4f} | "
             f"Fine F1={val_metrics['fine_macro_f1']:.4f} | "
-            f"SVO Bnd F1={val_metrics['svo_boundary_f1']:.4f} | "
-            f"Role Crs F1={val_metrics['role_coarse_macro_f1']:.4f} | "
             f"Voice F1={val_metrics['voice_macro_f1']:.4f} | "
             f"Certainty F1={val_metrics['certainty_macro_f1']:.4f} | "
             f"Gender F1={val_metrics['gender_macro_f1']:.4f} | "
@@ -1926,7 +1892,6 @@ def main():
         coarse_class_weights=coarse_w,
         fine_class_weights=fine_w,
         certainty_class_weights=certainty_w,
-        role_coarse_class_weights=role_coarse_w,
         lambda_boundary=args.lambda_boundary,
         lambda_coarse=args.lambda_coarse,
         lambda_fine=args.lambda_fine,
@@ -1949,7 +1914,6 @@ def main():
         focal_role_gamma=args.focal_role_gamma,
         ignore_coarse_none=args.ignore_coarse_none,
         weighting=weighting,
-        use_amp=use_amp,
     )
 
     print("\n🎯 TEST")

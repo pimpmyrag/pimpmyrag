@@ -50,7 +50,7 @@
     "fine":         1.8,
     "svo_boundary": 0.35,
     "svo":          0.70,
-    "role_coarse":  0.35,
+    "role_coarse":  0.06,
     "role_oblique": 0.25,
     "voice":        0.15,
     "certainty":    0.30,
