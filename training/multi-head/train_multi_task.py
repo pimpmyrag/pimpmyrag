@@ -1000,10 +1000,24 @@ def run_epoch(
             labels=list(range(NUM_ROLE)),
             target_names=ROLE_LABELS, digits=3, zero_division=0
         ) if all_svo_true else "N/A",
+        # svo_boundary : tête binaire VERB / non-VERB (verb_trigger + pron vs tout le reste)
+        "svo_boundary_report": classification_report(
+            all_svob_true, all_svob_pred,
+            labels=[0, 1], target_names=["non_verb", "verb_trigger"],
+            digits=3, zero_division=0
+        ) if all_svob_true else "N/A",
+        # role_coarse : SUBJ / OBJ / OBLIQ / APPOS / OTHER — tous les labels toujours affichés
+        "role_coarse_report": classification_report(
+            all_rc_true, all_rc_pred,
+            labels=list(range(NUM_ROLE_COARSE)),
+            target_names=ROLE_COARSE_LABELS,
+            digits=3, zero_division=0
+        ) if all_rc_true else "N/A",
+        # role_oblique : tous les 10 sous-types affichés (y compris OBLIQUE_TIME/LOC à zéro)
         "role_oblique_report": classification_report(
             all_ro_true, all_ro_pred,
-            labels=[l for l in range(NUM_ROLE_OBLIQUE) if l in set(all_ro_true)],
-            target_names=[ROLE_OBLIQUE_LABELS[l] for l in range(NUM_ROLE_OBLIQUE) if l in set(all_ro_true)],
+            labels=list(range(NUM_ROLE_OBLIQUE)),
+            target_names=ROLE_OBLIQUE_LABELS,
             digits=3, zero_division=0
         ) if all_ro_true else "N/A",
         "hn_results_by_id": hn_results_by_id,
@@ -1805,8 +1819,11 @@ def main():
             # Per-label F1 depuis le classification_report (val fine + coarse)
             import re as _re
             for report_key, prefix in [
-                ("fine_report",   "val/fine"),
-                ("coarse_report", "val/coarse"),
+                ("fine_report",         "val/fine"),
+                ("coarse_report",       "val/coarse"),
+                ("role_coarse_report",  "val/role_coarse"),
+                ("role_oblique_report", "val/role_oblique"),
+                ("svo_boundary_report", "val/svo_bnd"),
             ]:
                 report_str = val_metrics.get(report_key, "")
                 for line in report_str.splitlines():
@@ -1852,10 +1869,14 @@ def main():
                 print(f"  {item['label']}  recall={item['recall']:.3f} support={item['support']} top_confusion={item['top_confused_with']} ({item['top_confused_count']})")
         if val_metrics.get("fine_confusion_csv"):
             print(f"[VAL fine exports] csv={val_metrics['fine_confusion_csv']} json={val_metrics['fine_diagnostics_json']}")
-        print("[VAL svo]")
+        print("[VAL svo boundary (verb_trigger)]")
+        print(val_metrics["svo_boundary_report"])
+        print("[VAL role coarse (SUBJ/OBJ/OBLIQ/APPOS)]")
+        print(val_metrics["role_coarse_report"])
+        print("[VAL svo fine]")
         print(val_metrics["svo_report"])
         if val_metrics.get("role_oblique_report") and val_metrics["role_oblique_report"] != "N/A":
-            print("[VAL role oblique]")
+            print("[VAL role oblique (sous-types OBLIQ)]")
             print(val_metrics["role_oblique_report"])
         if val_metrics.get("gender_macro_f1", 0) > 0:
             print(f"[VAL morpho]  Gender F1={val_metrics['gender_macro_f1']:.4f}  Number F1={val_metrics['number_macro_f1']:.4f}  Person F1={val_metrics['person_macro_f1']:.4f}")
