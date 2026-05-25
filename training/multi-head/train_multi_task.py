@@ -816,7 +816,7 @@ def run_epoch(
                 all_certainty_pred.append(cp)
         # Morpho : sur spans avec gender/number/person annotés
         for rt, gt, gp, nt, np_, pt, pp in zip(
-            role_true, gender_true, gender_pred_raw,
+            role_coarse_true, gender_true, gender_pred_raw,
             number_true, number_pred_raw,
             person_true, person_pred_raw
         ):
