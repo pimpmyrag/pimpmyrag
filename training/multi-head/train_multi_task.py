@@ -29,7 +29,7 @@ from labels import (
     COARSE_LABELS, FINE_LABELS,
     SYN_LABELS, NUM_SYN,
     NUM_VOICE, NUM_CERTAINTY, CERTAINTY_LABELS, NUM_GENDER, NUM_NUMBER, NUM_PERSON,
-    ROLE_COARSE_LABELS, NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID,
+    ROLE_COARSE_LABELS, NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID, ROLE_COARSE_OTHER_ID,
     ROLE_OBLIQUE_LABELS, NUM_ROLE_OBLIQUE, ROLE_OBLIQUE_NONE_ID,
     ROLE_COARSE2ID,
     PERSON_LABELS,
@@ -304,7 +304,7 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
         make_weights(fine_counts, len(FINE_LABELS), power=power),
         make_weights(certainty_counts, NUM_CERTAINTY, power=power),
         make_weights(oblique_counts, NUM_ROLE_OBLIQUE, power=power),
-        make_weights(role_coarse_counts, NUM_ROLE_COARSE, power=power),
+        make_weights(role_coarse_counts, NUM_ROLE_COARSE, power=min(power, 0.25)),
         boundary_counts,
         coarse_counts,
         fine_counts,
@@ -1483,6 +1483,13 @@ def main():
             args.min_fine_none_weight,
         )
 
+        # Plafonner OTHER (classe 4) à un poids très bas :
+        # OTHER = ~49% des spans role_coarse, sans plafond il noie SUBJ/OBJ/OBLIQ/APPOS
+        _OTHER_MAX_WEIGHT = 0.15
+        if role_coarse_w is not None and role_coarse_w[ROLE_COARSE_OTHER_ID].item() > _OTHER_MAX_WEIGHT:
+            role_coarse_w = role_coarse_w.clone()
+            role_coarse_w[ROLE_COARSE_OTHER_ID] = _OTHER_MAX_WEIGHT
+
         print("⚖️ class weights auto activés")
         print(f"   class_weight_power       = {args.class_weight_power}")
         print(f"   min_coarse_none_weight   = {args.min_coarse_none_weight}")
@@ -1508,6 +1515,10 @@ def main():
         print("\n[oblique fine counts / weights]  (CWP compense rareté ADVERSARY/SOURCE...)")
         for i, name in enumerate(ROLE_OBLIQUE_LABELS):
             print(f"  {name:<25} count={oblique_counts.get(i, 0):>6} weight={oblique_w[i].item():.6f}")
+
+        print("\n[role coarse counts / weights]  (OTHER plafonné à 0.15)")
+        for i, name in enumerate(ROLE_COARSE_LABELS):
+            print(f"  {name:<10} count={role_coarse_counts.get(i, 0):>8} weight={role_coarse_w[i].item():.6f}")
     else:
         print("⚖️ class weights désactivés")
         boundary_w = None

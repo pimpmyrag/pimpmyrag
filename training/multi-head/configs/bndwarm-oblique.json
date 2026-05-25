@@ -67,7 +67,8 @@
   },
 
   "role": {
-    "delay_epochs": 0
+    "delay_epochs": 0,
+    "ramp_epochs": 5
   },
 
   "boundary_rescue": {

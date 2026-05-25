@@ -166,8 +166,7 @@ def build_gold_candidates(row, tokenizer):
 
         # Rôle SVO annoté sur ce span NER
         role_id = ROLE2ID.get(sp.get("svo_role", "NONE"), ROLE_NONE_ID)
-        # NER gold sans svo_role → OTHER (entité hors argument annoté, pas sentinel)
-        # ROLE_FINE_TO_COARSE_ID mappe NONE→OTHER pour les spans NER gold
+        # NER gold sans svo_role → OTHER (cascade SVO→NER, poids réduit dans loss)
         role_coarse_id = ROLE_FINE_TO_COARSE_ID.get(role_id, ROLE_COARSE_NONE_ID)
 
         # Rôle oblique fin (tête hiérarchique, maskée aux spans OBLIQ coarse)

@@ -277,12 +277,13 @@ ROLE_COARSE_LABELS = [
     "OBJ",    # 1  ← OBJECT
     "OBLIQ",  # 2  ← OBLIQUE + tous les OBLIQUE_* collapsés
     "APPOS",  # 3  ← APPOS (relation appositionnelle explicite)
-    "OTHER",  # 4  ← spans NER gold sans svo_role annoté (entité hors argument explicite)
+    "OTHER",  # 4  ← spans NER gold sans svo_role annoté (cascade SVO→NER)
 ]
 ROLE_COARSE2ID      = {x: i for i, x in enumerate(ROLE_COARSE_LABELS)}
 ID2ROLE_COARSE      = {i: x for x, i in ROLE_COARSE2ID.items()}
-NUM_ROLE_COARSE     = len(ROLE_COARSE_LABELS)
-ROLE_COARSE_NONE_ID = NUM_ROLE_COARSE  # = 5  (sentinel : spans négatifs, verb_trigger, inconnu)
+NUM_ROLE_COARSE     = len(ROLE_COARSE_LABELS)       # = 5
+ROLE_COARSE_NONE_ID = NUM_ROLE_COARSE  # = 5  (sentinel : spans négatifs, verb_trigger)
+ROLE_COARSE_OTHER_ID = ROLE_COARSE2ID["OTHER"]  # = 4  (NER gold sans svo_role — poids réduit dans loss)
 
 # Mapping fine_role_id → coarse_role_id  (construit à partir de ROLE_LABELS)
 _RC = ROLE_COARSE2ID
@@ -298,7 +299,7 @@ ROLE_FINE_TO_COARSE_ID: dict[int, int] = {
     ROLE2ID["OBLIQUE_DOMAIN"]:     _RC["OBLIQ"],
     ROLE2ID["OBLIQUE_SOURCE"]:     _RC["OBLIQ"],
     ROLE2ID["APPOS"]:              _RC["APPOS"],
-    ROLE2ID["NONE"]:               ROLE_COARSE_NONE_ID,  # NER gold sans svo_role → exclus de la loss (sentinel)
+    ROLE2ID["NONE"]:               _RC["OTHER"],  # NER gold sans svo_role → OTHER (cascade SVO→NER, poids réduit)
 }
 
 # ─────────────────────────────────────────────────────────────

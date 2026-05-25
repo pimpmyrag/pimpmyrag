@@ -126,7 +126,8 @@ def compute_lambdas(cfg: dict, state: dict) -> dict:
 
     # ── Role ramp ─────────────────────────────────────────────────────────────
     role_ramp_ep = ramp_epoch - rl["delay_epochs"]
-    role_prog    = min(1.0, max(0.0, role_ramp_ep / sv["ramp_epochs"]))
+    role_ramp_epochs = rl.get("ramp_epochs", sv["ramp_epochs"])
+    role_prog    = min(1.0, max(0.0, role_ramp_ep / role_ramp_epochs))
 
     # ── Morpho ramp ───────────────────────────────────────────────────────────
     morpho_ramp_ep = ramp_epoch - mo["delay_epochs"]
