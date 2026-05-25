@@ -351,6 +351,7 @@ def run_epoch(
         ema: "ModelEMA | None" = None,
         collect_hn: bool = False,
         scaler=None,           # torch.GradScaler pour AMP (None = FP32)
+        use_amp: bool = False, # BF16 autocast (sans GradScaler)
         eval_split: str | None = None,
         focal_fine_gamma: float = 0.0,   # Focal loss sur tête fine
         focal_coarse_gamma: float = 0.0, # Focal loss sur tête coarse (positifs seulement)
@@ -477,7 +478,7 @@ def run_epoch(
 
     coarse_fine_mask = coarse_fine_mask.to(device)
 
-    amp_enabled = (device == "cuda") and (scaler is not None)
+    amp_enabled = (device == "cuda") and (use_amp or scaler is not None)
 
     for step, batch in enumerate(loader, start=1):
         input_ids = batch["input_ids"].to(device)
@@ -1246,6 +1247,12 @@ def main():
 
     print(f"✅ device = {device}")
 
+    # Performance CUDA
+    if device == "cuda":
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
+        print("⚡ cudnn.benchmark=True, bf16 matmul reduction=True")
+
     # ── W&B init ─────────────────────────────────────────────────────────────
     _wandb_enabled = False
     if _WANDB_AVAILABLE and args.wandb_project:
@@ -1625,6 +1632,7 @@ def main():
             ema=ema,
             collect_hn=use_inline_hn and (epoch % args.hn_every == 0),
             scaler=scaler,
+            use_amp=use_amp,
             focal_fine_gamma=args.focal_fine_gamma,
             focal_coarse_gamma=args.focal_coarse_gamma,
             focal_role_gamma=args.focal_role_gamma,
@@ -1684,6 +1692,7 @@ def main():
             focal_role_gamma=args.focal_role_gamma,
             ignore_coarse_none=args.ignore_coarse_none,
             weighting=weighting,
+            use_amp=use_amp,
         )
 
         if use_ema:
@@ -1914,6 +1923,7 @@ def main():
         focal_role_gamma=args.focal_role_gamma,
         ignore_coarse_none=args.ignore_coarse_none,
         weighting=weighting,
+        use_amp=use_amp,
     )
 
     print("\n🎯 TEST")
