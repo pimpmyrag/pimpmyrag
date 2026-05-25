@@ -5,7 +5,7 @@ set -e
 
 cd /workspace/pimpmyrag/training/multi-head
 
-CONFIG="${CONFIG:-configs/bndwarm-oblique.json}"
+CONFIG="${CONFIG:-configs/svo-first-cascade.json}"
 GOLD_VERSION="${GOLD_VERSION:-v8.18}"
 export TOKENIZERS_PARALLELISM="false"
 

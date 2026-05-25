@@ -74,49 +74,66 @@ def detect_hw(cfg: dict) -> dict:
 
 
 # ─────────────────────────────────────────────────────
-#  Calcul ramps lambdas
+#  Calcul ramps lambdas — CASCADE SVO-FIRST
 # ─────────────────────────────────────────────────────
+#
+# Architecture en 4 phases metric-driven :
+#
+#   PHASE 1 (toujours) : NER boundary + SVO boundary à plein régime
+#   PHASE 2 (svo_bnd_f1 > seuil) : role_coarse + voice + verb_ptr + certainty rampent
+#   PHASE 3 (ner_bnd_f1 > seuil) : NER coarse + fine rampent (boundary-first)
+#   PHASE 4 (role_coarse_f1 > seuil) : role_oblique + morpho rampent
+#
+# Les phases 2 et 3 sont INDÉPENDANTES (SVO cascade et NER cascade coexistent).
+# Chaque phase est déclenchée par une métrique, pas par un compteur d'epochs.
+# Une fois déclenchée, la phase rampe sur N epochs jusqu'à plein régime.
 
 def compute_lambdas(cfg: dict, state: dict) -> dict:
-    """Calcule les lambdas effectifs pour l'epoch courante selon l'état adaptatif."""
+    """Calcule les lambdas effectifs pour l'epoch courante selon la cascade SVO-first."""
     L  = cfg["lambdas"]
     bf = cfg["boundary_first"]
-    sv = cfg["svo_trigger"]
-    mo = cfg["morpho"]
-    rl = cfg["role"]
-    ner_warmup = cfg["run"].get("ner_warmup_epochs", 0)
-    epoch      = state["epoch"]
+    epoch = state["epoch"]
 
-    # Phase NER warmup ?
-    in_warmup = (not state.get("ner_only_bench") and ner_warmup > 0
-                 and epoch <= ner_warmup)
-
-    if in_warmup:
+    # ── NER only bench → tout SVO à zéro ─────────────────────────────────────
+    if state.get("ner_only_bench"):
         return {
-            "boundary":     L["boundary"],
-            "coarse":       bf["coarse_warmup_lambda"],
-            "fine":         bf["fine_warmup_lambda"],
-            "svo_boundary": 0.0,
-            "svo":          0.0,
-            "role_coarse":  0.0,
-            "role_oblique": 0.0,
-            "voice":        0.0,
-            "certainty":    0.0,
-            "morpho":       0.0,
-            "verb_ptr":     0.0,
-            "compat":       0.0,
+            "boundary":     state.get("l_boundary", L["boundary"]),
+            "coarse":       L["coarse"],
+            "fine":         L["fine"],
+            "svo_boundary": 0.0, "svo": 0.0,
+            "role_coarse":  0.0, "role_oblique": 0.0,
+            "voice": 0.0, "certainty": 0.0, "morpho": 0.0,
+            "verb_ptr": 0.0, "compat": 0.0,
         }
 
-    ramp_epoch = epoch - ner_warmup  # epoch relative après warmup
+    # ── PHASE 1 : Fondations (toujours actives) ─────────────────────────────
+    # NER boundary et SVO boundary à plein régime dès epoch 1.
+    l_boundary     = state.get("l_boundary", L["boundary"])
+    l_svo_boundary = L["svo_boundary"]  # PAS rampé — toujours à plein
 
-    # ── SVO progress (trigger métrique-driven) ────────────────────────────────
-    svo_pct      = state.get("svo_pct", sv["initial_pct"] if sv["pre_triggered"] else 0)
-    svo_progress = svo_pct / 100.0
+    # ── PHASE 2 : SVO roles (triggered par svo_bnd_f1) ──────────────────────
+    # Quand SVO boundary est fiable → on commence les rôles SVO.
+    sc = cfg.get("svo_cascade", {})
+    phase2_trigger_ep = state.get("phase2_trigger_epoch")  # epoch où phase 2 a déclenché
+    if phase2_trigger_ep is not None:
+        ramp_ep = epoch - phase2_trigger_ep
+        ramp_total = sc.get("role_ramp_epochs", 8)
+        phase2_prog = min(1.0, max(0.0, ramp_ep / ramp_total))
+    else:
+        phase2_prog = 0.0
 
-    # ── Coarse/fine (boundary-first unlock) ──────────────────────────────────
+    l_role_coarse = round(L["role_coarse"]  * phase2_prog, 4)
+    l_svo         = round(L["svo"]          * phase2_prog, 4)
+    l_voice       = round(state.get("l_voice", L["voice"]) * phase2_prog, 4)
+    l_certainty   = round(L["certainty"]    * phase2_prog, 4)
+    l_verb_ptr    = round(state.get("l_verb_ptr", L["verb_ptr"]) * phase2_prog, 4)
+
+    # ── PHASE 3 : NER classification (triggered par ner_bnd_f1) ──────────────
+    # Quand NER boundary est fiable → on commence coarse + fine NER.
+    # (identique à l'ancien boundary_first, indépendant de SVO)
     if not bf["enabled"] or state.get("coarse_fine_unlocked"):
         unlock_ep = state.get("coarse_fine_unlock_epoch", 0)
-        cf_ramp   = ramp_epoch - unlock_ep
+        cf_ramp   = epoch - unlock_ep
         cf_prog   = min(1.0, max(0.0, cf_ramp / bf["unlock_ramp_epochs"])) if bf["enabled"] else 1.0
         l_coarse  = bf["coarse_warmup_lambda"] + (L["coarse"] - bf["coarse_warmup_lambda"]) * cf_prog
         l_fine    = bf["fine_warmup_lambda"]   + (L["fine"]   - bf["fine_warmup_lambda"])   * cf_prog
@@ -124,32 +141,32 @@ def compute_lambdas(cfg: dict, state: dict) -> dict:
         l_coarse = bf["coarse_warmup_lambda"]
         l_fine   = bf["fine_warmup_lambda"]
 
-    # ── Role ramp ─────────────────────────────────────────────────────────────
-    role_ramp_ep = ramp_epoch - rl["delay_epochs"]
-    role_ramp_epochs = rl.get("ramp_epochs", sv["ramp_epochs"])
-    role_prog    = min(1.0, max(0.0, role_ramp_ep / role_ramp_epochs))
+    # ── PHASE 4 : SVO fine (triggered par role_coarse_f1) ────────────────────
+    # Quand role_coarse distingue bien SUBJ/OBJ/OBLIQ → on affine les obliques.
+    phase4_trigger_ep = state.get("phase4_trigger_epoch")
+    if phase4_trigger_ep is not None:
+        ramp_ep = epoch - phase4_trigger_ep
+        ramp_total = sc.get("oblique_ramp_epochs", 10)
+        phase4_prog = min(1.0, max(0.0, ramp_ep / ramp_total))
+    else:
+        phase4_prog = 0.0
 
-    # ── Morpho ramp ───────────────────────────────────────────────────────────
-    morpho_ramp_ep = ramp_epoch - mo["delay_epochs"]
-    morpho_prog    = min(1.0, max(0.0, morpho_ramp_ep / mo["ramp_epochs"]))
-
-    # ── NER only bench ? ──────────────────────────────────────────────────────
-    if state.get("ner_only_bench"):
-        svo_progress = role_prog = morpho_prog = 0.0
+    l_role_oblique = round(L["role_oblique"] * phase4_prog, 4)
+    l_morpho       = round(L["morpho"]       * phase4_prog, 4)
 
     return {
-        "boundary":     state.get("l_boundary", L["boundary"]),  # modifiable par rescue
+        "boundary":     l_boundary,
         "coarse":       round(l_coarse, 4),
         "fine":         round(l_fine, 4),
-        "svo_boundary": round(L["svo_boundary"] * svo_progress, 4),
-        "svo":          round(L["svo"]          * svo_progress, 4),
-        "role_coarse":  round(L["role_coarse"]  * role_prog, 4),
-        "role_oblique": round(L["role_oblique"] * role_prog, 4),
-        "voice":        round(state.get("l_voice",    L["voice"])    * svo_progress, 4),
-        "certainty":    round(L["certainty"]    * svo_progress, 4),
-        "morpho":       round(L["morpho"]       * morpho_prog, 4),
-        "verb_ptr":     round(state.get("l_verb_ptr", L["verb_ptr"]) * svo_progress, 4),
-        "compat":       0.0 if state.get("ner_only_bench") else L.get("compat", 0.0),
+        "svo_boundary": l_svo_boundary,
+        "svo":          l_svo,
+        "role_coarse":  l_role_coarse,
+        "role_oblique": l_role_oblique,
+        "voice":        l_voice,
+        "certainty":    l_certainty,
+        "morpho":       l_morpho,
+        "verb_ptr":     l_verb_ptr,
+        "compat":       L.get("compat", 0.0),
     }
 
 
@@ -384,6 +401,8 @@ def main():
 
     # État adaptatif
     levels = cfg["difficulty_levels"]
+    # Compat : ancienne config (svo_trigger) → fields ignorés si svo_cascade présent
+    use_svo_cascade = "svo_cascade" in cfg
     state = {
         "epoch":                 args.start_epoch,
         "level":                 args.start_level,
@@ -393,15 +412,17 @@ def main():
         "epochs_at_level":       0,
         "best_score":            -1.0,
         "best_boundary":         -1.0,
+        "best_svo_bnd":          -1.0,
+        "best_role_coarse":      -1.0,
         "boundary_window":       [],
         "rescue_window":         [],
         "rescue_applied":        False,
         "regression_count":      0,
         "coarse_fine_unlocked":  not cfg["boundary_first"]["enabled"],
         "coarse_fine_unlock_epoch": 0,
-        "svo_triggered":         cfg["svo_trigger"]["pre_triggered"],
-        "svo_pct":               cfg["svo_trigger"]["initial_pct"] if cfg["svo_trigger"]["pre_triggered"] else 0,
-        "svo_trigger_epoch":     0,
+        # Cascade SVO-first (phases 2 & 4)
+        "phase2_trigger_epoch":  None,  # SVO roles → triggered par svo_bnd_f1
+        "phase4_trigger_epoch":  None,  # SVO fine  → triggered par role_coarse_f1
         "l_boundary":            cfg["lambdas"]["boundary"],
         "l_voice":               cfg["lambdas"]["voice"],
         "l_verb_ptr":            cfg["lambdas"]["verb_ptr"],
@@ -417,39 +438,40 @@ def main():
     es = cfg["early_stopping"]
     bp = cfg["boundary_plateau"]
     br = cfg["boundary_rescue"]
-    sv = cfg["svo_trigger"]
     bf = cfg["boundary_first"]
+    sc = cfg.get("svo_cascade", {})
     max_epochs = cfg["run"]["max_epochs"]
+
+    # Log architecture cascade
+    if use_svo_cascade:
+        log(f"🏗️  Architecture : CASCADE SVO-FIRST")
+        log(f"   Phase 1 : NER bnd + SVO bnd à plein régime dès epoch 1")
+        log(f"   Phase 2 : role_coarse + voice + verb_ptr → quand svo_bnd_f1 > {sc.get('role_thr_svo_bnd', '?')}")
+        log(f"   Phase 3 : NER coarse + fine → quand ner_bnd > {bf['unlock_threshold']}")
+        log(f"   Phase 4 : role_oblique + morpho → quand role_coarse_f1 > {sc.get('oblique_thr_role_crs', '?')}")
 
     # ─── BOUCLE PRINCIPALE ───────────────────────────────────────────
     while state["epoch"] <= max_epochs:
         epoch = state["epoch"]
-        state["in_warmup"] = (
-            not args.ner_only_bench
-            and cfg["run"].get("ner_warmup_epochs", 0) > 0
-            and epoch <= cfg["run"].get("ner_warmup_epochs", 0)
-        )
 
         lambdas = compute_lambdas(cfg, state)
 
-        # Unlock coarse/fine log
-        if cfg["boundary_first"]["enabled"]:
-            if not state["coarse_fine_unlocked"]:
-                log(f"      NER  : bnd={state['l_boundary']}  crs={lambdas['coarse']} [warmup]  "
-                    f"fin={lambdas['fine']} [warmup]  🔒bnd<{bf['unlock_threshold']}")
-            else:
-                cf_ep = epoch - cfg["run"].get("ner_warmup_epochs", 0) - state["coarse_fine_unlock_epoch"]
-                log(f"      NER  : bnd={state['l_boundary']}  crs={lambdas['coarse']}  "
-                    f"fin={lambdas['fine']}  🔓(ramp {cf_ep}/{bf['unlock_ramp_epochs']})")
+        # Log cascade status
+        p2 = "🟢" if state["phase2_trigger_epoch"] is not None else "⏳"
+        p3 = "🟢" if state["coarse_fine_unlocked"] else "⏳"
+        p4 = "🟢" if state["phase4_trigger_epoch"] is not None else "⏳"
+        log(f"      Cascade : P1=🟢  P2(roles)={p2}  P3(ner_cls)={p3}  P4(oblique)={p4}")
 
         # Lancer l'epoch
         output = run_epoch(cfg, hw, state, lambdas, gold_version, log_dir, epoch)
 
         # Extraire métriques
-        val_score   = extract_metric(output, "Score")
-        boundary_f1 = extract_metric(output, "Boundary F1")
-        coarse_f1   = extract_metric(output, "Coarse")
-        voice_f1    = extract_metric(output, "Voice F1")
+        val_score    = extract_metric(output, "Score")
+        boundary_f1  = extract_metric(output, "Boundary F1")
+        coarse_f1    = extract_metric(output, "Coarse")
+        voice_f1     = extract_metric(output, "Voice F1")
+        svo_bnd_f1   = extract_metric(output, "SVO Bnd F1")
+        role_crs_f1  = extract_metric(output, "Role Crs F1")
 
         if val_score is None:
             log(f"⚠️  Impossible d'extraire le val score ep{epoch} — on continue")
@@ -459,8 +481,8 @@ def main():
 
         state["resume_arg"] = "checkpoint_best_multitask.pt" if Path("checkpoint_best_multitask.pt").exists() else ""
 
-        log(f"📊 Ep {epoch} — Score={val_score:.4f}  Boundary={boundary_f1}  "
-            f"Coarse={coarse_f1}  Voice={voice_f1}  (best={state['best_score']:.4f})")
+        log(f"📊 Ep {epoch} — Score={val_score:.4f}  NER_Bnd={boundary_f1}  Coarse={coarse_f1}  "
+            f"SVO_Bnd={svo_bnd_f1}  RoleCrs={role_crs_f1}  Voice={voice_f1}  (best={state['best_score']:.4f})")
 
         # ── Score stagnation ──────────────────────────────────────────────────
         if val_score > state["best_score"] + es["min_delta"]:
@@ -471,7 +493,7 @@ def main():
             state["stagnation"] += 1
             log(f"⏸️  Pas d'amélioration ({state['stagnation']}/{es['patience']})")
 
-        # ── Boundary tracking ─────────────────────────────────────────────────
+        # ── NER Boundary tracking ────────────────────────────────────────────
         if boundary_f1 is not None:
             if boundary_f1 > state["best_boundary"] + es["min_delta"]:
                 state["best_boundary"] = boundary_f1
@@ -485,36 +507,19 @@ def main():
                 gain = boundary_f1 - state["boundary_window"][0]
                 if gain < bp["min_delta"]:
                     state["boundary_stagnation"] += 1
-                    log(f"⏸️  Boundary plateau {bp['window']}ep: {state['boundary_window'][0]:.4f} → {boundary_f1:.4f} (+{gain:.4f})")
                 else:
                     state["boundary_stagnation"] = 0
-                    log(f"✅ Boundary progresse: +{gain:.4f} sur {bp['window']}ep (best={state['best_boundary']:.4f})")
 
-            # ── Boundary unlock coarse/fine ───────────────────────────────────
+            # ── PHASE 3 : NER coarse/fine unlock (boundary-first) ───────────
             if cfg["boundary_first"]["enabled"] and not state["coarse_fine_unlocked"]:
                 if boundary_f1 >= bf["unlock_threshold"]:
                     state["coarse_fine_unlocked"] = True
-                    unlock_ramp_ep = epoch - cfg["run"].get("ner_warmup_epochs", 0)
-                    state["coarse_fine_unlock_epoch"] = unlock_ramp_ep
-                    log(f"🔓 Boundary {boundary_f1:.4f} ≥ {bf['unlock_threshold']} → UNLOCK coarse+fine (ramp {bf['unlock_ramp_epochs']}ep)")
+                    state["coarse_fine_unlock_epoch"] = epoch
+                    log(f"🔓 PHASE 3 — NER Bnd {boundary_f1:.4f} ≥ {bf['unlock_threshold']} "
+                        f"→ UNLOCK coarse+fine (ramp {bf['unlock_ramp_epochs']}ep)")
 
-            # ── SVO trigger (métriques-driven) ────────────────────────────────
-            if not state["svo_triggered"] and coarse_f1 is not None:
-                if boundary_f1 >= sv["thr_bnd"] and coarse_f1 >= sv["thr_coarse"]:
-                    state["svo_triggered"] = True
-                    state["svo_trigger_epoch"] = epoch - cfg["run"].get("ner_warmup_epochs", 0)
-                    state["svo_pct"] = sv["initial_pct"]
-                    log(f"🎯 SVO TRIGGER ep{epoch} — bnd={boundary_f1:.4f}≥{sv['thr_bnd']} "
-                        f"coarse={coarse_f1:.4f}≥{sv['thr_coarse']} → SVO démarré à {sv['initial_pct']}%")
-            elif state["svo_triggered"] and state["svo_pct"] < 100:
-                ramp_ep = epoch - cfg["run"].get("ner_warmup_epochs", 0) - state["svo_trigger_epoch"]
-                new_pct = min(100, sv["initial_pct"] + int(ramp_ep / sv["step_epochs"]) * sv["initial_pct"])
-                if new_pct > state["svo_pct"]:
-                    state["svo_pct"] = new_pct
-                    log(f"📈 SVO ramp ep{epoch} → {new_pct}%")
-
-            # ── Rescue regression boundary ────────────────────────────────────
-            if not state["rescue_applied"] and not state.get("in_warmup"):
+            # ── Rescue regression boundary ──────────────────────────────────
+            if not state["rescue_applied"]:
                 drop = state["best_boundary"] - boundary_f1
                 if drop >= bp["regression_delta"]:
                     state["regression_count"] += 1
@@ -545,11 +550,32 @@ def main():
                         log(f"🚨 NER RESCUE ep{epoch} — boundary {boundary_f1:.4f}<{br['target']} "
                             f"stagne (+{gain:.4f}/{br['window']}ep)")
 
+        # ── PHASE 2 : SVO roles trigger (svo_bnd_f1 > seuil) ────────────────
+        if use_svo_cascade and svo_bnd_f1 is not None:
+            if svo_bnd_f1 > state["best_svo_bnd"]:
+                state["best_svo_bnd"] = svo_bnd_f1
+            if state["phase2_trigger_epoch"] is None:
+                thr = sc["role_thr_svo_bnd"]
+                if svo_bnd_f1 >= thr:
+                    state["phase2_trigger_epoch"] = epoch
+                    log(f"🎯 PHASE 2 — SVO Bnd {svo_bnd_f1:.4f} ≥ {thr} → UNLOCK role_coarse + voice + verb_ptr "
+                        f"(ramp {sc['role_ramp_epochs']}ep)")
+
+        # ── PHASE 4 : SVO fine trigger (role_coarse_f1 > seuil) ──────────────
+        if use_svo_cascade and role_crs_f1 is not None:
+            if role_crs_f1 > state["best_role_coarse"]:
+                state["best_role_coarse"] = role_crs_f1
+            if state["phase4_trigger_epoch"] is None and state["phase2_trigger_epoch"] is not None:
+                thr = sc["oblique_thr_role_crs"]
+                if role_crs_f1 >= thr:
+                    state["phase4_trigger_epoch"] = epoch
+                    log(f"🎯 PHASE 4 — Role Crs {role_crs_f1:.4f} ≥ {thr} → UNLOCK role_oblique + morpho "
+                        f"(ramp {sc['oblique_ramp_epochs']}ep)")
+
         # ── Changement de niveau de difficulté ───────────────────────────────
         state["epochs_at_level"] += 1
         needs_level_up = (
-            not state.get("in_warmup")
-            and (
+            (
                 state["stagnation"] >= es["patience"]
                 or state["boundary_stagnation"] >= es["patience"]
                 or state["epochs_at_level"] >= levels["max_epochs_per_level"]
@@ -564,13 +590,14 @@ def main():
             state["epochs_at_level"] = 0
             log(f"⬆️  Passage au niveau {state['level_name']} (level {state['level']})")
             rebuild_dataset(state["level"], cfg, gold_version, state)
-        elif state.get("in_warmup") is False and state["stagnation"] >= es["patience"] and state["level"] >= len(levels["names"]) - 1:
+        elif state["stagnation"] >= es["patience"] and state["level"] >= len(levels["names"]) - 1:
             log(f"🛑 Early stopping — plus aucune amélioration au niveau max")
             break
 
         state["epoch"] += 1
 
-    log(f"\n✅ Training terminé — best_score={state['best_score']:.4f}  best_boundary={state['best_boundary']:.4f}")
+    log(f"\n✅ Training terminé — best_score={state['best_score']:.4f}  best_boundary={state['best_boundary']:.4f}"
+        f"  best_svo_bnd={state['best_svo_bnd']:.4f}  best_role_coarse={state['best_role_coarse']:.4f}")
 
 
 if __name__ == "__main__":

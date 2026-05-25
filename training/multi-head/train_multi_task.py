@@ -1754,6 +1754,8 @@ def main():
             f"Boundary F1={val_metrics['boundary_f1']:.4f} | "
             f"Coarse F1={val_metrics['coarse_macro_f1']:.4f} | "
             f"Fine F1={val_metrics['fine_macro_f1']:.4f} | "
+            f"SVO Bnd F1={val_metrics['svo_boundary_f1']:.4f} | "
+            f"Role Crs F1={val_metrics['role_coarse_macro_f1']:.4f} | "
             f"Voice F1={val_metrics['voice_macro_f1']:.4f} | "
             f"Certainty F1={val_metrics['certainty_macro_f1']:.4f} | "
             f"Gender F1={val_metrics['gender_macro_f1']:.4f} | "

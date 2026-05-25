@@ -1,0 +1,145 @@
+{
+  "_comment": "Config svo-first-cascade — Architecture de cascade SVO→NER",
+  "_version": "v8.18",
+  "_doc": [
+    "PHILOSOPHIE : Le training suit une cascade à 4 phases métrique-driven.",
+    "",
+    "PHASE 1 — Fondations (toujours actives dès epoch 1) :",
+    "  - NER boundary (lambda=5.0) : détecter les spans NER",
+    "  - SVO boundary (lambda=0.70) : détecter verb_trigger + pronoms",
+    "  Les deux tournent à plein régime en parallèle.",
+    "",
+    "PHASE 2 — SVO roles (quand svo_bnd_f1 > seuil) :",
+    "  - role_coarse (SUBJ/OBJ/OBLIQ/APPOS/OTHER) ramp sur N epochs",
+    "  - voice, certainty, verb_ptr commencent à ramper",
+    "  Déclenché par : val/svo_boundary_f1 > svo_cascade.role_thr_svo_bnd",
+    "",
+    "PHASE 3 — NER classification (quand ner_bnd_f1 > seuil) :",
+    "  - NER coarse + fine unlock et ramp (boundary-first)",
+    "  Déclenché par : val/boundary_f1 > boundary_first.unlock_threshold",
+    "  (Ce mécanisme est indépendant du SVO — les deux cascades coexistent.)",
+    "",
+    "PHASE 4 — SVO fine (quand role_coarse_f1 > seuil) :",
+    "  - role_oblique (sous-types OBLIQ) ramp",
+    "  - morpho (gender/number/person) ramp",
+    "  Déclenché par : val/role_coarse_f1 > svo_cascade.oblique_thr_role_crs"
+  ],
+
+  "run": {
+    "name_suffix": "svo-cascade",
+    "max_epochs": 90,
+    "model": "microsoft/deberta-v3-base",
+    "loss_weighting": "fixed",
+    "ner_only_bench": false
+  },
+
+  "optimizer": {
+    "lr": 8e-6,
+    "head_lr_multiplier": 4.0,
+    "warmup_epochs": 0,
+    "max_grad_norm": 1.0,
+    "layer_lr_decay": 0.9,
+    "ema_decay": 0.999,
+    "class_weight_power": 0.5
+  },
+
+  "lambdas": {
+    "_comment": "Valeurs CIBLES plein régime. Les ramps sont gérées par la cascade dans run_training.py.",
+    "boundary":     5.0,
+    "coarse":       0.75,
+    "fine":         1.8,
+    "svo_boundary": 0.70,
+    "svo":          0.70,
+    "role_coarse":  0.35,
+    "role_oblique": 0.25,
+    "voice":        0.15,
+    "certainty":    0.30,
+    "morpho":       0.10,
+    "verb_ptr":     0.60,
+    "compat":       0.2
+  },
+
+  "focal": {
+    "boundary_gamma":  0.5,
+    "fine_gamma":      0.0,
+    "coarse_gamma":    0.0
+  },
+
+  "boundary_first": {
+    "_comment": "PHASE 3 — NER coarse+fine démarrent bas, unlock quand NER boundary >= seuil",
+    "enabled": true,
+    "unlock_threshold":    0.88,
+    "unlock_ramp_epochs":  18,
+    "coarse_warmup_lambda": 0.05,
+    "fine_warmup_lambda":   0.15
+  },
+
+  "svo_cascade": {
+    "_comment": "PHASES 2 & 4 — Cascade SVO metric-driven (PAS epoch-driven)",
+
+    "_phase2_doc": "PHASE 2 : quand svo_bnd_f1 > role_thr_svo_bnd → role_coarse + voice + verb_ptr rampent",
+    "role_thr_svo_bnd":    0.85,
+    "role_ramp_epochs":    8,
+
+    "_phase4_doc": "PHASE 4 : quand role_coarse_f1 > oblique_thr_role_crs → role_oblique + morpho rampent",
+    "oblique_thr_role_crs": 0.45,
+    "oblique_ramp_epochs":  10
+  },
+
+  "boundary_rescue": {
+    "_comment": "Si NER boundary stagne, réduit les lambdas compétiteurs (once-only)",
+    "window":          5,
+    "target":          0.90,
+    "min_delta":       0.003,
+    "factor_vptr_voice": 0.65,
+    "factor_coarse":     0.75,
+    "bnd_boost":         1.20
+  },
+
+  "boundary_plateau": {
+    "window":       5,
+    "min_delta":    0.003,
+    "regression_window": 3,
+    "regression_delta":  0.008
+  },
+
+  "hard_negatives": {
+    "every_n_epochs": 1,
+    "decay":          0.85,
+    "max_weight":     8.0,
+    "min_weight":     0.3,
+    "boost_fp":       5.0,
+    "boost_fn":       2.0,
+    "boost_coarse":   2.5,
+    "boost_fine":     3.0,
+    "boost_fp_svo":   3.0,
+    "boost_fn_svo":   2.0,
+    "boost_role_coarse": 1.5
+  },
+
+  "difficulty_levels": {
+    "_comment": "6 niveaux progressifs. hard_per_gold = nb négatifs durs par gold.",
+    "names":         ["easy", "easy+", "medium", "medium+", "hard", "full"],
+    "hard_per_gold": [2,      2,       3,        4,         5,      6],
+    "soft_factors":  [1.0,    1.25,    1.5,      2.0,       2.0,    2.0],
+    "max_epochs_per_level":   6,
+    "min_delta_for_progress": 0.0003,
+    "patience": 5
+  },
+
+  "early_stopping": {
+    "patience":   5,
+    "min_delta":  0.0003
+  },
+
+  "hardware": {
+    "_comment": "Overridé par détection VRAM dans run_training.py.",
+    "h100_80gb":  {"bs": 160, "accum": 1, "workers": 8},
+    "a100_40gb":  {"bs":  96, "accum": 1, "workers": 6},
+    "l40s_48gb":  {"bs":  96, "accum": 1, "workers": 6},
+    "rtx_4090":   {"bs":  96, "accum": 1, "workers": 6},
+    "rtx_3090":   {"bs":  64, "accum": 1, "workers": 4},
+    "default":    {"bs":  16, "accum": 2, "workers": 0}
+  }
+}
+
