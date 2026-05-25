@@ -264,6 +264,7 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
     fine_counts = Counter()
     certainty_counts = Counter()
     oblique_counts = Counter()
+    role_coarse_counts = Counter()
 
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -278,6 +279,9 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
                 obl_id = c.get("role_oblique_label_id", ROLE_OBLIQUE_NONE_ID)
                 if obl_id < ROLE_OBLIQUE_NONE_ID:
                     oblique_counts[obl_id] += 1
+                rc_id = c.get("role_coarse_label_id", ROLE_COARSE_NONE_ID)
+                if rc_id < ROLE_COARSE_NONE_ID:
+                    role_coarse_counts[rc_id] += 1
 
     def make_weights(counts, num_classes, power=0.5):
         total = sum(counts.values())
@@ -300,11 +304,13 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
         make_weights(fine_counts, len(FINE_LABELS), power=power),
         make_weights(certainty_counts, NUM_CERTAINTY, power=power),
         make_weights(oblique_counts, NUM_ROLE_OBLIQUE, power=power),
+        make_weights(role_coarse_counts, NUM_ROLE_COARSE, power=power),
         boundary_counts,
         coarse_counts,
         fine_counts,
         certainty_counts,
         oblique_counts,
+        role_coarse_counts,
     )
 
 
@@ -331,6 +337,7 @@ def run_epoch(
         coarse_class_weights=None,
         fine_class_weights=None,
         certainty_class_weights=None,
+        role_coarse_class_weights=None,
         lambda_boundary=2.5,
         lambda_coarse=1.0,
         lambda_fine=1.8,
@@ -623,6 +630,7 @@ def run_epoch(
                     fine_class_weights=fine_class_weights,
                     certainty_class_weights=certainty_class_weights,
                     oblique_class_weights=oblique_class_weights,
+                    role_coarse_class_weights=role_coarse_class_weights,
                     lambda_boundary=lambda_boundary,
                     lambda_coarse=lambda_coarse,
                     lambda_fine=lambda_fine,
@@ -807,8 +815,8 @@ def run_epoch(
                 all_certainty_true.append(ct)
                 all_certainty_pred.append(cp)
         # Morpho : sur spans avec gender/number/person annotés
-        for _rt, gt, gp, nt, np_, pt, pp in zip(
-            role_coarse_true, gender_true, gender_pred_raw,
+        for rt, gt, gp, nt, np_, pt, pp in zip(
+            role_true, gender_true, gender_pred_raw,
             number_true, number_pred_raw,
             person_true, person_pred_raw
         ):
@@ -1441,7 +1449,7 @@ def main():
         print(f"   {g.get('name', '?'):<20} lr={g['lr']:.2e}")
     print(f"📐 Focal gamma: {args.focal_gamma}")
 
-    boundary_w = coarse_w = fine_w = certainty_w = oblique_w = None
+    boundary_w = coarse_w = fine_w = certainty_w = oblique_w = role_coarse_w = None
     if args.class_weights == "auto":
         (
             boundary_w,
@@ -1449,11 +1457,13 @@ def main():
             fine_w,
             certainty_w,
             oblique_w,
+            role_coarse_w,
             boundary_counts,
             coarse_counts,
             fine_counts,
             certainty_counts,
             oblique_counts,
+            role_coarse_counts,
         ) = compute_class_weights_from_multitask_jsonl(
             args.train,
             power=args.class_weight_power,
@@ -1612,6 +1622,7 @@ def main():
             coarse_class_weights=coarse_w,
             fine_class_weights=fine_w,
             certainty_class_weights=certainty_w,
+            role_coarse_class_weights=role_coarse_w,
             lambda_boundary=args.lambda_boundary,
             lambda_coarse=args.lambda_coarse,
             lambda_fine=args.lambda_fine,
@@ -1669,6 +1680,7 @@ def main():
             coarse_class_weights=coarse_w,
             fine_class_weights=fine_w,
             certainty_class_weights=certainty_w,
+            role_coarse_class_weights=role_coarse_w,
             lambda_boundary=args.lambda_boundary,
             lambda_coarse=args.lambda_coarse,
             lambda_fine=args.lambda_fine,
@@ -1901,6 +1913,7 @@ def main():
         coarse_class_weights=coarse_w,
         fine_class_weights=fine_w,
         certainty_class_weights=certainty_w,
+        role_coarse_class_weights=role_coarse_w,
         lambda_boundary=args.lambda_boundary,
         lambda_coarse=args.lambda_coarse,
         lambda_fine=args.lambda_fine,

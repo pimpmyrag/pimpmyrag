@@ -298,7 +298,7 @@ ROLE_FINE_TO_COARSE_ID: dict[int, int] = {
     ROLE2ID["OBLIQUE_DOMAIN"]:     _RC["OBLIQ"],
     ROLE2ID["OBLIQUE_SOURCE"]:     _RC["OBLIQ"],
     ROLE2ID["APPOS"]:              _RC["APPOS"],
-    ROLE2ID["NONE"]:               _RC["OTHER"],  # NER gold sans svo_role → OTHER (pas sentinel!)
+    ROLE2ID["NONE"]:               ROLE_COARSE_NONE_ID,  # NER gold sans svo_role → exclus de la loss (sentinel)
 }
 
 # ─────────────────────────────────────────────────────────────
