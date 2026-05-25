@@ -188,7 +188,7 @@ def run_epoch(cfg: dict, hw: dict, state: dict, lambdas: dict,
     _bool = lambda v: ["", str(v)][bool(v)]
 
     cmd = [
-        "python3", "train_multi_task.py",
+        "python3", "-u", "train_multi_task.py",
         "--train", str(train_file),
         "--val",   str(val_file),
         "--test",  str(test_file),
@@ -257,16 +257,21 @@ def run_epoch(cfg: dict, hw: dict, state: dict, lambdas: dict,
     # ...existing code (prints lambdas)...
     sys.stdout.flush()
 
-    # Exécution directe (pas de pipe → pas de deadlock stdout buffer)
-    # Les logs vont dans le fichier ET stdout via tee dans le sh appelant
+    # Popen + lecture ligne-par-ligne : écrit dans fichier ET stdout
+    # Pas de deadlock car on consomme le buffer en continu (vs communicate())
     with open(log_path, "w") as lf:
-        proc = subprocess.run(cmd, stdout=lf, stderr=subprocess.STDOUT, text=True)
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1,  # line-buffered
+        )
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            lf.write(line)
+            lf.flush()
+        proc.wait()
 
     output = log_path.read_text(encoding="utf-8", errors="replace")
-    # Afficher les dernières lignes pertinentes
-    lines = output.splitlines()
-    for line in lines[-30:]:
-        print(line)
 
     return output
 
