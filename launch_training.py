@@ -72,6 +72,7 @@ def main():
     parser.add_argument("--gold-version", default=DEFAULT_GOLD_VERSION, help=f"Version dataset gold (défaut: {DEFAULT_GOLD_VERSION})")
     parser.add_argument("--gpu",          default=None,                 help="GPU à mettre en tête de liste (ex: 'RTX 4090')")
     parser.add_argument("--loss-weighting", default="fixed",            help="Stratégie loss weighting: fixed|uncertainty|gradnorm")
+    parser.add_argument("--config",         default=None,                help="Config JSON (ex: configs/svo-v819-rc1.json). Défaut: celui dans setup_runpod.sh")
     parser.add_argument("--dry-run",      action="store_true",          help="Affiche la config sans lancer le pod")
     parser.add_argument("--no-kill",      action="store_true",          help="[OBSOLÈTE — désormais comportement par défaut] Ne PAS tuer les pods existants")
     parser.add_argument("--kill",          action="store_true",          help="Tuer explicitement les pods existants avant de lancer (DANGEREUX — à utiliser consciemment)")
