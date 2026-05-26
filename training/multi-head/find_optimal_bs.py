@@ -71,11 +71,11 @@ def try_bs(bs: int, model, optimizer, device, seq_len: int, cands: int) -> bool:
         batch = make_fake_batch(bs, seq_len, cands, device)
 
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            outputs = model(
-                input_ids=batch["input_ids"],
-                attention_mask=batch["attention_mask"],
-                spans=batch["spans"],
-            )
+            outputs = model({
+                "input_ids":      batch["input_ids"],
+                "attention_mask": batch["attention_mask"],
+                "spans":          batch["spans"],
+            })
             loss_dict = model.compute_loss(
                 outputs=outputs,
                 boundary_labels=batch["boundary_labels"],
