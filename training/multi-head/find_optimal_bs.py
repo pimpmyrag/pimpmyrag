@@ -41,7 +41,7 @@ def make_fake_batch(bs: int, seq_len: int, num_candidates: int, device):
     return {
         "input_ids":       torch.randint(0, 30000, (bs, seq_len), device=device),
         "attention_mask":  torch.ones(bs, seq_len, dtype=torch.long, device=device),
-        "spans":           [[{"start": 1, "end": 3, "text": "x"} for _ in range(num_candidates)] for _ in range(bs)],
+        "spans":           [[{"tok_start": 1, "tok_end": 3} for _ in range(num_candidates)] for _ in range(bs)],
         "boundary_labels": torch.randint(0, 2, (N,), device=device),
         "coarse_labels":   torch.randint(0, 10, (N,), device=device),
         "fine_labels":     torch.randint(0, 38, (N,), device=device),
