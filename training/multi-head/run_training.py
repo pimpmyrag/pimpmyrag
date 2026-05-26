@@ -59,6 +59,43 @@ def detect_hw(cfg: dict) -> dict:
         else:
             hw = {"device": "cuda", "gpu_name": gpu_name, **hw_cfg["default"]}
             print(f"❓ GPU inconnu {vram_gb:.1f}GB → config default BS={hw['bs']}")
+
+        # ── Auto-tuning BS (si AUTO_BS=1 ou si find_optimal_bs.py présent) ──────
+        # Lance find_optimal_bs.py en subprocess pour trouver le BS maximal sans OOM.
+        # Le résultat est mis en cache dans optimal_bs_cache.json (1 seul calcul par GPU).
+        # Désactivable via AUTO_BS=0 (utile pour debug ou tests rapides).
+        if os.environ.get("AUTO_BS", "1") != "0" and Path("find_optimal_bs.py").exists():
+            bs_static = hw["bs"]
+            print(f"🔍 Auto-tuning batch size (BS statique={bs_static}, AUTO_BS=1)...")
+            result = subprocess.run(
+                [sys.executable, "find_optimal_bs.py",
+                 "--bs-min",   str(max(16, bs_static - 16)),
+                 "--bs-max",   str(int(bs_static * 2.5)),
+                 "--step",     "4",
+                 "--safety-margin", "4",
+                 "--output-file", "optimal_bs_cache.json",
+                 "--model-name", cfg.get("run", {}).get("model", "microsoft/deberta-v3-base"),
+                ],
+                capture_output=False,  # laisse le stdout/stderr passer (visible dans tee)
+                text=True,
+            )
+            # Lire le résultat depuis le cache
+            cache_path = Path("optimal_bs_cache.json")
+            if cache_path.exists():
+                try:
+                    cached = json.loads(cache_path.read_text())
+                    opt_bs = int(cached["bs"])
+                    if opt_bs != bs_static:
+                        print(f"✅ Auto-BS : {bs_static} → {opt_bs} (gain {opt_bs - bs_static:+d} samples/step)")
+                    else:
+                        print(f"✅ Auto-BS : BS={opt_bs} confirmé (déjà optimal)")
+                    hw["bs"] = opt_bs
+                except Exception as e:
+                    print(f"⚠️  Impossible de lire le cache auto-BS : {e} — BS statique conservé ({bs_static})")
+            else:
+                print(f"⚠️  Cache auto-BS absent — BS statique conservé ({bs_static})")
+        # ─────────────────────────────────────────────────────────────────────────
+
     except Exception:
         try:
             import torch
