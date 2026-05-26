@@ -108,52 +108,58 @@ def print_run_detail(r, max_epochs=None):
             vals = "  ".join(f"{fmt(val(row, k)):>7}" for _, k in present)
             print(f"    {int(ep):>3}  {vals}")
 
-    # ── Fine par famille coarse ────────────────────────────────────────────────
+    # ── Fine par famille coarse — tableau imbriqué ────────────────────────────
     FAMILIES = {
         "PER":      ["hint_person_name", "hint_person_role", "hint_norp", "hint_group_role"],
         "LOC":      ["hint_gpe", "hint_fac_name", "hint_loc_generic", "hint_infra"],
         "ORG":      ["hint_org_name", "hint_inst_name", "hint_inst_role"],
         "TIME":     ["hint_time_date", "hint_time_clock", "hint_time_duration"],
         "EVENT":    ["hint_event_nominal", "hint_event_named"],
-        "OBJECT":   ["hint_weapon", "hint_vehicle", "hint_substance", "hint_food", "hint_tool", "hint_object_generic", "hint_object_name"],
+        "OBJECT":   ["hint_weapon", "hint_vehicle", "hint_substance", "hint_food",
+                     "hint_tool", "hint_object_generic", "hint_object_name"],
         "VALUE":    ["hint_measure", "hint_percentage", "hint_count", "hint_money", "hint_rate"],
         "WORK":     ["hint_work_of_art", "hint_law", "hint_document", "hint_work_generic"],
-        "ABSTRACT": ["hint_disease", "hint_language", "hint_doctrine", "hint_state", "hint_notion", "hint_field"],
+        "ABSTRACT": ["hint_disease", "hint_language", "hint_doctrine", "hint_state",
+                     "hint_notion", "hint_field"],
     }
-    # Vérifie qu'au moins une famille a des données
     family_has_data = any(
         f"val/fine_f1_{lbl}" in by_ep.columns
         for fines in FAMILIES.values() for lbl in fines
     )
     if family_has_data:
-        print(f"\n  📋 Fine par famille coarse")
-        last_ep_vals = {k: val(by_ep.iloc[-1], k) for k in by_ep.columns}
-        # Affiche chaque famille avec sa coarse_f1 + les labels fins indentés
+        epochs = list(by_ep.index)
+        n_ep   = len(epochs)
+        W_LBL  = 20   # largeur colonne label
+        W_EP   = 6    # largeur colonne epoch
+        # En-tête
+        ep_header = "  ".join(f"ep{int(e):>2}" for e in epochs)
+        sep_line  = "─" * (4 + W_LBL + 2 + n_ep * (W_EP + 2))
+        print(f"\n  📋 Fine par famille coarse (f1 val)")
+        print(f"    {'':>{W_LBL}}  {ep_header}")
         for coarse_name, fine_labels in FAMILIES.items():
-            coarse_f1 = last_ep_vals.get(f"val/coarse_f1_{coarse_name}", float("nan"))
-            present_fines = [(lbl, last_ep_vals.get(f"val/fine_f1_{lbl}", float("nan"))) for lbl in fine_labels if f"val/fine_f1_{lbl}" in by_ep.columns]
-            if not present_fines:
+            # Filtrer les labels présents avec au moins une valeur > 0
+            present = []
+            for lbl in fine_labels:
+                key = f"val/fine_f1_{lbl}"
+                if key not in by_ep.columns:
+                    continue
+                series = [val(by_ep.iloc[i], key) for i in range(n_ep)]
+                present.append((lbl, series))
+            if not present:
                 continue
-            coarse_str = fmt(coarse_f1)
-            print(f"    ▸ {coarse_name:<9} coarse={coarse_str}  →  " + "  ".join(
-                f"{lbl.replace('hint_', ''):<18} f1={fmt(f1)}" for lbl, f1 in present_fines
-            ))
-        # Si on a plusieurs epochs, afficher l'évolution des labels les plus importants
-        if len(by_ep) > 1:
-            print(f"\n    Évolution (toutes epochs) des fine labels non-zéro :")
-            print(f"    {'label':<22}  " + "  ".join(f"ep{int(ep):>2}" for ep in by_ep.index))
-            print(f"    {'─'*80}")
-            for coarse_name, fine_labels in FAMILIES.items():
-                for lbl in fine_labels:
-                    key = f"val/fine_f1_{lbl}"
-                    if key not in by_ep.columns:
-                        continue
-                    series = [val(by_ep.iloc[i], key) for i in range(len(by_ep))]
-                    if all(v != v or v < 0.005 for v in series):
-                        continue  # skip si toujours ~0
-                    row = "  ".join(f"{fmt(v):>5}" for v in series)
-                    short = lbl.replace("hint_", "")[:22]
-                    print(f"    {short:<22}  {row}")
+            # Ligne coarse (coarse f1 par epoch)
+            coarse_series = [val(by_ep.iloc[i], f"val/coarse_f1_{coarse_name}") for i in range(n_ep)]
+            coarse_row = "  ".join(f"{fmt(v):>{W_EP}}" for v in coarse_series)
+            print(f"    {sep_line}")
+            print(f"    {('▸ ' + coarse_name):<{W_LBL}}  {coarse_row}")
+            # Lignes fine labels (skip si toujours 0)
+            for lbl, series in present:
+                if all(v != v or v < 0.003 for v in series):
+                    continue
+                short = lbl.replace("hint_", "")
+                fine_row = "  ".join(f"{fmt(v):>{W_EP}}" for v in series)
+                print(f"      {'  ' + short:<{W_LBL-2}}  {fine_row}")
+        print(f"    {sep_line}")
 
     # ── SVO boundary ──────────────────────────────────────────────────────────
     svo_bnd_keys = ["val/svo_boundary_f1", "val/svo_bnd_f1_non_verb",
@@ -237,40 +243,6 @@ def print_run_detail(r, max_epochs=None):
         print(f"    {sep}")
         for ep, row in by_ep.iterrows():
             vals = "  ".join(f"{fmt(val(row, k)):>9}" for _, k in morpho_present)
-            print(f"    {int(ep):>3}  {vals}")
-
-    # ── INST ──────────────────────────────────────────────────────────────────
-    inst_keys = [("inst_name_f1","val/fine_f1_hint_inst_name"),
-                 ("inst_name_rc","val/fine_recall_hint_inst_name"),
-                 ("inst_role_f1","val/fine_f1_hint_inst_role"),
-                 ("inst_role_rc","val/fine_recall_hint_inst_role")]
-    inst_present = [(n, k) for n, k in inst_keys if k in by_ep.columns]
-    if inst_present:
-        header = "  ".join(f"{n:>10}" for n, _ in inst_present)
-        print(f"\n  🏛️  INST labels")
-        print(f"    {'ep':>3}  {header}")
-        sep = '─' * max(30, 6+12*len(inst_present))
-        print(f"    {sep}")
-        for ep, row in by_ep.iterrows():
-            vals = "  ".join(f"{fmt(val(row, k)):>10}" for _, k in inst_present)
-            print(f"    {int(ep):>3}  {vals}")
-
-    # ── TIME ──────────────────────────────────────────────────────────────────
-    time_keys = [("coarse_f1","val/coarse_f1_TIME"),
-                 ("coarse_rc","val/coarse_recall_TIME"),
-                 ("date_f1","val/fine_f1_hint_time_date"),
-                 ("date_rc","val/fine_recall_hint_time_date"),
-                 ("dur_f1","val/fine_f1_hint_time_duration"),
-                 ("clk_f1","val/fine_f1_hint_time_clock")]
-    time_present = [(n, k) for n, k in time_keys if k in by_ep.columns]
-    if time_present:
-        header = "  ".join(f"{n:>9}" for n, _ in time_present)
-        print(f"\n  🕐 TIME labels")
-        print(f"    {'ep':>3}  {header}")
-        sep = '─' * max(30, 6+11*len(time_present))
-        print(f"    {sep}")
-        for ep, row in by_ep.iterrows():
-            vals = "  ".join(f"{fmt(val(row, k)):>9}" for _, k in time_present)
             print(f"    {int(ep):>3}  {vals}")
 
     # ── Loss ──────────────────────────────────────────────────────────────────
