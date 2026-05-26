@@ -218,7 +218,7 @@ def main():
                    help="Force re-calcul même si le cache existe")
     args = p.parse_args()
 
-    # Cache : évite de refaire le calcul si déjà fait pour ce GPU
+    # Cache : évite de refaire le calcul si déjà fait pour ce GPU + mêmes paramètres
     cache_file = Path("optimal_bs_cache.json") if args.output_file is None else Path(args.output_file)
     if not args.force and cache_file.exists():
         try:
@@ -226,11 +226,15 @@ def main():
             import torch
             if torch.cuda.is_available():
                 gpu_name = torch.cuda.get_device_name(0)
-                if cached.get("gpu") == gpu_name:
+                if (cached.get("gpu") == gpu_name
+                        and cached.get("seq_len") == args.seq_len
+                        and cached.get("candidates_per_sample") == args.candidates_per_sample):
                     bs = cached["bs"]
-                    print(f"📋 Cache hit : {gpu_name} → BS={bs}", flush=True)
+                    print(f"📋 Cache hit : {gpu_name} seq={args.seq_len} cands={args.candidates_per_sample} → BS={bs}", flush=True)
                     print(f"OPTIMAL_BS={bs}")
                     return
+                elif cached.get("gpu") == gpu_name:
+                    print(f"📋 Cache invalidé (seq/cands ont changé) — recompute", flush=True)
         except Exception:
             pass
 
@@ -240,7 +244,8 @@ def main():
     try:
         import torch
         gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "unknown"
-        cache_data = {"gpu": gpu_name, "bs": optimal, "model": args.model_name}
+        cache_data = {"gpu": gpu_name, "bs": optimal, "model": args.model_name,
+                      "seq_len": args.seq_len, "candidates_per_sample": args.candidates_per_sample}
         cache_file.write_text(json.dumps(cache_data, indent=2))
         print(f"💾 Cache écrit → {cache_file}", flush=True)
     except Exception as e:

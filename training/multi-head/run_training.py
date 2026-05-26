@@ -66,25 +66,35 @@ def detect_hw(cfg: dict) -> dict:
         # Désactivable via AUTO_BS=0 (utile pour debug ou tests rapides).
         if os.environ.get("AUTO_BS", "1") != "0" and Path("find_optimal_bs.py").exists():
             bs_static = hw["bs"]
-            # Si le cache existe mais contient une valeur < bs_static, il est obsolète → forcer recompute
+            # Si le cache existe mais contient une valeur < bs_static OU sans les clés seq_len/cands (ancien format), il est obsolète → forcer recompute
             cache_path = Path("optimal_bs_cache.json")
             force_recompute = False
             if cache_path.exists():
                 try:
                     cached_check = json.loads(cache_path.read_text())
-                    if int(cached_check.get("bs", 0)) < bs_static:
-                        print(f"⚠️  Cache auto-BS obsolète (bs={cached_check.get('bs')} < static={bs_static}) — recompute forcé")
+                    cache_stale = (
+                        int(cached_check.get("bs", 0)) < bs_static
+                        or "seq_len" not in cached_check          # ancien cache sans ces clés
+                        or "candidates_per_sample" not in cached_check
+                        or cached_check.get("seq_len") != 128     # paramètres test ont changé
+                        or cached_check.get("candidates_per_sample") != 100
+                    )
+                    if cache_stale:
+                        print(f"⚠️  Cache auto-BS obsolète ({cached_check}) — recompute forcé")
                         cache_path.unlink()
                         force_recompute = True
                 except Exception:
-                    pass
+                    cache_path.unlink(missing_ok=True)
+                    force_recompute = True
             print(f"🔍 Auto-tuning batch size (BS statique={bs_static}, AUTO_BS=1)...")
             find_bs_cmd = [
                 sys.executable, "find_optimal_bs.py",
                 "--bs-min",   str(bs_static),           # jamais descendre sous la valeur statique
-                "--bs-max",   str(int(bs_static * 2.5)),
+                "--bs-max",   str(int(bs_static * 2.0)),
                 "--step",     "4",
                 "--safety-margin", "8",
+                "--seq-len",  "128",                    # vraie longueur max du dataset
+                "--candidates-per-sample", "100",       # p95 réel (~103 cands/phrase)
                 "--output-file", "optimal_bs_cache.json",
                 "--model-name", cfg.get("run", {}).get("model", "microsoft/deberta-v3-base"),
             ]
