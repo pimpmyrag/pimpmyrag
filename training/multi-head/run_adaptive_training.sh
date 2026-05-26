@@ -8,6 +8,7 @@ cd /workspace/pimpmyrag/training/multi-head
 CONFIG="${CONFIG:-configs/svo-v819.json}"
 GOLD_VERSION="${GOLD_VERSION:-v8.19}"
 export TOKENIZERS_PARALLELISM="false"
+export AUTO_BS=0  # BS statique via config hardware — auto-BS désactivé (fake batch instable)
 
 # ── Détection device ────────────────────────────────────────────────────────
 if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
