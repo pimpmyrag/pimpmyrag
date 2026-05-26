@@ -41,6 +41,8 @@ METRIC_GROUPS = {
 ALL_KEYS = ["epoch"] + [k for keys in METRIC_GROUPS.values() for k in keys] + [
     "val/fine_concrete_f1", "val/fine_abstract_f1",
     "train/fine_concrete_f1", "train/fine_abstract_f1",
+    # Cascade SVO-first
+    "val/svo_boundary_f1", "val/role_coarse_f1",
 ]
 
 def get_api():
