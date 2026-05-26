@@ -1,15 +1,14 @@
 {
-  "_comment": "Config v8.19 — role_coarse renforcé pour corriger la stagnation",
-  "_version": "v8.19",
+  "_comment": "Config v8.19b — fix OBLIQ collapse : role_coarse découplé de svo_bnd gate",
+  "_version": "v8.19b",
   "_changelog": [
-    "Base : svo-first-v2.json",
-    "Problème diagnostiqué : role_coarse_f1 plat à 0.11 sur v8.18 (25% OTHER noyait le gradient)",
-    "Fixes v8.19 :",
-    "  1. Data : v8.19 → 84.1% couverture (vs 75%) — OTHER 16% au lieu de 25%",
-    "  2. role_coarse λ : 0.35 → 0.55 (ratio 7.3% du total ≈ ancienne tête λ=0.60)",
-    "  3. role_coarse_warmup_lambda : 0.05 → 0.15 (signal OBJ dès ep1, avant que OBLIQ domine)",
-    "  4. role_ramp_epochs : 5 → 4 (plein régime plus vite)",
-    "  5. boost_role_coarse HN : 1.5 → 2.5 (penalise confusions SUBJ/OBJ/OBLIQ plus fort)"
+    "Base : svo-v819.json (v8.19a)",
+    "Diagnostic : OBLIQ=0 sur 9 epochs car warmup λ=0.15 + gate svo_bnd (ep7) = collapse irréversible dès ep2",
+    "Fix cascade :",
+    "  1. Nouveau trigger PHASE 2a : role_coarse ramp quand ner_bnd ≥ 0.90 (ep≈2-3, pas ep7)",
+    "  2. role_coarse_warmup_lambda : 0.15 → 0.40 (assez fort pour éviter le collapse)",
+    "  3. role_ramp_epochs : 4 → 2 (delta 0.40→0.55 = petit, ramp courte)",
+    "  4. Phase 2 (svo_bnd gate) : gère uniquement voice + verb_ptr + certainty désormais"
   ],
   "_doc": [
     "PHASE 1 : NER bnd + SVO bnd + role_coarse warmup (λ=0.15) dès epoch 1",
@@ -69,16 +68,18 @@
   },
 
   "svo_cascade": {
-    "_comment": "Warmup plus fort (0.15 vs 0.05) + ramp raccourcie (4ep vs 5)",
+    "_comment": "Phase 2a : role_coarse ramp découplé de svo_bnd (trigger ner_bnd≥0.90, ep≈2-3)",
 
-    "_phase1_doc": "PHASE 1 : role_coarse warmup λ=0.15 dès epoch 1 — signal suffisant pour OBJ",
-    "role_coarse_warmup_lambda": 0.15,
+    "_phase2a_doc": "PHASE 2a : ner_bnd_f1 ≥ 0.90 → role_coarse rampe 0.40→0.55 en 2 epochs (ep≈2-4)",
+    "role_coarse_bnd_thr":     0.90,
+    "role_coarse_warmup_lambda": 0.40,
+    "role_ramp_epochs":        2,
 
-    "_phase2_doc": "PHASE 2 : svo_bnd_f1 >= 0.88 → role_coarse rampe vers λ=0.55 en 4 epochs",
-    "role_thr_svo_bnd":    0.88,
-    "role_ramp_epochs":    4,
+    "_phase2_doc": "PHASE 2 : svo_bnd_f1 ≥ 0.88 → voice + verb_ptr + certainty rampent",
+    "role_thr_svo_bnd":        0.88,
+    "phase2_ramp_epochs":      4,
 
-    "_phase4_doc": "PHASE 4 : role_coarse_f1 >= 0.45 → role_oblique + morpho",
+    "_phase4_doc": "PHASE 4 : role_coarse_f1 ≥ 0.45 → role_oblique + morpho",
     "oblique_thr_role_crs": 0.45,
     "oblique_ramp_epochs":  10
   },
