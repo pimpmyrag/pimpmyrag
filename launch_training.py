@@ -82,7 +82,7 @@ def main():
 
     gold_version = args.gold_version
     ref          = args.sha
-    start_cmd    = build_start_cmd(ref, gold_version, args.loss_weighting)
+    start_cmd    = build_start_cmd(ref, gold_version, args.loss_weighting, args.config)
 
     # GPU priority — permet de mettre un GPU préféré en premier
     gpu_list = list(DEFAULT_GPU_PRIORITY)

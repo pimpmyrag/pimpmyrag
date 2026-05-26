@@ -1,0 +1,134 @@
+{
+  "_comment": "Config v8.19c — role_coarse sans warmup (lambda plein dès ep1, comme ancienne tête)",
+  "_version": "v8.19c",
+  "_changelog": [
+    "Base : svo-v819.json (v8.19b)",
+    "Hypothèse : le warmup role_coarse (même à 0.40) force le modèle à choisir une classe dominante.",
+    "  - λ=0.15 → SUBJ domine, OBLIQ=0",
+    "  - λ=0.40 → OBLIQ domine, SUBJ≈0",
+    "  - λ=0.55 (plein, comme ancienne tête) → toutes les classes apprennent simultanément",
+    "Fix : role_coarse_warmup_lambda = 0.55 = target → pas de warmup effectif, lambda plein dès ep1",
+    "Compensation : boundary 5.0 → 4.0 pour équilibrer le budget gradient total"
+  ],
+
+  "run": {
+    "name_suffix": "svo-v819-rc1",
+    "max_epochs": 90,
+    "model": "microsoft/deberta-v3-base",
+    "loss_weighting": "fixed",
+    "ner_only_bench": false
+  },
+
+  "optimizer": {
+    "lr": 8e-6,
+    "head_lr_multiplier": 4.0,
+    "warmup_epochs": 0,
+    "max_grad_norm": 1.0,
+    "layer_lr_decay": 0.9,
+    "ema_decay": 0.999,
+    "class_weight_power": 0.5
+  },
+
+  "lambdas": {
+    "_comment": "boundary 5.0→4.0 pour compenser role_coarse à plein régime dès ep1",
+    "_budget": "bnd=4.0 + coarse=0.75 + fine=1.8 + svo_bnd=0.35 + svo=0.70 + role_coarse=0.55 + ... total≈9.15",
+    "boundary":     4.0,
+    "coarse":       0.75,
+    "fine":         1.8,
+    "svo_boundary": 0.35,
+    "svo":          0.70,
+    "role_coarse":  0.55,
+    "role_oblique": 0.25,
+    "voice":        0.15,
+    "certainty":    0.30,
+    "morpho":       0.10,
+    "verb_ptr":     0.60,
+    "compat":       0.2
+  },
+
+  "focal": {
+    "boundary_gamma":  0.5,
+    "fine_gamma":      1.5,
+    "coarse_gamma":    0.0
+  },
+
+  "boundary_first": {
+    "enabled": true,
+    "unlock_threshold":    0.92,
+    "unlock_ramp_epochs":  10,
+    "coarse_warmup_lambda": 0.05,
+    "fine_warmup_lambda":   0.15
+  },
+
+  "svo_cascade": {
+    "_comment": "role_coarse_warmup_lambda = target (0.55) → pas de warmup effectif, lambda plein dès ep1",
+
+    "_phase2a_doc": "PHASE 2a : warmup = target → role_coarse à 0.55 dès ep1, pas de ramp nécessaire",
+    "role_coarse_bnd_thr":       0.90,
+    "role_coarse_warmup_lambda": 0.55,
+    "role_ramp_epochs":          2,
+
+    "_phase2_doc": "PHASE 2 : svo_bnd_f1 ≥ 0.88 → voice + verb_ptr + certainty rampent",
+    "role_thr_svo_bnd":          0.88,
+    "phase2_ramp_epochs":        4,
+
+    "_phase4_doc": "PHASE 4 : role_coarse_f1 ≥ 0.45 → role_oblique + morpho",
+    "oblique_thr_role_crs":  0.45,
+    "oblique_ramp_epochs":   10
+  },
+
+  "boundary_rescue": {
+    "window":          5,
+    "target":          0.90,
+    "min_delta":       0.003,
+    "factor_vptr_voice": 0.65,
+    "factor_coarse":     0.75,
+    "bnd_boost":         1.20
+  },
+
+  "boundary_plateau": {
+    "window":       5,
+    "min_delta":    0.003,
+    "regression_window": 3,
+    "regression_delta":  0.008
+  },
+
+  "hard_negatives": {
+    "every_n_epochs": 1,
+    "decay":          0.85,
+    "max_weight":     8.0,
+    "min_weight":     0.3,
+    "boost_fp":       5.0,
+    "boost_fn":       2.0,
+    "boost_coarse":   2.5,
+    "boost_fine":     3.0,
+    "boost_fp_svo":   3.0,
+    "boost_fn_svo":   2.0,
+    "boost_role_coarse": 2.5
+  },
+
+  "difficulty_levels": {
+    "names":         ["easy", "easy+", "medium", "medium+", "hard", "full"],
+    "hard_per_gold": [2,      2,       3,        4,         5,      6],
+    "soft_factors":  [1.0,    1.25,    1.5,      2.0,       2.0,    2.0],
+    "max_epochs_per_level":   6,
+    "min_delta_for_progress": 0.0003,
+    "patience": 5
+  },
+
+  "early_stopping": {
+    "patience":   5,
+    "min_delta":  0.0003
+  },
+
+  "hardware": {
+    "_comment": "Overridé par détection VRAM dans run_training.py.",
+    "h100_80gb":  {"bs": 160, "accum": 1, "workers": 8},
+    "l40s_48gb":  {"bs": 128, "accum": 1, "workers": 6},
+    "a100_40gb":  {"bs":  96, "accum": 1, "workers": 6},
+    "rtx_4090":   {"bs":  80, "accum": 1, "workers": 6},
+    "rtx_3090":   {"bs":  64, "accum": 1, "workers": 4},
+    "default":    {"bs":  16, "accum": 2, "workers": 0}
+  }
+}
+
