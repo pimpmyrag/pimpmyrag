@@ -1798,7 +1798,7 @@ def main():
             # Per-label F1 depuis le classification_report (val fine + coarse)
             import re as _re
             # ── Log groupé par famille coarse : val/family_{COARSE}/{hint_xxx}/{f1|prec|rec} ──
-            from labels import COARSE_TO_FINE, FINE_LABELS, ID2COARSE
+            from labels import COARSE_TO_FINE, ID2COARSE
             fine_metrics_by_label = {}  # hint_xxx -> {f1, prec, rec}
             for report_key, prefix in [
                 ("fine_report",         "val/fine"),
