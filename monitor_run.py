@@ -152,12 +152,13 @@ def print_run_detail(r, max_epochs=None):
             coarse_row = "  ".join(f"{fmt(v):>{W_EP}}" for v in coarse_series)
             print(f"    {sep_line}")
             print(f"    {('▸ ' + coarse_name):<{W_LBL}}  {coarse_row}")
-            # Lignes fine labels (skip si toujours 0)
+            # Lignes fine labels (toujours affichées, — si jamais vu)
             for lbl, series in present:
-                if all(v != v or v < 0.003 for v in series):
-                    continue
                 short = lbl.replace("hint_", "")
-                fine_row = "  ".join(f"{fmt(v):>{W_EP}}" for v in series)
+                fine_row = "  ".join(
+                    f"{'  —  ':>{W_EP}}" if (v != v or v < 0.001) else f"{fmt(v):>{W_EP}}"
+                    for v in series
+                )
                 print(f"      {'  ' + short:<{W_LBL-2}}  {fine_row}")
         print(f"    {sep_line}")
 
