@@ -77,9 +77,12 @@
   "svo_cascade": {
     "_comment": "PHASES 2 & 4 — Cascade SVO metric-driven (PAS epoch-driven)",
 
-    "_phase2_doc": "PHASE 2 : quand svo_bnd_f1 > role_thr_svo_bnd → role_coarse + voice + verb_ptr rampent",
+    "_phase1_doc": "PHASE 1 : role_coarse démarre en warmup dès epoch 1 (labels gold, pas besoin d'attendre svo_bnd)",
+    "role_coarse_warmup_lambda": 0.05,
+
+    "_phase2_doc": "PHASE 2 : quand svo_bnd_f1 > role_thr_svo_bnd → role_coarse rampe vers λ plein + voice + verb_ptr",
     "role_thr_svo_bnd":    0.85,
-    "role_ramp_epochs":    8,
+    "role_ramp_epochs":    6,
 
     "_phase4_doc": "PHASE 4 : quand role_coarse_f1 > oblique_thr_role_crs → role_oblique + morpho rampent",
     "oblique_thr_role_crs": 0.45,

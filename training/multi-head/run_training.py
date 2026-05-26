@@ -117,13 +117,16 @@ def detect_hw(cfg: dict) -> dict:
 # Architecture en 4 phases metric-driven :
 #
 #   PHASE 1 (toujours) : NER boundary + SVO boundary à plein régime
-#   PHASE 2 (svo_bnd_f1 > seuil) : role_coarse + voice + verb_ptr + certainty rampent
+#                        + role_coarse démarre en warmup (λ bas, labels gold)
+#   PHASE 2 (svo_bnd_f1 > seuil) : role_coarse rampe vers λ plein
+#                                   voice + verb_ptr + certainty rampent
 #   PHASE 3 (ner_bnd_f1 > seuil) : NER coarse + fine rampent (boundary-first)
 #   PHASE 4 (role_coarse_f1 > seuil) : role_oblique + morpho rampent
 #
-# Les phases 2 et 3 sont INDÉPENDANTES (SVO cascade et NER cascade coexistent).
-# Chaque phase est déclenchée par une métrique, pas par un compteur d'epochs.
-# Une fois déclenchée, la phase rampe sur N epochs jusqu'à plein régime.
+# Pourquoi role_coarse démarre en Phase 1 ?
+# Les labels role_coarse viennent du JSONL gold (pas de prédictions modèle).
+# Bloquer role_coarse jusqu'à svo_bnd_f1>0.85 gâche des epochs d'apprentissage.
+# Le seuil svo_bnd déclenche la montée en puissance, pas le démarrage.
 
 def compute_lambdas(cfg: dict, state: dict) -> dict:
     """Calcule les lambdas effectifs pour l'epoch courante selon la cascade SVO-first."""
@@ -149,8 +152,12 @@ def compute_lambdas(cfg: dict, state: dict) -> dict:
     l_svo_boundary = L["svo_boundary"]  # PAS rampé — toujours à plein
 
     # ── PHASE 2 : SVO roles (triggered par svo_bnd_f1) ──────────────────────
-    # Quand SVO boundary est fiable → on commence les rôles SVO.
+    # role_coarse démarre en warmup (Phase 1) avec un λ réduit.
+    # Quand svo_bnd_f1 >= seuil, on rampe vers le λ plein (Phase 2).
     sc = cfg.get("svo_cascade", {})
+    # Lambda warmup role_coarse (actif dès epoch 1, avant Phase 2)
+    rc_warmup = sc.get("role_coarse_warmup_lambda", L["role_coarse"] * 0.15)
+
     phase2_trigger_ep = state.get("phase2_trigger_epoch")  # epoch où phase 2 a déclenché
     if phase2_trigger_ep is not None:
         ramp_ep = epoch - phase2_trigger_ep
@@ -159,7 +166,10 @@ def compute_lambdas(cfg: dict, state: dict) -> dict:
     else:
         phase2_prog = 0.0
 
-    l_role_coarse = L["role_coarse"] if phase2_trigger_ep is not None else 0.0  # pas de ramp, direct à 0.06
+    # role_coarse : warmup (Phase 1) → plein régime (Phase 2 ramp)
+    l_role_coarse = rc_warmup + (L["role_coarse"] - rc_warmup) * phase2_prog
+    l_role_coarse = round(l_role_coarse, 4)
+
     l_svo         = round(L["svo"]          * phase2_prog, 4)
     l_voice       = round(state.get("l_voice", L["voice"]) * phase2_prog, 4)
     l_certainty   = round(L["certainty"]    * phase2_prog, 4)
@@ -481,9 +491,10 @@ def main():
 
     # Log architecture cascade
     if use_svo_cascade:
+        rc_warmup = sc.get("role_coarse_warmup_lambda", cfg["lambdas"]["role_coarse"] * 0.15)
         log(f"🏗️  Architecture : CASCADE SVO-FIRST")
-        log(f"   Phase 1 : NER bnd + SVO bnd à plein régime dès epoch 1")
-        log(f"   Phase 2 : role_coarse + voice + verb_ptr → quand svo_bnd_f1 > {sc.get('role_thr_svo_bnd', '?')}")
+        log(f"   Phase 1 : NER bnd + SVO bnd à plein régime + role_coarse warmup λ={rc_warmup}")
+        log(f"   Phase 2 : role_coarse → λ plein + voice + verb_ptr → quand svo_bnd_f1 > {sc.get('role_thr_svo_bnd', '?')}")
         log(f"   Phase 3 : NER coarse + fine → quand ner_bnd > {bf['unlock_threshold']}")
         log(f"   Phase 4 : role_oblique + morpho → quand role_coarse_f1 > {sc.get('oblique_thr_role_crs', '?')}")
 
