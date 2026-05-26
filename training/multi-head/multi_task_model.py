@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from transformers import AutoModel
 from labels import (
     NUM_FINE, NUM_SYN, NUM_VOICE, NUM_CERTAINTY,
+    NUM_ROLE, ROLE_NONE_ID,                          # ← ancienne tête role (12 labels)
     NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID, ROLE_COARSE_OTHER_ID,
     NUM_ROLE_OBLIQUE, ROLE_OBLIQUE_NONE_ID,
     NUM_GENDER, NUM_NUMBER, NUM_PERSON,
@@ -58,6 +59,7 @@ class SpanMultiTaskModel(nn.Module):
         self.svo_boundary_head = nn.Linear(span_hidden_dim, 2)        # détecte verb_trigger/pron
         self.syn_head          = nn.Linear(span_hidden_dim, NUM_SYN)  # verb_trigger/pron_subj/pron_obj
         self.role_coarse_head  = nn.Linear(span_hidden_dim, NUM_ROLE_COARSE) # rôle SVO coarse SUBJ/OBJ/OBLIQ/APPOS
+        self.role_head         = nn.Linear(span_hidden_dim, NUM_ROLE)        # ancienne tête rôle (12 labels)
         # Tête oblique fine : classifie les sous-types d'oblique (uniquement si role_coarse=OBLIQ)
         # Reçoit span_h + projection du FINE NER (38 labels) — plus discriminant que coarse (7 familles)
         # Ex: hint_time_date/clock/duration → OBLIQUE_TIME ; hint_gpe/loc_generic/fac → OBLIQUE_LOC
@@ -78,6 +80,12 @@ class SpanMultiTaskModel(nn.Module):
         _ptr_dim = 64
         self.verb_ptr_query = nn.Linear(span_hidden_dim, _ptr_dim, bias=False)
         self.verb_ptr_key   = nn.Linear(hidden_size,     _ptr_dim, bias=False)
+
+        # Verb context pour role conditioning (soft-attention sur encoder via verb_ptr)
+        # Conditionne role_coarse sur le verbe pointé : SUBJ de "accuse" ≠ SUBJ de "se rendre"
+        # La soft-attention est différentiable et donne un contexte uniforme early training
+        # (verb_ptr aléatoire ≈ moyenne encoder), puis se concentre sur le verbe réel.
+        self.verb_ctx_proj  = nn.Linear(hidden_size, span_hidden_dim)
 
         # SVO→NER cascade : injecte le score SVO du span conteneur dans la repr NER
         # Permet aux têtes NER de savoir si ce span est dans une zone argumentale SVO.
@@ -187,10 +195,20 @@ class SpanMultiTaskModel(nn.Module):
                 gathered_keys,                             # [N, seq, 64]
                 ptr_queries.unsqueeze(-1)                  # [N, 64,  1]
             ).squeeze(-1)                                  # [N, seq]
+
+            # ── Verb context pour role conditioning ────────────────────────────
+            # Soft-attention sur l'encoder via verb_ptr_logits (détaché pour ne pas
+            # perturber le gradient du pointer). Early training : attention quasi-uniforme
+            # → contexte ≈ moyenne de la phrase. Late training : se concentre sur le verbe.
+            verb_attn = torch.softmax(verb_ptr_logits.detach(), dim=-1)  # [N, seq]
+            gathered_hidden = hidden[span_batch_idx]                     # [N, seq, H]
+            verb_ctx = (verb_attn.unsqueeze(-1) * gathered_hidden).sum(dim=1)  # [N, H]
+            span_h_role = span_h + self.verb_ctx_proj(verb_ctx)          # [N, span_hidden_dim]
         else:
             verb_ptr_logits = torch.zeros(
                 (0, hidden.size(1)), device=hidden.device
             )
+            span_h_role = span_h
 
         return {
             "span_reps":           span_h,
@@ -202,11 +220,13 @@ class SpanMultiTaskModel(nn.Module):
             # SVO heads : span_h brut (pas de dépendance circulaire)
             "svo_boundary_logits":  self.svo_boundary_head(span_h),
             "syn_logits":           self.syn_head(span_h),
-            "role_coarse_logits":   self.role_coarse_head(span_h),
-            # Tête oblique fine : span_h enrichi du signal NER fine détaché (38 labels)
+            # role_coarse conditionné sur le verbe (soft-attention verb_ptr)
+            "role_coarse_logits":   self.role_coarse_head(span_h_role),
+            "role_logits":          self.role_head(span_h_role),           # ancienne tête (12 labels)
+            # Tête oblique fine : span_h_role enrichi du signal NER fine détaché (38 labels)
             # Cohérent avec dataset builder : OBLIQUE_TIME/LOC inférés depuis labels NER fine
             "role_oblique_logits": self.role_oblique_head(
-                span_h + self.ner_fine_to_oblique(
+                span_h_role + self.ner_fine_to_oblique(
                     torch.softmax(self.fine_head(span_h_ner).detach(), dim=-1)
                 )
             ),
@@ -230,6 +250,7 @@ class SpanMultiTaskModel(nn.Module):
             syn_labels,
             role_coarse_labels,
             role_oblique_labels,
+            role_labels,                               # ← ancienne tête (12 labels)
             voice_labels,
             certainty_labels,
             gender_labels,
@@ -249,7 +270,8 @@ class SpanMultiTaskModel(nn.Module):
             lambda_svo_boundary=0.7,
             lambda_svo=0.5,
             lambda_role_coarse=0.1,
-            lambda_role_oblique=0.15,  # rôle oblique fin (maskée sur spans OBLIQ)
+            lambda_role_oblique=0.15,
+            lambda_role=0.0,                           # ← ancienne tête (défaut 0 = désactivée)
             lambda_voice=0.5,
             lambda_certainty=0.4,
             lambda_morpho=0.3,
@@ -270,6 +292,7 @@ class SpanMultiTaskModel(nn.Module):
         svo_b_logits   = outputs["svo_boundary_logits"]
         syn_logits          = outputs["syn_logits"]
         role_coarse_logits  = outputs["role_coarse_logits"]
+        role_logits         = outputs["role_logits"]          # ancienne tête
         role_oblique_logits = outputs["role_oblique_logits"]
         voice_logits   = outputs["voice_logits"]
         cert_logits    = outputs["certainty_logits"]
@@ -387,6 +410,16 @@ class SpanMultiTaskModel(nn.Module):
         else:
             loss_role_coarse = torch.tensor(0.0, device=device)
 
+        # ── 6b) Role fin unifié — ancienne tête (12 labels, SUBJ/OBJ/OBLIQUE/OBLIQUE_*) ──
+        # Masque : spans avec un vrai rôle != NONE (NONE_ID=6 est AU MILIEU, pas en fin !)
+        # < ROLE_NONE_ID exclut incorrectement les labels 7-11 (OBLIQUE_ADVERSARY/BENEFICIARY/etc.)
+        role_mask = (role_labels >= 0) & (role_labels != ROLE_NONE_ID)
+        if role_mask.any():
+            loss_role = (F.cross_entropy(role_logits[role_mask], role_labels[role_mask], reduction="none")
+                         * sample_weights[role_mask]).mean()
+        else:
+            loss_role = torch.tensor(0.0, device=device)
+
         # ── 6c) Role oblique fin (maské aux spans OBLIQ, avec CWP) ────────────
         # Supervisé uniquement sur spans où role_oblique_label < ROLE_OBLIQUE_NONE_ID
         ro_mask = (role_oblique_labels >= 0) & (role_oblique_labels < role_oblique_logits.size(-1))
@@ -474,6 +507,7 @@ class SpanMultiTaskModel(nn.Module):
             "svo":          loss_syn,
             "role_coarse":  loss_role_coarse,
             "role_oblique": loss_role_oblique,
+            "role":         loss_role,                 # ancienne tête
             "voice":        loss_voice,
             "certainty":    loss_cert,
             "morpho":       loss_gender + loss_number + loss_person,
@@ -491,6 +525,7 @@ class SpanMultiTaskModel(nn.Module):
                 "svo":          lambda_svo,
                 "role_coarse":  lambda_role_coarse,
                 "role_oblique": lambda_role_oblique,
+                "role":         lambda_role,
                 "voice":        lambda_voice,
                 "certainty":    lambda_certainty,
                 "morpho":       lambda_morpho,
@@ -507,6 +542,7 @@ class SpanMultiTaskModel(nn.Module):
                 + lambda_svo          * loss_syn
                 + lambda_role_coarse  * loss_role_coarse
                 + lambda_role_oblique * loss_role_oblique
+                + lambda_role         * loss_role       # ancienne tête
                 + lambda_voice        * loss_voice
                 + lambda_certainty    * loss_cert
                 + lambda_morpho       * (loss_gender + loss_number + loss_person)
@@ -527,4 +563,6 @@ class SpanMultiTaskModel(nn.Module):
             "num_syn_spans":        int(syn_mask.sum().item()),
             "num_oblique_spans":    int(ro_mask.sum().item()),
         }
+
+
 

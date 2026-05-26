@@ -31,6 +31,7 @@ from labels import (
     NUM_VOICE, NUM_CERTAINTY, CERTAINTY_LABELS, NUM_GENDER, NUM_NUMBER, NUM_PERSON,
     ROLE_COARSE_LABELS, NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID, ROLE_COARSE_OTHER_ID,
     ROLE_OBLIQUE_LABELS, NUM_ROLE_OBLIQUE, ROLE_OBLIQUE_NONE_ID,
+    ROLE_LABELS, NUM_ROLE, ROLE_NONE_ID,    # ancienne tête (12 labels)
     ROLE_COARSE2ID,
     PERSON_LABELS,
     FINE_CONCRETE_IDS, FINE_ABSTRACT_IDS,
@@ -300,9 +301,11 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
         weights = weights / weights.mean()
         return weights
 
-    # role_coarse : CWP modéré (0.4) pour compenser OBLIQ>SUBJ>OBJ>APPOS sans écraser
+    # role_coarse : poids ÉGAUX (power=0) pour SUBJ/OBJ/OBLIQ/APPOS.
+    # OBLIQ est la plus fréquente → avec power>0 elle reçoit le poids le plus bas → collapse SUBJ.
+    # Equal weights → gradient neutre entre les 4 classes, le modèle apprend toutes simultanément.
     # OTHER(4) reçoit poids=1.0 (neutre, présent dans softmax mais exclu du gradient)
-    rc_w = make_weights(role_coarse_counts, ROLE_COARSE_OTHER_ID, power=min(power, 0.4))
+    rc_w = make_weights(role_coarse_counts, ROLE_COARSE_OTHER_ID, power=0.0)
     rc_w_full = torch.ones(NUM_ROLE_COARSE, dtype=torch.float32)
     rc_w_full[:ROLE_COARSE_OTHER_ID] = rc_w  # indices 0-3 = SUBJ/OBJ/OBLIQ/APPOS
     # index 4 (OTHER) = 1.0 neutre (exclu du gradient de toute façon)
@@ -354,6 +357,7 @@ def run_epoch(
         lambda_svo=0.6,
         lambda_role_coarse=0.1,
         lambda_role_oblique=0.15,
+        lambda_role=0.0,                # ancienne tête unifiée (12 labels) — défaut 0 = off
         oblique_class_weights=None,
         lambda_voice=0.15,
         lambda_certainty=0.4,
@@ -470,6 +474,8 @@ def run_epoch(
     all_rc_true, all_rc_pred = [], []
     # role_oblique positive-only (spans avec role_oblique < ROLE_OBLIQUE_NONE_ID)
     all_ro_true, all_ro_pred = [], []
+    # role fin (12 labels) : spans avec rôle annoté (< ROLE_NONE_ID)
+    all_role_true, all_role_pred = [], []
     # voice positive-only (spans avec voice_label != VOICE_NONE_ID)
     all_voice_true, all_voice_pred = [], []
     # certainty positive-only (spans avec certainty_label != CERTAINTY_NONE_ID)
@@ -515,6 +521,11 @@ def run_epoch(
             role_oblique_labels = role_oblique_labels.to(device)
         else:
             role_oblique_labels = torch.full_like(syn_labels, ROLE_OBLIQUE_NONE_ID)
+        role_labels = batch.get("role_labels")
+        if role_labels is not None:
+            role_labels = role_labels.to(device)
+        else:
+            role_labels = torch.full_like(syn_labels, ROLE_NONE_ID)
         voice_labels  = batch["voice_labels"].to(device)
         certainty_labels = batch.get("certainty_labels")
         if certainty_labels is not None:
@@ -575,6 +586,7 @@ def run_epoch(
                     syn_labels_loss          = syn_labels[si]
                     role_coarse_labels_loss  = role_coarse_labels[si]
                     role_oblique_labels_loss = role_oblique_labels[si]
+                    role_labels_loss         = role_labels[si]
                     voice_labels_loss        = voice_labels[si]
                     certainty_labels_loss    = certainty_labels[si]
                     gender_labels_loss       = gender_labels[si]
@@ -590,6 +602,7 @@ def run_epoch(
                     syn_labels_loss          = syn_labels
                     role_coarse_labels_loss  = role_coarse_labels
                     role_oblique_labels_loss = role_oblique_labels
+                    role_labels_loss         = role_labels
                     voice_labels_loss        = voice_labels
                     certainty_labels_loss    = certainty_labels
                     gender_labels_loss       = gender_labels
@@ -626,6 +639,7 @@ def run_epoch(
                     syn_labels=syn_labels_loss,
                     role_coarse_labels=role_coarse_labels_loss,
                     role_oblique_labels=role_oblique_labels_loss,
+                    role_labels=role_labels_loss,
                     voice_labels=voice_labels_loss,
                     certainty_labels=certainty_labels_loss,
                     gender_labels=gender_labels_loss,
@@ -646,6 +660,7 @@ def run_epoch(
                     lambda_svo=lambda_svo,
                     lambda_role_coarse=lambda_role_coarse,
                     lambda_role_oblique=lambda_role_oblique,
+                    lambda_role=lambda_role,
                     lambda_voice=lambda_voice,
                     lambda_certainty=lambda_certainty,
                     lambda_morpho=lambda_morpho,
@@ -738,6 +753,7 @@ def run_epoch(
         svob_pred    = outputs["svo_boundary_logits"].argmax(dim=-1).detach().cpu().tolist()
         role_coarse_pred_raw = outputs["role_coarse_logits"].argmax(dim=-1).detach().cpu().tolist()
         role_oblique_pred_raw = outputs["role_oblique_logits"].argmax(dim=-1).detach().cpu().tolist()
+        role_pred_raw = outputs["role_logits"].argmax(dim=-1).detach().cpu().tolist()
         voice_pred_raw = outputs["voice_logits"].argmax(dim=-1).detach().cpu().tolist()
         certainty_pred_raw = outputs["certainty_logits"].argmax(dim=-1).detach().cpu().tolist()
         gender_pred_raw = outputs["gender_logits"].argmax(dim=-1).detach().cpu().tolist()
@@ -756,6 +772,7 @@ def run_epoch(
             svob_true = svo_boundary_labels.detach().cpu()[si_cpu].tolist()
             role_coarse_true = role_coarse_labels.detach().cpu()[si_cpu].tolist()
             role_oblique_true = role_oblique_labels.detach().cpu()[si_cpu].tolist()
+            role_true    = role_labels.detach().cpu()[si_cpu].tolist()
             voice_true   = voice_labels.detach().cpu()[si_cpu].tolist()
             certainty_true = certainty_labels.detach().cpu()[si_cpu].tolist()
             gender_true  = gender_labels.detach().cpu()[si_cpu].tolist()
@@ -769,6 +786,7 @@ def run_epoch(
             svob_true = svo_boundary_labels.detach().cpu().tolist()
             role_coarse_true = role_coarse_labels.detach().cpu().tolist()
             role_oblique_true = role_oblique_labels.detach().cpu().tolist()
+            role_true    = role_labels.detach().cpu().tolist()
             voice_true   = voice_labels.detach().cpu().tolist()
             certainty_true = certainty_labels.detach().cpu().tolist()
             gender_true  = gender_labels.detach().cpu().tolist()
@@ -806,6 +824,14 @@ def run_epoch(
             if 0 <= rot < ROLE_OBLIQUE_NONE_ID:
                 all_ro_true.append(rot)
                 all_ro_pred.append(rop)
+
+        # Role fin (12 labels) : spans avec rôle annoté (!= NONE = 6)
+        # NOTE : NONE est à l'index 6 (pas en fin) → on ne peut pas utiliser < ROLE_NONE_ID
+        # car cela exclurait les obliques étendues 7-11
+        for rt, rp in zip(role_true, role_pred_raw):
+            if rt >= 0 and rt != ROLE_NONE_ID:
+                all_role_true.append(rt)
+                all_role_pred.append(rp)
 
         # Fine metrics = POSITIVE ONLY
         for bt, ft, fp in zip(b_true, f_true, f_pred):
@@ -947,6 +973,11 @@ def run_epoch(
             all_ro_true, all_ro_pred,
             labels=[l for l in range(NUM_ROLE_OBLIQUE) if l in set(all_ro_true)]
         ) if all_ro_true else 0.0,
+        # role fin (12 labels) : spans avec rôle annoté (< ROLE_NONE_ID)
+        "role_macro_f1": safe_macro_f1_local(
+            all_role_true, all_role_pred,
+            labels=[l for l in range(NUM_ROLE) if l in set(all_role_true)]
+        ) if all_role_true else 0.0,
         "voice_macro_f1": safe_macro_f1_local(all_voice_true, all_voice_pred) if all_voice_true else 0.0,
         "certainty_macro_f1": safe_macro_f1_local(
             all_certainty_true, all_certainty_pred,
@@ -1006,6 +1037,13 @@ def run_epoch(
             target_names=ROLE_OBLIQUE_LABELS,
             digits=3, zero_division=0
         ) if all_ro_true else "N/A",
+        # role fin (12 labels) : SUBJECT/OBJECT/OBLIQUE_* (NONE exclu)
+        "role_report": classification_report(
+            all_role_true, all_role_pred,
+            labels=[l for l in range(NUM_ROLE) if l != ROLE_NONE_ID and l in set(all_role_true)],
+            target_names=[ROLE_LABELS[l] for l in range(NUM_ROLE) if l != ROLE_NONE_ID and l in set(all_role_true)],
+            digits=3, zero_division=0
+        ) if all_role_true else "N/A",
         "hn_results_by_id": hn_results_by_id,
     }
 
@@ -1115,6 +1153,8 @@ def main():
                         help="Pondération de la loss rôle SVO coarse SUBJ/OBJ/OBLIQ/OTHER (défaut=0.1)")
     parser.add_argument("--lambda-role-oblique", type=float, default=0.15,
                         help="Pondération de la loss rôle oblique fin 10 sous-types (défaut=0.15)")
+    parser.add_argument("--lambda-role", type=float, default=0.0,
+                        help="Ancienne tête rôle unifiée 12 labels (défaut=0 = désactivée)")
     parser.add_argument("--lambda-voice", type=float, default=0.15,
                         help="Pondération de la loss voice ACTIVE/PASSIVE (défaut=0.5)")
     parser.add_argument("--lambda-certainty", type=float, default=0.4,
@@ -1304,6 +1344,7 @@ def main():
                     "lambda_svo":        args.lambda_svo,
                     "lambda_role_coarse": args.lambda_role_coarse,
                     "lambda_role_oblique": args.lambda_role_oblique,
+                    "lambda_role":       args.lambda_role,
                     "lambda_voice":      args.lambda_voice,
                     "lambda_morpho":     args.lambda_morpho,
                     "lambda_verb_ptr":   args.lambda_verb_ptr,
@@ -1514,7 +1555,7 @@ def main():
         for i, name in enumerate(ROLE_OBLIQUE_LABELS):
             print(f"  {name:<25} count={oblique_counts.get(i, 0):>6} weight={oblique_w[i].item():.6f}")
 
-        print("\n[role_coarse counts / weights]  (CWP power=0.4, SUBJ/OBJ/OBLIQ/APPOS)")
+        print(f"\n[role_coarse counts / weights]  (CWP power={args.class_weight_power}, SUBJ/OBJ/OBLIQ/APPOS)")
         for i, name in enumerate(ROLE_COARSE_LABELS[:ROLE_COARSE_OTHER_ID]):
             print(f"  {name:<6} count={role_coarse_counts.get(i, 0):>6} weight={role_coarse_w[i].item():.6f}")
     else:
@@ -1639,6 +1680,7 @@ def main():
             lambda_svo=args.lambda_svo,
             lambda_role_coarse=args.lambda_role_coarse,
             lambda_role_oblique=args.lambda_role_oblique,
+                lambda_role=args.lambda_role,
             oblique_class_weights=oblique_w,
             role_coarse_class_weights=role_coarse_w,
             lambda_voice=args.lambda_voice,
@@ -1696,6 +1738,7 @@ def main():
             lambda_svo=args.lambda_svo,
             lambda_role_coarse=args.lambda_role_coarse,
             lambda_role_oblique=args.lambda_role_oblique,
+                lambda_role=args.lambda_role,
             oblique_class_weights=oblique_w,
             role_coarse_class_weights=role_coarse_w,
             lambda_voice=args.lambda_voice,
@@ -1740,6 +1783,7 @@ def main():
             f"Boundary F1={train_metrics['boundary_f1']:.4f} | "
             f"Coarse F1={train_metrics['coarse_macro_f1']:.4f} | "
             f"Fine F1={train_metrics['fine_macro_f1']:.4f} | "
+            f"Role F1={train_metrics['role_macro_f1']:.4f} | "
             f"Voice F1={train_metrics['voice_macro_f1']:.4f} | "
             f"Certainty F1={train_metrics['certainty_macro_f1']:.4f} | "
             f"Gender F1={train_metrics['gender_macro_f1']:.4f} | "
@@ -1751,6 +1795,7 @@ def main():
             f"Boundary F1={val_metrics['boundary_f1']:.4f} | "
             f"Coarse F1={val_metrics['coarse_macro_f1']:.4f} | "
             f"Fine F1={val_metrics['fine_macro_f1']:.4f} | "
+            f"Role F1={val_metrics['role_macro_f1']:.4f} | "
             f"Voice F1={val_metrics['voice_macro_f1']:.4f} | "
             f"Certainty F1={val_metrics['certainty_macro_f1']:.4f} | "
             f"Gender F1={val_metrics['gender_macro_f1']:.4f} | "
@@ -1774,6 +1819,7 @@ def main():
                 "train/svo_boundary_f1": train_metrics["svo_boundary_f1"],
                 "train/role_coarse_f1": train_metrics["role_coarse_macro_f1"],
                 "train/role_oblique_f1": train_metrics["role_oblique_macro_f1"],
+                "train/role_f1":        train_metrics["role_macro_f1"],
                 "train/voice_f1":       train_metrics["voice_macro_f1"],
                 "train/certainty_f1":   train_metrics["certainty_macro_f1"],
                 "train/gender_f1":      train_metrics["gender_macro_f1"],
@@ -1788,6 +1834,7 @@ def main():
                 "val/svo_boundary_f1":  val_metrics["svo_boundary_f1"],
                 "val/role_coarse_f1":   val_metrics["role_coarse_macro_f1"],
                 "val/role_oblique_f1":  val_metrics["role_oblique_macro_f1"],
+                "val/role_f1":          val_metrics["role_macro_f1"],
                 "val/voice_f1":         val_metrics["voice_macro_f1"],
                 "val/certainty_f1":     val_metrics["certainty_macro_f1"],
                 "val/gender_f1":        val_metrics["gender_macro_f1"],
@@ -1805,6 +1852,7 @@ def main():
                 ("coarse_report",       "val/coarse"),
                 ("role_coarse_report",  "val/role_coarse"),
                 ("role_oblique_report", "val/role_oblique"),
+                ("role_report",         "val/role"),
                 ("svo_boundary_report", "val/svo_bnd"),
             ]:
                 report_str = val_metrics.get(report_key, "")
@@ -1947,6 +1995,7 @@ def main():
         lambda_svo=args.lambda_svo,
         lambda_role_coarse=args.lambda_role_coarse,
         lambda_role_oblique=args.lambda_role_oblique,
+                lambda_role=args.lambda_role,
         oblique_class_weights=oblique_w,
         role_coarse_class_weights=role_coarse_w,
         lambda_voice=args.lambda_voice,

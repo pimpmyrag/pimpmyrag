@@ -15,7 +15,7 @@ from labels import (
     COARSE_NONE_ID,
     SYN2ID, SYN_NONE_ID, ALL_SYN_LABELS,
     ROLE2ID, ROLE_NONE_ID,
-    ROLE_FINE_TO_COARSE_ID, ROLE_COARSE_NONE_ID,
+    ROLE_FINE_TO_COARSE_ID, ROLE_COARSE_NONE_ID, ROLE_COARSE_OTHER_ID,
     ROLE_TO_OBLIQUE_ID, ROLE_OBLIQUE2ID, ROLE_OBLIQUE_NONE_ID,
     NER_TIME_LABELS, NER_LOC_LABELS,
     VOICE2ID, VOICE_NONE_ID,
@@ -166,7 +166,8 @@ def build_gold_candidates(row, tokenizer):
 
         # Rôle SVO annoté sur ce span NER
         role_id = ROLE2ID.get(sp.get("svo_role", "NONE"), ROLE_NONE_ID)
-        # NER gold sans svo_role → OTHER (cascade inférence, exclu de la loss dans compute_loss)
+        # NER gold sans svo_role → OTHER (entité hors argument annoté, pas sentinel)
+        # ROLE_FINE_TO_COARSE_ID mappe NONE→OTHER pour les spans NER gold
         role_coarse_id = ROLE_FINE_TO_COARSE_ID.get(role_id, ROLE_COARSE_NONE_ID)
 
         # Rôle oblique fin (tête hiérarchique, maskée aux spans OBLIQ coarse)
@@ -174,14 +175,14 @@ def build_gold_candidates(row, tokenizer):
         svo_role_str = sp.get("svo_role", "NONE") or "NONE"
         if role_id in ROLE_TO_OBLIQUE_ID:
             role_oblique_id = ROLE_TO_OBLIQUE_ID[role_id]
-            # Pour OBLIQUE générique seulement : affiner selon le label NER
-            # (OBLIQUE_AGENT/CAUSE/etc. sont déjà spécifiques, pas d'inférence)
+            # Fix : OBLIQUE générique (id=2) est dans ROLE_TO_OBLIQUE_ID → affinement NER ici
+            # (le elif précédent était mort car OBLIQUE est déjà intercepté par le if)
             if role_id == ROLE2ID["OBLIQUE"]:
                 if label in NER_TIME_LABELS:
                     role_oblique_id = ROLE_OBLIQUE2ID["OBLIQUE_TIME"]
                 elif label in NER_LOC_LABELS:
                     role_oblique_id = ROLE_OBLIQUE2ID["OBLIQUE_LOC"]
-                # else: garde OBLIQUE générique (ID 0)
+                # else : garde OBLIQUE générique (id=0)
         else:
             role_oblique_id = ROLE_OBLIQUE_NONE_ID  # non-oblique
 
@@ -228,6 +229,36 @@ def build_gold_candidates(row, tokenizer):
         gold_candidates.append(cand)
         gold_token_spans.append((tok_start, tok_end))
         gold_char_spans.add((start, end))
+
+    # ── Déduplication des rôles SVO sur spans NER overlappants ─────────────
+    # Pour les spans NER (neg_type="gold") avec un rôle SVO, on garde uniquement
+    # le rôle du span le PLUS LONG dans chaque groupe qui se chevauchent.
+    # Les spans plus courts perdent leur rôle (→ OTHER) mais gardent leurs labels NER.
+    # Élimine : (1) redondances "Agence" + "Agence internationale" même rôle,
+    #            (2) contradictions "Millau"=OBLIQUE dans "viaduc de Millau"=SUBJECT.
+    ner_role_indices = [
+        i for i, c in enumerate(gold_candidates)
+        if c.get("neg_type") == "gold"
+        and c.get("role_coarse_label_id", ROLE_COARSE_NONE_ID) not in (ROLE_COARSE_NONE_ID, ROLE_COARSE_OTHER_ID)
+    ]
+    # Trier par longueur de span décroissante (le plus long est prioritaire)
+    ner_role_indices.sort(
+        key=lambda i: gold_candidates[i]["tok_end"] - gold_candidates[i]["tok_start"],
+        reverse=True
+    )
+    claimed = []  # (tok_start, tok_end) des spans qui ont gardé leur rôle
+    for idx in ner_role_indices:
+        c = gold_candidates[idx]
+        ts, te = c["tok_start"], c["tok_end"]
+        overlaps = any(not (te < ks or ts > ke) for ks, ke in claimed)
+        if overlaps:
+            # Ce span perd son rôle SVO → devient OTHER (entité NER sans rôle annoté)
+            gold_candidates[idx]["role_label_id"]        = ROLE_NONE_ID
+            gold_candidates[idx]["role_coarse_label_id"] = ROLE_COARSE_OTHER_ID
+            gold_candidates[idx]["role_oblique_label_id"] = ROLE_OBLIQUE_NONE_ID
+        else:
+            claimed.append((ts, te))
+    # ────────────────────────────────────────────────────────────────────────
 
     return text, input_ids, offsets, gold_candidates, gold_token_spans, gold_char_spans
 
