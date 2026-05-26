@@ -50,9 +50,12 @@ def detect_hw(cfg: dict) -> dict:
         if vram_gb >= 70:
             hw = {"device": "cuda", "gpu_name": gpu_name, **hw_cfg["h100_80gb"]}
             print(f"🔥 H100/A100-80GB détecté → BS={hw['bs']}, workers={hw['workers']}")
-        elif vram_gb >= 40:
+        elif vram_gb >= 45:
+            hw = {"device": "cuda", "gpu_name": gpu_name, **hw_cfg["l40s_48gb"]}
+            print(f"⚡ L40S/A6000-48GB détecté → BS={hw['bs']}, workers={hw['workers']}")
+        elif vram_gb >= 35:
             hw = {"device": "cuda", "gpu_name": gpu_name, **hw_cfg["a100_40gb"]}
-            print(f"⚡ A100-40GB/L40S détecté → BS={hw['bs']}")
+            print(f"⚡ A100-40GB détecté → BS={hw['bs']}")
         elif vram_gb >= 20:
             hw = {"device": "cuda", "gpu_name": gpu_name, **hw_cfg["rtx_4090"]}
             print(f"💪 RTX 4090/3090 détecté → BS={hw['bs']}, accum={hw['accum']}")
