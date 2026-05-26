@@ -234,7 +234,6 @@ def main():
         except Exception:
             pass
 
-    from pathlib import Path
     optimal = find_bs(args)
 
     # Écrire en cache
