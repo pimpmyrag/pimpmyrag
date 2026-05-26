@@ -1302,6 +1302,8 @@ def main():
                     "lambda_fine":       args.lambda_fine,
                     "lambda_svo_boundary": args.lambda_svo_boundary,
                     "lambda_svo":        args.lambda_svo,
+                    "lambda_role_coarse": args.lambda_role_coarse,
+                    "lambda_role_oblique": args.lambda_role_oblique,
                     "lambda_voice":      args.lambda_voice,
                     "lambda_morpho":     args.lambda_morpho,
                     "lambda_verb_ptr":   args.lambda_verb_ptr,
