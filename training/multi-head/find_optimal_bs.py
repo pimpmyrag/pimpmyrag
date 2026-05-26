@@ -18,10 +18,11 @@ Cette approche garantit que le BS correspond exactement au matériel réel
 from __future__ import annotations
 import argparse
 import gc
+import json
 import os
 import sys
-import json
 import time
+from pathlib import Path
 
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -248,6 +249,5 @@ def main():
 
 
 if __name__ == "__main__":
-    from pathlib import Path
     main()
 
