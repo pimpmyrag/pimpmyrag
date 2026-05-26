@@ -1797,6 +1797,9 @@ def main():
             }
             # Per-label F1 depuis le classification_report (val fine + coarse)
             import re as _re
+            # ── Log groupé par famille coarse : val/family_{COARSE}/{hint_xxx}/{f1|prec|rec} ──
+            from labels import COARSE_TO_FINE, FINE_LABELS, ID2COARSE
+            fine_metrics_by_label = {}  # hint_xxx -> {f1, prec, rec}
             for report_key, prefix in [
                 ("fine_report",         "val/fine"),
                 ("coarse_report",       "val/coarse"),
@@ -1813,6 +1816,18 @@ def main():
                         log_dict[f"{prefix}_f1_{lbl}"]        = f1
                         log_dict[f"{prefix}_precision_{lbl}"] = prec
                         log_dict[f"{prefix}_recall_{lbl}"]    = rec
+                        if prefix == "val/fine":
+                            fine_metrics_by_label[lbl] = {"f1": f1, "prec": prec, "rec": rec}
+            # ── Log imbriqué val/family_{COARSE}/{hint_xxx}_{metric} ──────────────
+            for coarse_id, fine_ids in COARSE_TO_FINE.items():
+                coarse_name = ID2COARSE[coarse_id]
+                for fine_id in fine_ids:
+                    fine_name = FINE_LABELS[fine_id]
+                    if fine_name in fine_metrics_by_label:
+                        m = fine_metrics_by_label[fine_name]
+                        log_dict[f"val/family_{coarse_name}/{fine_name}_f1"]   = m["f1"]
+                        log_dict[f"val/family_{coarse_name}/{fine_name}_prec"] = m["prec"]
+                        log_dict[f"val/family_{coarse_name}/{fine_name}_rec"]  = m["rec"]
             for item in val_metrics.get("fine_top_confusions", [])[:5]:
                 pair = f"{item['true_label']}__{item['pred_label']}"
                 log_dict[f"val/fine_confusion_count_{pair}"] = item["count"]

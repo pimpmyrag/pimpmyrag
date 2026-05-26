@@ -108,6 +108,53 @@ def print_run_detail(r, max_epochs=None):
             vals = "  ".join(f"{fmt(val(row, k)):>7}" for _, k in present)
             print(f"    {int(ep):>3}  {vals}")
 
+    # ── Fine par famille coarse ────────────────────────────────────────────────
+    FAMILIES = {
+        "PER":      ["hint_person_name", "hint_person_role", "hint_norp", "hint_group_role"],
+        "LOC":      ["hint_gpe", "hint_fac_name", "hint_loc_generic", "hint_infra"],
+        "ORG":      ["hint_org_name", "hint_inst_name", "hint_inst_role"],
+        "TIME":     ["hint_time_date", "hint_time_clock", "hint_time_duration"],
+        "EVENT":    ["hint_event_nominal", "hint_event_named"],
+        "OBJECT":   ["hint_weapon", "hint_vehicle", "hint_substance", "hint_food", "hint_tool", "hint_object_generic", "hint_object_name"],
+        "VALUE":    ["hint_measure", "hint_percentage", "hint_count", "hint_money", "hint_rate"],
+        "WORK":     ["hint_work_of_art", "hint_law", "hint_document", "hint_work_generic"],
+        "ABSTRACT": ["hint_disease", "hint_language", "hint_doctrine", "hint_state", "hint_notion", "hint_field"],
+    }
+    # Vérifie qu'au moins une famille a des données
+    family_has_data = any(
+        f"val/fine_f1_{lbl}" in by_ep.columns
+        for fines in FAMILIES.values() for lbl in fines
+    )
+    if family_has_data:
+        print(f"\n  📋 Fine par famille coarse")
+        last_ep_vals = {k: val(by_ep.iloc[-1], k) for k in by_ep.columns}
+        # Affiche chaque famille avec sa coarse_f1 + les labels fins indentés
+        for coarse_name, fine_labels in FAMILIES.items():
+            coarse_f1 = last_ep_vals.get(f"val/coarse_f1_{coarse_name}", float("nan"))
+            present_fines = [(lbl, last_ep_vals.get(f"val/fine_f1_{lbl}", float("nan"))) for lbl in fine_labels if f"val/fine_f1_{lbl}" in by_ep.columns]
+            if not present_fines:
+                continue
+            coarse_str = fmt(coarse_f1)
+            print(f"    ▸ {coarse_name:<9} coarse={coarse_str}  →  " + "  ".join(
+                f"{lbl.replace('hint_', ''):<18} f1={fmt(f1)}" for lbl, f1 in present_fines
+            ))
+        # Si on a plusieurs epochs, afficher l'évolution des labels les plus importants
+        if len(by_ep) > 1:
+            print(f"\n    Évolution (toutes epochs) des fine labels non-zéro :")
+            print(f"    {'label':<22}  " + "  ".join(f"ep{int(ep):>2}" for ep in by_ep.index))
+            print(f"    {'─'*80}")
+            for coarse_name, fine_labels in FAMILIES.items():
+                for lbl in fine_labels:
+                    key = f"val/fine_f1_{lbl}"
+                    if key not in by_ep.columns:
+                        continue
+                    series = [val(by_ep.iloc[i], key) for i in range(len(by_ep))]
+                    if all(v != v or v < 0.005 for v in series):
+                        continue  # skip si toujours ~0
+                    row = "  ".join(f"{fmt(v):>5}" for v in series)
+                    short = lbl.replace("hint_", "")[:22]
+                    print(f"    {short:<22}  {row}")
+
     # ── SVO boundary ──────────────────────────────────────────────────────────
     svo_bnd_keys = ["val/svo_boundary_f1", "val/svo_bnd_f1_non_verb",
                     "val/svo_bnd_precision_non_verb", "val/svo_bnd_recall_non_verb"]
