@@ -54,7 +54,8 @@ def load_secrets():
             k, v = line.split('=', 1)
             os.environ.setdefault(k.strip(), v.strip())
 
-def build_start_cmd(ref: str, gold_version: str, loss_weighting: str = "fixed") -> str:
+def build_start_cmd(ref: str, gold_version: str, loss_weighting: str = "fixed", config: str = None) -> str:
+    config_env = f"CONFIG={config} " if config else ""
     return (
         "bash -c '"
         "cd /workspace && "
@@ -62,7 +63,7 @@ def build_start_cmd(ref: str, gold_version: str, loss_weighting: str = "fixed") 
         f"cd pimpmyrag && git fetch origin && git checkout {ref} && "
         "cd training/multi-head && "
         "chmod +x setup_runpod.sh && "
-        f"GOLD_VERSION={gold_version} LOSS_WEIGHTING={loss_weighting} ./setup_runpod.sh 2>&1 | tee /workspace/training.log"
+        f"{config_env}GOLD_VERSION={gold_version} LOSS_WEIGHTING={loss_weighting} ./setup_runpod.sh 2>&1 | tee /workspace/training.log"
         "'"
     )
 
