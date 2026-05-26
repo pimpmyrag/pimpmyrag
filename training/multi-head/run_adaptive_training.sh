@@ -5,8 +5,8 @@ set -e
 
 cd /workspace/pimpmyrag/training/multi-head
 
-CONFIG="${CONFIG:-configs/svo-first-cascade.json}"
-GOLD_VERSION="${GOLD_VERSION:-v8.18}"
+CONFIG="${CONFIG:-configs/svo-v819.json}"
+GOLD_VERSION="${GOLD_VERSION:-v8.19}"
 export TOKENIZERS_PARALLELISM="false"
 
 # ── Détection device ────────────────────────────────────────────────────────

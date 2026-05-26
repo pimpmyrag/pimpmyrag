@@ -66,29 +66,48 @@ def detect_hw(cfg: dict) -> dict:
         # Désactivable via AUTO_BS=0 (utile pour debug ou tests rapides).
         if os.environ.get("AUTO_BS", "1") != "0" and Path("find_optimal_bs.py").exists():
             bs_static = hw["bs"]
+            # Si le cache existe mais contient une valeur < bs_static, il est obsolète → forcer recompute
+            cache_path = Path("optimal_bs_cache.json")
+            force_recompute = False
+            if cache_path.exists():
+                try:
+                    cached_check = json.loads(cache_path.read_text())
+                    if int(cached_check.get("bs", 0)) < bs_static:
+                        print(f"⚠️  Cache auto-BS obsolète (bs={cached_check.get('bs')} < static={bs_static}) — recompute forcé")
+                        cache_path.unlink()
+                        force_recompute = True
+                except Exception:
+                    pass
             print(f"🔍 Auto-tuning batch size (BS statique={bs_static}, AUTO_BS=1)...")
+            find_bs_cmd = [
+                sys.executable, "find_optimal_bs.py",
+                "--bs-min",   str(bs_static),           # jamais descendre sous la valeur statique
+                "--bs-max",   str(int(bs_static * 2.5)),
+                "--step",     "4",
+                "--safety-margin", "8",
+                "--output-file", "optimal_bs_cache.json",
+                "--model-name", cfg.get("run", {}).get("model", "microsoft/deberta-v3-base"),
+            ]
+            if force_recompute:
+                find_bs_cmd.append("--force")
             result = subprocess.run(
-                [sys.executable, "find_optimal_bs.py",
-                 "--bs-min",   str(max(16, bs_static - 16)),
-                 "--bs-max",   str(int(bs_static * 2.5)),
-                 "--step",     "4",
-                 "--safety-margin", "4",
-                 "--output-file", "optimal_bs_cache.json",
-                 "--model-name", cfg.get("run", {}).get("model", "microsoft/deberta-v3-base"),
-                ],
+                find_bs_cmd,
                 capture_output=False,  # laisse le stdout/stderr passer (visible dans tee)
                 text=True,
             )
             # Lire le résultat depuis le cache
-            cache_path = Path("optimal_bs_cache.json")
             if cache_path.exists():
                 try:
                     cached = json.loads(cache_path.read_text())
                     opt_bs = int(cached["bs"])
-                    if opt_bs != bs_static:
-                        print(f"✅ Auto-BS : {bs_static} → {opt_bs} (gain {opt_bs - bs_static:+d} samples/step)")
-                    else:
+                    if opt_bs > bs_static:
+                        print(f"✅ Auto-BS : {bs_static} → {opt_bs} (+{opt_bs - bs_static} samples/step)")
+                    elif opt_bs == bs_static:
                         print(f"✅ Auto-BS : BS={opt_bs} confirmé (déjà optimal)")
+                    else:
+                        # Ne devrait plus arriver (bs-min = bs_static), mais garde-fou
+                        print(f"⚠️  Auto-BS retourné {opt_bs} < static {bs_static} — BS statique conservé")
+                        opt_bs = bs_static
                     hw["bs"] = opt_bs
                 except Exception as e:
                     print(f"⚠️  Impossible de lire le cache auto-BS : {e} — BS statique conservé ({bs_static})")

@@ -1,25 +1,25 @@
 {
-  "_comment": "Config svo-first-v2 — Seuils plus élévés + focal fine + ramp plus rapide",
-  "_version": "v2",
+  "_comment": "Config v8.19 — role_coarse renforcé pour corriger la stagnation",
+  "_version": "v8.19",
   "_changelog": [
-    "vs svo-first-cascade.json :",
-    "- NER Phase 3 unlock_threshold : 0.88 → 0.92 (boundary plus solide avant coarse+fine)",
-    "- NER unlock_ramp_epochs : 18 → 10 (ramp plus rapide une fois unlock)",
-    "- focal_fine_gamma : 0.0 → 1.5 (focus sur classes rares post-unlock : hint_state/doctrine/notion)",
-    "- SVO Phase 2 role_thr_svo_bnd : 0.85 → 0.88 (stabilisation encodeur SVO plus poussée)",
-    "  Note : impact limité car labels role_coarse viennent du gold, pas du modèle",
-    "- role_ramp_epochs : 6 → 5 (ramp légèrement plus courte, signal déjà bas=0.05 warmup)"
+    "Base : svo-first-v2.json",
+    "Problème diagnostiqué : role_coarse_f1 plat à 0.11 sur v8.18 (25% OTHER noyait le gradient)",
+    "Fixes v8.19 :",
+    "  1. Data : v8.19 → 84.1% couverture (vs 75%) — OTHER 16% au lieu de 25%",
+    "  2. role_coarse λ : 0.35 → 0.55 (ratio 7.3% du total ≈ ancienne tête λ=0.60)",
+    "  3. role_coarse_warmup_lambda : 0.05 → 0.15 (signal OBJ dès ep1, avant que OBLIQ domine)",
+    "  4. role_ramp_epochs : 5 → 4 (plein régime plus vite)",
+    "  5. boost_role_coarse HN : 1.5 → 2.5 (penalise confusions SUBJ/OBJ/OBLIQ plus fort)"
   ],
   "_doc": [
-    "PHASE 1 : NER bnd + SVO bnd + role_coarse warmup (λ=0.05) dès epoch 1",
-    "PHASE 2 : svo_bnd_f1 >= 0.88 → role_coarse rampe vers λ=0.35 + voice + verb_ptr",
+    "PHASE 1 : NER bnd + SVO bnd + role_coarse warmup (λ=0.15) dès epoch 1",
+    "PHASE 2 : svo_bnd_f1 >= 0.88 → role_coarse rampe vers λ=0.55 en 4ep + voice + verb_ptr",
     "PHASE 3 : ner_bnd_f1 >= 0.92 → coarse+fine NER unlock + ramp 10ep",
-    "           focal_fine_gamma=1.5 : focus automatique sur hint_state/doctrine/notion",
     "PHASE 4 : role_coarse_f1 >= 0.45 → role_oblique + morpho"
   ],
 
   "run": {
-    "name_suffix": "svo-v2",
+    "name_suffix": "svo-v819",
     "max_epochs": 90,
     "model": "microsoft/deberta-v3-base",
     "loss_weighting": "fixed",
@@ -37,13 +37,15 @@
   },
 
   "lambdas": {
-    "_comment": "Valeurs CIBLES plein régime. Les ramps sont gérées par la cascade dans run_training.py.",
+    "_comment": "Valeurs CIBLES plein régime. role_coarse relevé pour compenser la baisse OTHER.",
+    "_budget": "bnd=5.0 + coarse=0.75 + fine=1.8 + svo_bnd=0.35 + svo=0.70 + role_coarse=0.55 + ... total≈10.15",
+    "_ratio_role_coarse": "0.55/10.15 = 5.4% — équivalent ancienne tête (0.60/8.0≈7.5%) mais compétition NER plus forte désormais",
     "boundary":     5.0,
     "coarse":       0.75,
     "fine":         1.8,
     "svo_boundary": 0.35,
     "svo":          0.70,
-    "role_coarse":  0.35,
+    "role_coarse":  0.55,
     "role_oblique": 0.25,
     "voice":        0.15,
     "certainty":    0.30,
@@ -55,12 +57,10 @@
   "focal": {
     "boundary_gamma":  0.5,
     "fine_gamma":      1.5,
-    "_fine_gamma_doc": "Focal loss fine POST-UNLOCK Phase 3 : down-weight person_name/loc (faciles), up-weight hint_state/doctrine/notion (rares). (1-p)^1.5 * CE",
     "coarse_gamma":    0.0
   },
 
   "boundary_first": {
-    "_comment": "PHASE 3 — seuil relevé à 0.92 (vs 0.88) + ramp raccourcie 10ep (vs 18)",
     "enabled": true,
     "unlock_threshold":    0.92,
     "unlock_ramp_epochs":  10,
@@ -69,14 +69,14 @@
   },
 
   "svo_cascade": {
-    "_comment": "PHASES 2 & 4 — seuil Phase 2 relevé à 0.88 (vs 0.85)",
+    "_comment": "Warmup plus fort (0.15 vs 0.05) + ramp raccourcie (4ep vs 5)",
 
-    "_phase1_doc": "PHASE 1 : role_coarse warmup λ=0.05 dès epoch 1",
-    "role_coarse_warmup_lambda": 0.05,
+    "_phase1_doc": "PHASE 1 : role_coarse warmup λ=0.15 dès epoch 1 — signal suffisant pour OBJ",
+    "role_coarse_warmup_lambda": 0.15,
 
-    "_phase2_doc": "PHASE 2 : svo_bnd_f1 >= 0.88 → role_coarse rampe vers λ plein",
+    "_phase2_doc": "PHASE 2 : svo_bnd_f1 >= 0.88 → role_coarse rampe vers λ=0.55 en 4 epochs",
     "role_thr_svo_bnd":    0.88,
-    "role_ramp_epochs":    5,
+    "role_ramp_epochs":    4,
 
     "_phase4_doc": "PHASE 4 : role_coarse_f1 >= 0.45 → role_oblique + morpho",
     "oblique_thr_role_crs": 0.45,
@@ -84,7 +84,6 @@
   },
 
   "boundary_rescue": {
-    "_comment": "Si NER boundary stagne, réduit les lambdas compétiteurs (once-only)",
     "window":          5,
     "target":          0.90,
     "min_delta":       0.003,
@@ -111,11 +110,10 @@
     "boost_fine":     3.0,
     "boost_fp_svo":   3.0,
     "boost_fn_svo":   2.0,
-    "boost_role_coarse": 1.5
+    "boost_role_coarse": 2.5
   },
 
   "difficulty_levels": {
-    "_comment": "6 niveaux progressifs. hard_per_gold = nb négatifs durs par gold.",
     "names":         ["easy", "easy+", "medium", "medium+", "hard", "full"],
     "hard_per_gold": [2,      2,       3,        4,         5,      6],
     "soft_factors":  [1.0,    1.25,    1.5,      2.0,       2.0,    2.0],
