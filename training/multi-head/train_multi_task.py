@@ -257,13 +257,14 @@ def get_layerwise_param_groups(model, base_lr: float, head_lr: float, decay: flo
 def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
     """
     Calcule des poids de classes à partir du dataset multitask enrichi.
-    Retourne weights pour boundary, coarse, fine, certainty, role_oblique.
+    Retourne weights pour boundary, coarse, fine, certainty, role_oblique, role_coarse.
     """
     boundary_counts = Counter()
     coarse_counts = Counter()
     fine_counts = Counter()
     certainty_counts = Counter()
     oblique_counts = Counter()
+    role_coarse_counts = Counter()
 
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -278,6 +279,11 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
                 obl_id = c.get("role_oblique_label_id", ROLE_OBLIQUE_NONE_ID)
                 if obl_id < ROLE_OBLIQUE_NONE_ID:
                     oblique_counts[obl_id] += 1
+                # role_coarse : compter seulement les vrais rôles (SUBJ/OBJ/OBLIQ/APPOS)
+                # OTHER(4) et NONE_ID(5) exclus du gradient → pas dans les weights
+                rc_id = c.get("role_coarse_label_id", ROLE_COARSE_NONE_ID)
+                if rc_id < ROLE_COARSE_OTHER_ID:  # 0..3 seulement
+                    role_coarse_counts[rc_id] += 1
 
     def make_weights(counts, num_classes, power=0.5):
         total = sum(counts.values())
@@ -294,17 +300,26 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
         weights = weights / weights.mean()
         return weights
 
+    # role_coarse : CWP modéré (0.4) pour compenser OBLIQ>SUBJ>OBJ>APPOS sans écraser
+    # OTHER(4) reçoit poids=1.0 (neutre, présent dans softmax mais exclu du gradient)
+    rc_w = make_weights(role_coarse_counts, ROLE_COARSE_OTHER_ID, power=min(power, 0.4))
+    rc_w_full = torch.ones(NUM_ROLE_COARSE, dtype=torch.float32)
+    rc_w_full[:ROLE_COARSE_OTHER_ID] = rc_w  # indices 0-3 = SUBJ/OBJ/OBLIQ/APPOS
+    # index 4 (OTHER) = 1.0 neutre (exclu du gradient de toute façon)
+
     return (
         make_weights(boundary_counts, 2, power=power),
         make_weights(coarse_counts, len(COARSE_LABELS), power=0.0),
         make_weights(fine_counts, len(FINE_LABELS), power=power),
         make_weights(certainty_counts, NUM_CERTAINTY, power=power),
         make_weights(oblique_counts, NUM_ROLE_OBLIQUE, power=power),
+        rc_w_full,
         boundary_counts,
         coarse_counts,
         fine_counts,
         certainty_counts,
         oblique_counts,
+        role_coarse_counts,
     )
 
 
@@ -331,6 +346,7 @@ def run_epoch(
         coarse_class_weights=None,
         fine_class_weights=None,
         certainty_class_weights=None,
+        role_coarse_class_weights=None,
         lambda_boundary=2.5,
         lambda_coarse=1.0,
         lambda_fine=1.8,
@@ -622,6 +638,7 @@ def run_epoch(
                     fine_class_weights=fine_class_weights,
                     certainty_class_weights=certainty_class_weights,
                     oblique_class_weights=oblique_class_weights,
+                    role_coarse_class_weights=role_coarse_class_weights,
                     lambda_boundary=lambda_boundary,
                     lambda_coarse=lambda_coarse,
                     lambda_fine=lambda_fine,
@@ -1443,11 +1460,13 @@ def main():
             fine_w,
             certainty_w,
             oblique_w,
+            role_coarse_w,
             boundary_counts,
             coarse_counts,
             fine_counts,
             certainty_counts,
             oblique_counts,
+            role_coarse_counts,
         ) = compute_class_weights_from_multitask_jsonl(
             args.train,
             power=args.class_weight_power,
@@ -1492,6 +1511,10 @@ def main():
         print("\n[oblique fine counts / weights]  (CWP compense rareté ADVERSARY/SOURCE...)")
         for i, name in enumerate(ROLE_OBLIQUE_LABELS):
             print(f"  {name:<25} count={oblique_counts.get(i, 0):>6} weight={oblique_w[i].item():.6f}")
+
+        print("\n[role_coarse counts / weights]  (CWP power=0.4, SUBJ/OBJ/OBLIQ/APPOS)")
+        for i, name in enumerate(ROLE_COARSE_LABELS[:ROLE_COARSE_OTHER_ID]):
+            print(f"  {name:<6} count={role_coarse_counts.get(i, 0):>6} weight={role_coarse_w[i].item():.6f}")
     else:
         print("⚖️ class weights désactivés")
         boundary_w = None
@@ -1499,6 +1522,7 @@ def main():
         fine_w = None
         certainty_w = None
         oblique_w = None
+        role_coarse_w = None
 
     best_score = -1.0
     start_epoch = 1
@@ -1614,6 +1638,7 @@ def main():
             lambda_role_coarse=args.lambda_role_coarse,
             lambda_role_oblique=args.lambda_role_oblique,
             oblique_class_weights=oblique_w,
+            role_coarse_class_weights=role_coarse_w,
             lambda_voice=args.lambda_voice,
             lambda_certainty=args.lambda_certainty,
             lambda_morpho=args.lambda_morpho,
@@ -1670,6 +1695,7 @@ def main():
             lambda_role_coarse=args.lambda_role_coarse,
             lambda_role_oblique=args.lambda_role_oblique,
             oblique_class_weights=oblique_w,
+            role_coarse_class_weights=role_coarse_w,
             lambda_voice=args.lambda_voice,
             lambda_certainty=args.lambda_certainty,
             lambda_morpho=args.lambda_morpho,
@@ -1905,6 +1931,7 @@ def main():
         lambda_role_coarse=args.lambda_role_coarse,
         lambda_role_oblique=args.lambda_role_oblique,
         oblique_class_weights=oblique_w,
+        role_coarse_class_weights=role_coarse_w,
         lambda_voice=args.lambda_voice,
         lambda_certainty=args.lambda_certainty,
         lambda_morpho=args.lambda_morpho,
