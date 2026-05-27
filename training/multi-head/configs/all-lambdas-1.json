@@ -34,10 +34,10 @@
     "svo_boundary": 0.5,
     "svo":          1.0,
     "role_coarse":  0.0,
-    "role_oblique": 1.0,
+    "role_oblique": 0.5,
     "role":         1.0,
-    "voice":        1.0,
-    "certainty":    1.0,
+    "voice":        0.3,
+    "certainty":    0.3,
     "morpho":       0.5,
     "verb_ptr":     0.5,
     "compat":       0.0
