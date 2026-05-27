@@ -110,10 +110,18 @@ class MultiTaskSpanDataset(Dataset):
         }
 
 
-def make_collate_fn(tokenizer):
-    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+class CollateFn:
+    """Callable picklable (compatible multiprocessing DataLoader num_workers>0).
 
-    def collate_fn(batch):
+    Une closure locale ne peut pas être picklée par le spawn de workers.
+    Une classe de niveau module, elle, l'est.
+    """
+
+    def __init__(self, pad_id: int):
+        self.pad_id = pad_id
+
+    def __call__(self, batch):
+        pad_id = self.pad_id
         max_len = max(item["input_ids"].size(0) for item in batch)
 
         input_ids = []
@@ -207,4 +215,7 @@ def make_collate_fn(tokenizer):
             "invalid_candidate_count": invalid_candidate_count,
         }
 
-    return collate_fn
+
+def make_collate_fn(tokenizer):
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+    return CollateFn(pad_id)
