@@ -86,6 +86,11 @@ class SpanMultiTaskModel(nn.Module):
         # La soft-attention est différentiable et donne un contexte uniforme early training
         # (verb_ptr aléatoire ≈ moyenne encoder), puis se concentre sur le verbe réel.
         self.verb_ctx_proj  = nn.Linear(hidden_size, span_hidden_dim)
+        # Position relative du span par rapport au verbe pointé (3 features) :
+        #   [rel_pos_norm, is_before_verb, is_after_verb]
+        # Critical : sans ça, verb_ctx biaise tout vers SUBJ (le rôle le plus fréquent)
+        # car le hidden state du verbe encode "ce verbe attend un sujet".
+        self.rel_pos_proj   = nn.Linear(3, span_hidden_dim, bias=False)
         # Gate appris : sigmoid(-3) ~ 0.05 au départ → bruit minimal
         # S'ouvre progressivement quand verb_ctx devient fiable
         self.verb_ctx_gate  = nn.Parameter(torch.tensor(-3.0))
@@ -208,7 +213,21 @@ class SpanMultiTaskModel(nn.Module):
             verb_best   = verb_ptr_logits.detach().argmax(dim=-1)    # [N]
             verb_ctx    = hidden[span_batch_idx, verb_best].detach() # [N, H]
             verb_ctx_w  = torch.sigmoid(self.verb_ctx_gate)          # scalar gate ~ 0.05 init
-            span_h_role = span_h + verb_ctx_w * self.verb_ctx_proj(verb_ctx)  # [N, span_hidden_dim]
+
+            # Position relative du span par rapport au token verbe :
+            # sans ce signal, verb_ctx biaise tout vers SUBJ (hidden verbe → "attend un sujet")
+            span_center  = (span_positions[:, 0].float() + span_positions[:, 1].float()) / 2  # [N]
+            rel_raw      = span_center - verb_best.float()                  # [N] <0=before, >0=after
+            rel_norm     = rel_raw.clamp(-64, 64) / 64.0                    # [N] normalisé
+            pos_feat     = torch.stack([
+                rel_norm,
+                (rel_raw < 0).float(),   # is_before_verb  (→ SUBJ typique)
+                (rel_raw > 0).float(),   # is_after_verb   (→ OBJ / OBLIQ typique)
+            ], dim=1).to(verb_ctx.dtype)                                     # [N, 3]
+
+            span_h_role = span_h + verb_ctx_w * (
+                self.verb_ctx_proj(verb_ctx) + self.rel_pos_proj(pos_feat)
+            )  # [N, span_hidden_dim]
         else:
             verb_ptr_logits = torch.zeros(
                 (0, hidden.size(1)), device=hidden.device
