@@ -39,7 +39,7 @@
     "voice":        1.0,
     "certainty":    1.0,
     "morpho":       1.0,
-    "verb_ptr":     0.0,
+    "verb_ptr":     0.5,
     "compat":       0.0
   },
 

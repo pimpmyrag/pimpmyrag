@@ -476,6 +476,8 @@ def run_epoch(
     all_rc_from_role_true, all_rc_from_role_pred = [], []
     # role_oblique positive-only (spans avec role_oblique < ROLE_OBLIQUE_NONE_ID)
     all_ro_true, all_ro_pred = [], []
+    # role_oblique CASCADE — gate = role_coarse_from_role prédit OBLIQ (mode inférence réelle)
+    all_ro_cascaded_true, all_ro_cascaded_pred = [], []
     # role fin (12 labels) : spans avec rôle annoté (< ROLE_NONE_ID)
     all_role_true, all_role_pred = [], []
     # voice positive-only (spans avec voice_label != VOICE_NONE_ID)
@@ -830,6 +832,14 @@ def run_epoch(
                 all_ro_true.append(rot)
                 all_ro_pred.append(rop)
 
+        # Role oblique CASCADE — gate = role_coarse_from_role prédit OBLIQ
+        # Simule l'inférence réelle : un span reçoit role_oblique seulement si prédit OBLIQ par la dérivée
+        _OBLIQ_RC = ROLE_COARSE2ID["OBLIQ"]
+        for rot, rop, rcfr in zip(role_oblique_true, role_oblique_pred_raw, role_coarse_from_role_pred_raw):
+            if rcfr == _OBLIQ_RC and 0 <= rot < ROLE_OBLIQUE_NONE_ID:
+                all_ro_cascaded_true.append(rot)
+                all_ro_cascaded_pred.append(rop)
+
         # Role fin (12 labels) : spans avec rôle annoté (!= NONE = 6)
         # NOTE : NONE est à l'index 6 (pas en fin) → on ne peut pas utiliser < ROLE_NONE_ID
         # car cela exclurait les obliques étendues 7-11
@@ -983,6 +993,12 @@ def run_epoch(
             all_ro_true, all_ro_pred,
             labels=[l for l in range(NUM_ROLE_OBLIQUE) if l in set(all_ro_true)]
         ) if all_ro_true else 0.0,
+        # role_oblique CASCADE — gate = role_coarse_from_role prédit OBLIQ (mode inférence réelle)
+        # Mesure la précision de role_oblique_head sur les spans correctement gatés par la dérivée
+        "role_oblique_cascaded_macro_f1": safe_macro_f1_local(
+            all_ro_cascaded_true, all_ro_cascaded_pred,
+            labels=[l for l in range(NUM_ROLE_OBLIQUE) if l in set(all_ro_cascaded_true)]
+        ) if all_ro_cascaded_true else 0.0,
         # role fin (12 labels) : spans avec rôle annoté (< ROLE_NONE_ID)
         "role_macro_f1": safe_macro_f1_local(
             all_role_true, all_role_pred,
@@ -1054,6 +1070,13 @@ def run_epoch(
             target_names=ROLE_OBLIQUE_LABELS,
             digits=3, zero_division=0
         ) if all_ro_true else "N/A",
+        # role_oblique CASCADE — mode inférence réelle (gate = role_coarse_from_role == OBLIQ)
+        "role_oblique_cascaded_report": classification_report(
+            all_ro_cascaded_true, all_ro_cascaded_pred,
+            labels=[l for l in range(NUM_ROLE_OBLIQUE) if l in set(all_ro_cascaded_true)],
+            target_names=[ROLE_OBLIQUE_LABELS[l] for l in range(NUM_ROLE_OBLIQUE) if l in set(all_ro_cascaded_true)],
+            digits=3, zero_division=0
+        ) if all_ro_cascaded_true else "N/A",
         # role fin (12 labels) : SUBJECT/OBJECT/OBLIQUE_* (NONE exclu)
         "role_report": classification_report(
             all_role_true, all_role_pred,
@@ -1852,6 +1875,7 @@ def main():
                 "val/role_coarse_f1":   val_metrics["role_coarse_macro_f1"],
                 "val/role_coarse_from_role_f1": val_metrics["role_coarse_from_role_macro_f1"],
                 "val/role_oblique_f1":  val_metrics["role_oblique_macro_f1"],
+                "val/role_oblique_cascaded_f1": val_metrics["role_oblique_cascaded_macro_f1"],
                 "val/role_f1":          val_metrics["role_macro_f1"],
                 "val/voice_f1":         val_metrics["voice_macro_f1"],
                 "val/certainty_f1":     val_metrics["certainty_macro_f1"],
@@ -1871,6 +1895,7 @@ def main():
                 ("role_coarse_report",            "val/role_coarse"),
                 ("role_coarse_from_role_report",  "val/role_coarse_from_role"),
                 ("role_oblique_report",           "val/role_oblique"),
+                ("role_oblique_cascaded_report",  "val/role_oblique_cascaded"),
                 ("role_report",                   "val/role"),
                 ("svo_boundary_report",           "val/svo_bnd"),
             ]:
@@ -1944,8 +1969,13 @@ def main():
         print("[VAL role coarse FROM role_head (SUBJ/OBJ/OBLIQ/APPOS — diagnostic)]")
         print(val_metrics.get("role_coarse_from_role_report", "N/A"))
         if val_metrics.get("role_oblique_report") and val_metrics["role_oblique_report"] != "N/A":
-            print("[VAL role oblique (sous-types OBLIQ)]")
+            ro_oracle_f1  = val_metrics.get("role_oblique_macro_f1", 0.0)
+            ro_cascade_f1 = val_metrics.get("role_oblique_cascaded_macro_f1", 0.0)
+            print(f"[VAL role oblique (sous-types OBLIQ)]  oracle F1={ro_oracle_f1:.4f}  cascade F1={ro_cascade_f1:.4f}  (cascade = gate role_coarse_from_role)")
             print(val_metrics["role_oblique_report"])
+            if val_metrics.get("role_oblique_cascaded_report") and val_metrics["role_oblique_cascaded_report"] != "N/A":
+                print("[VAL role oblique CASCADE (inférence réelle — gate=role_coarse_from_role)]")
+                print(val_metrics["role_oblique_cascaded_report"])
         if val_metrics.get("gender_macro_f1", 0) > 0:
             print(f"[VAL morpho]  Gender F1={val_metrics['gender_macro_f1']:.4f}  Number F1={val_metrics['number_macro_f1']:.4f}  Person F1={val_metrics['person_macro_f1']:.4f}")
 
