@@ -200,10 +200,11 @@ class SpanMultiTaskModel(nn.Module):
             # Soft-attention sur l'encoder via verb_ptr_logits (détaché pour ne pas
             # perturber le gradient du pointer). Early training : attention quasi-uniforme
             # → contexte ≈ moyenne de la phrase. Late training : se concentre sur le verbe.
-            verb_attn = torch.softmax(verb_ptr_logits.detach(), dim=-1)  # [N, seq]
-            gathered_hidden = hidden[span_batch_idx]                     # [N, seq, H]
-            verb_ctx = (verb_attn.unsqueeze(-1) * gathered_hidden).sum(dim=1)  # [N, H]
-            span_h_role = span_h + self.verb_ctx_proj(verb_ctx)          # [N, span_hidden_dim]
+            # Hard pointer: hidden du token verbe predit - O(N*H) vs O(N*seq*H)
+            # gathered_hidden [N,512,768] ~ 6GB avec BS=80 sur RTX 4090 -> OOM
+            verb_best   = verb_ptr_logits.detach().argmax(dim=-1)    # [N]
+            verb_ctx    = hidden[span_batch_idx, verb_best].detach() # [N, H]
+            span_h_role = span_h + self.verb_ctx_proj(verb_ctx)      # [N, span_hidden_dim]
         else:
             verb_ptr_logits = torch.zeros(
                 (0, hidden.size(1)), device=hidden.device
