@@ -111,10 +111,10 @@
   },
 
   "hardware": {
-    "h100_80gb":  {"bs": 160, "accum": 1, "workers": 8},
-    "l40s_48gb":  {"bs": 128, "accum": 1, "workers": 6},
-    "a100_40gb":  {"bs":  96, "accum": 1, "workers": 6},
-    "rtx_4090":   {"bs":  80, "accum": 1, "workers": 8},
+    "h100_80gb":  {"bs": 160, "accum": 1, "workers": 12},
+    "l40s_48gb":  {"bs": 128, "accum": 1, "workers": 12},
+    "a100_40gb":  {"bs":  96, "accum": 1, "workers": 10},
+    "rtx_4090":   {"bs":  80, "accum": 1, "workers": 10},
     "rtx_3090":   {"bs":  64, "accum": 1, "workers": 4},
     "default":    {"bs":  16, "accum": 2, "workers": 0}
   }
