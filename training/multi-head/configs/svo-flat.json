@@ -31,7 +31,7 @@
   },
 
   "lambdas": {
-    "_comment": "Tout à 1.0 — signal uniforme pour éviter tout choc de gradient.",
+    "_comment": "Tout à 1.0 sauf verb_ptr=0 — role_coarse apprend seul sur span_h, sans interférence du pointer.",
     "boundary":     1.0,
     "coarse":       0.0,
     "fine":         0.0,
@@ -42,7 +42,7 @@
     "voice":        1.0,
     "certainty":    1.0,
     "morpho":       0.0,
-    "verb_ptr":     1.0,
+    "verb_ptr":     0.0,
     "compat":       0.0
   },
 
