@@ -86,6 +86,9 @@ class SpanMultiTaskModel(nn.Module):
         # La soft-attention est différentiable et donne un contexte uniforme early training
         # (verb_ptr aléatoire ≈ moyenne encoder), puis se concentre sur le verbe réel.
         self.verb_ctx_proj  = nn.Linear(hidden_size, span_hidden_dim)
+        # Gate appris : sigmoid(-3) ~ 0.05 au départ → bruit minimal
+        # S'ouvre progressivement quand verb_ctx devient fiable
+        self.verb_ctx_gate  = nn.Parameter(torch.tensor(-3.0))
 
         # SVO→NER cascade : injecte le score SVO du span conteneur dans la repr NER
         # Permet aux têtes NER de savoir si ce span est dans une zone argumentale SVO.
@@ -204,7 +207,8 @@ class SpanMultiTaskModel(nn.Module):
             # gathered_hidden [N,512,768] ~ 6GB avec BS=80 sur RTX 4090 -> OOM
             verb_best   = verb_ptr_logits.detach().argmax(dim=-1)    # [N]
             verb_ctx    = hidden[span_batch_idx, verb_best].detach() # [N, H]
-            span_h_role = span_h + self.verb_ctx_proj(verb_ctx)      # [N, span_hidden_dim]
+            verb_ctx_w  = torch.sigmoid(self.verb_ctx_gate)          # scalar gate ~ 0.05 init
+            span_h_role = span_h + verb_ctx_w * self.verb_ctx_proj(verb_ctx)  # [N, span_hidden_dim]
         else:
             verb_ptr_logits = torch.zeros(
                 (0, hidden.size(1)), device=hidden.device
