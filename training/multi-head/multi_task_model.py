@@ -214,16 +214,29 @@ class SpanMultiTaskModel(nn.Module):
             verb_ctx    = hidden[span_batch_idx, verb_best].detach() # [N, H]
             verb_ctx_w  = torch.sigmoid(self.verb_ctx_gate)          # scalar gate ~ 0.05 init
 
-            # Position relative du span par rapport au token verbe :
-            # sans ce signal, verb_ctx biaise tout vers SUBJ (hidden verbe → "attend un sujet")
+            # Position relative du span par rapport au verbe.
+            # PROBLÈME avec verb_best aléatoire (early training) : un span SUBJ en position 5/512
+            # a P(is_after_verb=1) ≈ 97% avec verb_best ~ Uniform[0,511] → le modèle apprend
+            # "SUBJ = après verbe" pendant 6 epochs, puis tout s'effondre quand verb_ptr corrige.
+            # FIX : pendant l'entraînement, utiliser les positions GOLD (gov_verb_labels) pour
+            # rel_pos — toujours correctes dès ep1. En inférence : prédictions du modèle.
+            seq_len = hidden.size(1)
+            gov_verb_raw = batch.get("gov_verb_labels")   # [N] ou None si pas SVO
+            if self.training and gov_verb_raw is not None:
+                gvl = gov_verb_raw.to(device=hidden.device)
+                valid_gold = (gvl >= 0) & (gvl < seq_len)
+                verb_for_pos = torch.where(valid_gold, gvl, verb_best)  # gold si dispo, sinon prédit
+            else:
+                verb_for_pos = verb_best  # inférence : utilise la prédiction
+
             span_center  = (span_positions[:, 0].float() + span_positions[:, 1].float()) / 2  # [N]
-            rel_raw      = span_center - verb_best.float()                  # [N] <0=before, >0=after
-            rel_norm     = rel_raw.clamp(-64, 64) / 64.0                    # [N] normalisé
+            rel_raw      = span_center - verb_for_pos.float()              # [N] <0=before, >0=after
+            rel_norm     = rel_raw.clamp(-64, 64) / 64.0                   # [N] normalisé
             pos_feat     = torch.stack([
                 rel_norm,
                 (rel_raw < 0).float(),   # is_before_verb  (→ SUBJ typique)
                 (rel_raw > 0).float(),   # is_after_verb   (→ OBJ / OBLIQ typique)
-            ], dim=1).to(verb_ctx.dtype)                                     # [N, 3]
+            ], dim=1).to(verb_ctx.dtype)                                    # [N, 3]
 
             span_h_role = span_h + verb_ctx_w * (
                 self.verb_ctx_proj(verb_ctx) + self.rel_pos_proj(pos_feat)
