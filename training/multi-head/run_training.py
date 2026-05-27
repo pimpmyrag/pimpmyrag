@@ -505,9 +505,10 @@ def main():
         "coarse_fine_unlocked":  not cfg["boundary_first"]["enabled"],
         "coarse_fine_unlock_epoch": 0,
         # Cascade SVO-first (phases 2a, 2 & 4)
-        "rc_trigger_epoch":      None,  # role_coarse ramp → triggered par ner_bnd_f1
-        "phase2_trigger_epoch":  None,  # voice/verb_ptr/certainty → triggered par svo_bnd_f1
-        "phase4_trigger_epoch":  None,  # SVO fine  → triggered par role_coarse_f1
+        # Si seuil == 0.0, on pré-active le trigger dès ep0 → lambdas à 100% dès ep1
+        "rc_trigger_epoch":      0 if cfg.get("svo_cascade", {}).get("role_coarse_bnd_thr", 0.90) == 0.0 else None,
+        "phase2_trigger_epoch":  0 if cfg.get("svo_cascade", {}).get("role_thr_svo_bnd",    0.0)  == 0.0 else None,
+        "phase4_trigger_epoch":  0 if cfg.get("svo_cascade", {}).get("oblique_thr_role_crs", 0.0) == 0.0 else None,
         "l_boundary":            cfg["lambdas"]["boundary"],
         "l_voice":               cfg["lambdas"]["voice"],
         "l_verb_ptr":            cfg["lambdas"]["verb_ptr"],
