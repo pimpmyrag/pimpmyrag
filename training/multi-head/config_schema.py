@@ -1,189 +1,215 @@
 """
 config_schema.py — Modèle de haut niveau du système d'entraînement multitask pimpmyrag.
 
-Ce module définit les types abstraits (enums + dataclasses).
-Chaque fichier JSON de config est une *instanciation* de MultiTaskConfig.
+Basé sur Pydantic v2 (BaseModel) — trois usages :
 
-Pas de logique ici — uniquement la structure.
-Le reader (config_reader.py) se chargera de désérialiser JSON → ces types.
+  1. Définition des types (enums + modèles)
+  2. Génération du JSON Schema standard :
+       python3 config_schema.py                        # écrit configs/config_schema.json
+       python3 config_schema.py --out path/to/out.json
+
+  3. Validation + désérialisation d'un fichier de config :
+       cfg = MultiTaskConfig.from_json_file("configs/svo-v820-rc1.json")
+       # → ValidationError explicite si le JSON ne respecte pas le schéma
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+import re
 from enum import Enum
-from typing import Optional, Union
+from pathlib import Path
+from typing import Annotated, Optional, Union
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # ─────────────────────────────────────────────────────────────
-#  Enums — types fermés
+#  Enums
 # ─────────────────────────────────────────────────────────────
 
 class HeadType(str, Enum):
     """Type de tête de prédiction."""
-    SPAN_BINARY           = "span_binary"           # classification binaire sur span (boundary, svo_boundary)
-    SPAN_MULTICLASS       = "span_multiclass"        # classification N classes sur span (coarse, fine, roles…)
-    SPAN_MULTICLASS_MULTI = "span_multiclass_multi"  # plusieurs têtes multiclass partageant le même input (morpho)
-    TOKEN_POINTER         = "token_pointer"          # pointeur span → token dans la séquence (verb_ptr)
-    SPAN_BILINEAR         = "span_bilinear"          # compatibilité bilinéaire entre paires de spans (compat)
+    SPAN_BINARY           = "span_binary"
+    SPAN_MULTICLASS       = "span_multiclass"
+    SPAN_MULTICLASS_MULTI = "span_multiclass_multi"
+    TOKEN_POINTER         = "token_pointer"
+    SPAN_BILINEAR         = "span_bilinear"
 
 
 class InputTensor(str, Enum):
     """Tenseur d'entrée d'une tête."""
-    SPAN_H         = "span_h"          # représentation brute du span (pooling sur ses tokens)
-    SPAN_H_ROLE    = "span_h_role"     # span_h + verb_ctx_proj(soft_attn_verb) — conditionné par le verbe
-    ENCODER_HIDDEN = "encoder_hidden"  # séquence complète de l'encodeur (pour token_pointer)
+    SPAN_H         = "span_h"
+    SPAN_H_ROLE    = "span_h_role"
+    ENCODER_HIDDEN = "encoder_hidden"
 
 
 class LossType(str, Enum):
-    """Type de fonction de loss."""
     CROSS_ENTROPY = "cross_entropy"
-    FOCAL         = "focal"          # focal loss — nécessite gamma
-    BCE           = "bce"            # binary cross-entropy
+    FOCAL         = "focal"
+    BCE           = "bce"
 
 
 class GateType(str, Enum):
-    """Condition d'activation d'une tête ou d'une phase."""
-    ALWAYS           = "always"            # toujours actif
-    METRIC_THRESHOLD = "metric_threshold"  # activé quand métrique W&B ≥ seuil
-    EPOCH_THRESHOLD  = "epoch_threshold"   # activé à partir de l'epoch N
+    ALWAYS           = "always"
+    METRIC_THRESHOLD = "metric_threshold"
+    EPOCH_THRESHOLD  = "epoch_threshold"
 
 
 class PoolingType(str, Enum):
-    """Stratégie de pooling pour construire la représentation d'un span."""
-    MEAN       = "mean"        # moyenne des tokens du span
-    MAX        = "max"         # max pooling
-    FIRST_LAST = "first_last"  # concaténation premier + dernier token
+    MEAN       = "mean"
+    MAX        = "max"
+    FIRST_LAST = "first_last"
 
 
 class ClassWeightStrategy(str, Enum):
-    """Stratégie de pondération des classes dans la loss."""
-    AUTO = "auto"  # calculé depuis la distribution du dataset (CWP)
-    NONE = "none"  # pas de pondération
+    AUTO = "auto"
+    NONE = "none"
+
+
+class LossWeightingStrategy(str, Enum):
+    FIXED       = "fixed"
+    UNCERTAINTY = "uncertainty"
+    GRADNORM    = "gradnorm"
 
 
 # ─────────────────────────────────────────────────────────────
 #  Composants de base
 # ─────────────────────────────────────────────────────────────
 
-@dataclass
-class LossConfig:
+class LossConfig(BaseModel):
     type:  LossType
-    gamma: Optional[float] = None  # requis si type == FOCAL
+    gamma: Optional[float] = Field(None, description="Requis si type=focal")
+
+    @model_validator(mode="after")
+    def _check_gamma(self) -> LossConfig:
+        if self.type == LossType.FOCAL and self.gamma is None:
+            raise ValueError("gamma est requis pour loss.type = 'focal'")
+        return self
 
 
-@dataclass
-class LambdaRamp:
-    """Montée progressive du lambda sur ramp_epochs epochs."""
-    start:       float
-    target:      float
-    ramp_epochs: int
+class LambdaRamp(BaseModel):
+    """Montée progressive du lambda : start → target sur ramp_epochs epochs."""
+    start:       float = Field(gt=0)
+    target:      float = Field(gt=0)
+    ramp_epochs: int   = Field(ge=1)
 
 
-# Un lambda peut être fixe (float) ou progressif (LambdaRamp)
-LambdaSchedule = Union[float, LambdaRamp]
+LambdaSchedule = Annotated[
+    Union[LambdaRamp, float],
+    Field(description="Float constant ou {start, target, ramp_epochs}")
+]
 
 
-@dataclass
-class GateConfig:
-    """Condition d'activation d'une tête ou d'une phase curriculum."""
+class GateConfig(BaseModel):
     type:      GateType
-    metric:    Optional[str]   = None  # ex: "val/boundary_f1"
-    threshold: Optional[float] = None  # seuil à franchir
-    epoch:     Optional[int]   = None  # epoch de déclenchement
+    metric:    Optional[str]   = Field(None, description="Ex: 'val/boundary_f1'")
+    threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
+    epoch:     Optional[int]   = Field(None, ge=0)
+
+    @model_validator(mode="after")
+    def _check_fields(self) -> GateConfig:
+        if self.type == GateType.METRIC_THRESHOLD:
+            if self.metric is None or self.threshold is None:
+                raise ValueError("metric_threshold requiert metric + threshold")
+        if self.type == GateType.EPOCH_THRESHOLD and self.epoch is None:
+            raise ValueError("epoch_threshold requiert epoch")
+        return self
 
 
 # ─────────────────────────────────────────────────────────────
 #  Architecture — têtes
 # ─────────────────────────────────────────────────────────────
 
-@dataclass
-class SubHeadConfig:
-    """Sous-tête dans un HeadType.SPAN_MULTICLASS_MULTI (ex: morpho → gender + number + person)."""
-    name:      str   # identifiant, ex: "gender"
-    label_set: str   # clé dans DatasetConfig.label_sets
+class SubHeadConfig(BaseModel):
+    name:      str
+    label_set: str
 
 
-@dataclass
-class HeadConfig:
-    """Définition complète d'une tête de prédiction."""
-    name:      str           # identifiant unique, ex: "boundary"
-    type:      HeadType
-    input:     InputTensor   # tenseur d'entrée
-    loss:      LossConfig
-    lambda_:   LambdaSchedule  # "lambda" est réservé en Python
-    gate:      GateConfig
+class HeadConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
 
-    # Optionnels selon le type
-    label_set:  Optional[str]              = None  # clé dans DatasetConfig.label_sets
-    seq_input:  Optional[InputTensor]      = None  # pour TOKEN_POINTER : séquence encodeur
-    sub_heads:  Optional[list[SubHeadConfig]] = None  # pour SPAN_MULTICLASS_MULTI
+    name:    str
+    type:    HeadType
+    input:   InputTensor
+    loss:    LossConfig
+    lambda_: LambdaSchedule = Field(alias="lambda")
+    gate:    GateConfig
 
-    # Pondération des classes
-    class_weights:       ClassWeightStrategy = ClassWeightStrategy.AUTO
-    class_weight_power:  float               = 0.5
-    ignore_none:         bool                = False  # exclure la classe NONE de la loss
+    label_set:          Optional[str]               = None
+    seq_input:          Optional[InputTensor]        = None
+    sub_heads:          Optional[list[SubHeadConfig]] = None
 
-    # Architecture interne de la tête (MLP)
-    num_layers: int           = 1    # couches du MLP de tête
-    hidden_dim: Optional[int] = None # dim interne (None = span_hidden_dim)
+    class_weights:      ClassWeightStrategy = ClassWeightStrategy.AUTO
+    class_weight_power: float               = Field(0.5, ge=0.0, le=2.0)
+    ignore_none:        bool                = False
+    num_layers:         int                 = Field(1, ge=1)
+    hidden_dim:         Optional[int]       = Field(None, ge=32)
+
+    @model_validator(mode="after")
+    def _check_type_constraints(self) -> HeadConfig:
+        if self.type == HeadType.TOKEN_POINTER and self.seq_input is None:
+            raise ValueError(f"Tête '{self.name}' (token_pointer) requiert seq_input")
+        if self.type == HeadType.SPAN_MULTICLASS_MULTI and not self.sub_heads:
+            raise ValueError(f"Tête '{self.name}' (span_multiclass_multi) requiert sub_heads")
+        if (self.type not in (HeadType.SPAN_MULTICLASS_MULTI, HeadType.SPAN_BILINEAR)
+                and self.label_set is None):
+            raise ValueError(f"Tête '{self.name}' requiert label_set")
+        return self
 
 
 # ─────────────────────────────────────────────────────────────
 #  Architecture — modules contextuels
 # ─────────────────────────────────────────────────────────────
 
-@dataclass
-class VerbCtxConfig:
-    """
-    Module de conditionnement de la représentation de span par le verbe gouverneur.
-    Produit span_h_role = span_h + verb_ctx_proj(soft_attention(verb_ptr_logits, encoder_hidden)).
-
-    Utilisé par les têtes avec input=SPAN_H_ROLE (role_coarse, role_oblique).
-    Le detach() sur verb_ptr_logits est implicite (les gradients ne se propagent pas).
-    """
+class VerbCtxConfig(BaseModel):
+    """span_h_role = span_h + verb_ctx_proj(softmax(verb_ptr_logits.detach()) @ encoder_hidden)"""
     enabled:        bool
-    mode:           str = "soft_attention"   # "soft_attention" | "hard_pointer"
-    source:         str = "verb_ptr_logits"  # tête qui fournit les logits de pointeur
-    projection_dim: int = 512                # dim de la projection linéaire
+    mode:           str = Field("soft_attention", pattern="^(soft_attention|hard_pointer)$")
+    source:         str = "verb_ptr_logits"
+    projection_dim: int = Field(512, ge=64)
 
 
-@dataclass
-class ContextModulesConfig:
-    """Modules de contexte partagés entre plusieurs têtes."""
+class ContextModulesConfig(BaseModel):
     verb_ctx: Optional[VerbCtxConfig] = None
 
 
-# ─────────────────────────────────────────────────────────────
-#  Architecture — backbone & span encoder
-# ─────────────────────────────────────────────────────────────
-
-@dataclass
-class BackboneConfig:
-    """Encodeur de base (transformeur)."""
-    model_id:      str         # ex: "microsoft/deberta-v3-base"
-    max_length:    int  = 512
-    hidden_size:   int  = 768  # déduit automatiquement du modèle si omis
-    freeze_layers: int  = 0    # nombre de couches à geler (0 = rien)
+class BackboneConfig(BaseModel):
+    model_id:      str
+    max_length:    int = Field(512, ge=64, le=4096)
+    hidden_size:   int = Field(768, ge=128)
+    freeze_layers: int = Field(0, ge=0)
 
 
-@dataclass
-class SpanEncoderConfig:
-    """Encodage d'un span à partir des hidden states de l'encodeur."""
+class SpanEncoderConfig(BaseModel):
     pooling:    PoolingType = PoolingType.MEAN
-    hidden_dim: int         = 512   # dim de la représentation de span après projection
-    dropout:    float       = 0.1
+    hidden_dim: int         = Field(512, ge=64)
+    dropout:    float       = Field(0.1, ge=0.0, le=0.9)
 
 
-@dataclass
-class ArchitectureConfig:
-    """Architecture complète du modèle multitask."""
+class ArchitectureConfig(BaseModel):
     backbone:        BackboneConfig
     span_encoder:    SpanEncoderConfig
     context_modules: ContextModulesConfig
-    heads:           list[HeadConfig]
+    heads:           list[HeadConfig] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _check_head_names_unique(self) -> ArchitectureConfig:
+        names = [h.name for h in self.heads]
+        if len(names) != len(set(names)):
+            dups = {n for n in names if names.count(n) > 1}
+            raise ValueError(f"Noms de têtes dupliqués : {dups}")
+        return self
+
+    @model_validator(mode="after")
+    def _check_span_h_role_needs_verb_ctx(self) -> ArchitectureConfig:
+        needs_role = any(h.input == InputTensor.SPAN_H_ROLE for h in self.heads)
+        has_verb_ctx = (self.context_modules.verb_ctx is not None
+                        and self.context_modules.verb_ctx.enabled)
+        if needs_role and not has_verb_ctx:
+            raise ValueError("input=span_h_role utilisé mais context_modules.verb_ctx non activé")
+        return self
 
     def head(self, name: str) -> HeadConfig:
-        """Accès rapide à une tête par son nom."""
         for h in self.heads:
             if h.name == name:
                 return h
@@ -194,134 +220,113 @@ class ArchitectureConfig:
 #  Dataset
 # ─────────────────────────────────────────────────────────────
 
-@dataclass
-class LabelSetConfig:
-    """
-    Description d'un ensemble de labels.
-    source = chemin Python vers le dict (ex: "labels.FINE2ID").
-    none_id = id de la classe NONE à exclure des métriques si ignore_none=True.
-    """
-    source:  str
+class LabelSetConfig(BaseModel):
+    source:  str = Field(description="Ex: 'labels.FINE2ID'")
     none_id: Optional[str] = None
 
 
-@dataclass
-class CandidatesConfig:
-    """Configuration de la génération des spans candidats."""
-    strategy:       str   = "all_ngrams"  # seul mode supporté actuellement
-    max_span_width: int   = 8
-    include_svo:    bool  = True          # inclure les spans SVO hors n-grams
+class CandidatesConfig(BaseModel):
+    strategy:       str  = Field("all_ngrams", pattern="^all_ngrams$")
+    max_span_width: int  = Field(8, ge=1, le=32)
+    include_svo:    bool = True
 
 
-@dataclass
-class HardNegativesConfig:
-    """Configuration du hard negative mining."""
-    enabled:        bool  = True
-    every_n_epochs: int   = 1
-    decay:          float = 0.85
-    max_weight:     float = 8.0
-    min_weight:     float = 0.3
-    boost_fp_boundary:   float = 5.0
-    boost_fn_boundary:   float = 2.0
-    boost_coarse_err:    float = 2.5
-    boost_fine_err:      float = 3.0
-    boost_fp_svo:        float = 3.0
-    boost_fn_svo:        float = 2.0
-    boost_role_coarse:   float = 2.5
+class HardNegativesConfig(BaseModel):
+    enabled:           bool  = True
+    every_n_epochs:    int   = Field(1, ge=1)
+    decay:             float = Field(0.85, gt=0.0, le=1.0)
+    max_weight:        float = Field(8.0, gt=0.0)
+    min_weight:        float = Field(0.3, gt=0.0)
+    boost_fp_boundary: float = Field(5.0, gt=0.0)
+    boost_fn_boundary: float = Field(2.0, gt=0.0)
+    boost_coarse_err:  float = Field(2.5, gt=0.0)
+    boost_fine_err:    float = Field(3.0, gt=0.0)
+    boost_fp_svo:      float = Field(3.0, gt=0.0)
+    boost_fn_svo:      float = Field(2.0, gt=0.0)
+    boost_role_coarse: float = Field(2.5, gt=0.0)
 
 
-@dataclass
-class DatasetConfig:
-    """Configuration du dataset d'entraînement."""
-    format:      str   = "jsonl_spans"    # seul format supporté
-    label_sets:  dict[str, LabelSetConfig] = field(default_factory=dict)
-    candidates:  CandidatesConfig          = field(default_factory=CandidatesConfig)
-    hard_negatives: HardNegativesConfig    = field(default_factory=HardNegativesConfig)
-    gold_version: Optional[str]            = None  # override par --gold-version CLI
+class DatasetConfig(BaseModel):
+    format:         str                       = "jsonl_spans"
+    label_sets:     dict[str, LabelSetConfig] = Field(default_factory=dict)
+    candidates:     CandidatesConfig          = Field(default_factory=CandidatesConfig)
+    hard_negatives: HardNegativesConfig       = Field(default_factory=HardNegativesConfig)
+    gold_version:   Optional[str]             = None
 
 
 # ─────────────────────────────────────────────────────────────
-#  Curriculum d'entraînement
+#  Curriculum
 # ─────────────────────────────────────────────────────────────
 
-@dataclass
-class PhaseConfig:
-    """
-    Phase du curriculum : active un ensemble de têtes dès que la gate est franchie.
-    Les têtes avec gate=ALWAYS sont actives dès le départ (phase implicite).
-    """
+class PhaseConfig(BaseModel):
     name:         str
-    heads_active: list[str]   # noms des têtes à activer lors de cette phase
+    heads_active: list[str] = Field(min_length=1)
     gate:         GateConfig
 
 
-@dataclass
-class DifficultyConfig:
-    """Progression par niveaux de difficulté du dataset (easy → full)."""
+class DifficultyConfig(BaseModel):
     names:                  list[str]
-    hard_per_gold:          list[int]    # négatifs durs par exemple gold
-    soft_factors:           list[float]  # facteur pour les négatifs légers
-    max_epochs_per_level:   int   = 6
-    min_delta_for_progress: float = 0.0003
-    patience:               int   = 5
+    hard_per_gold:          list[int]
+    soft_factors:           list[float]
+    max_epochs_per_level:   int   = Field(6,      ge=1)
+    min_delta_for_progress: float = Field(0.0003, ge=0.0)
+    patience:               int   = Field(5,      ge=1)
+
+    @model_validator(mode="after")
+    def _check_lengths(self) -> DifficultyConfig:
+        n = len(self.names)
+        if len(self.hard_per_gold) != n or len(self.soft_factors) != n:
+            raise ValueError("names, hard_per_gold et soft_factors doivent avoir la même longueur")
+        return self
 
 
-@dataclass
-class RescueConfig:
-    """Détection de stagnation / régression boundary → contre-mesures."""
-    boundary_window:    int   = 5
-    boundary_target:    float = 0.90
-    boundary_min_delta: float = 0.003
-    bnd_boost_factor:   float = 1.20
-    regression_window:  int   = 3
-    regression_delta:   float = 0.008
+class RescueConfig(BaseModel):
+    boundary_window:    int   = Field(5,     ge=2)
+    boundary_target:    float = Field(0.90,  ge=0.0, le=1.0)
+    boundary_min_delta: float = Field(0.003, ge=0.0)
+    bnd_boost_factor:   float = Field(1.20,  gt=1.0)
+    regression_window:  int   = Field(3,     ge=2)
+    regression_delta:   float = Field(0.008, ge=0.0)
 
 
-@dataclass
-class EarlyStoppingConfig:
-    patience:  int   = 5
-    min_delta: float = 0.0003
+class EarlyStoppingConfig(BaseModel):
+    patience:  int   = Field(5,      ge=1)
+    min_delta: float = Field(0.0003, ge=0.0)
 
 
-@dataclass
-class CurriculumConfig:
-    """Orchestration temporelle de l'entraînement : phases, difficultés, rescue."""
+class CurriculumConfig(BaseModel):
     phases:            list[PhaseConfig]
     difficulty_levels: DifficultyConfig
-    rescue:            RescueConfig
-    early_stopping:    EarlyStoppingConfig
+    rescue:            RescueConfig        = Field(default_factory=RescueConfig)
+    early_stopping:    EarlyStoppingConfig = Field(default_factory=EarlyStoppingConfig)
 
 
 # ─────────────────────────────────────────────────────────────
 #  Optimiseur
 # ─────────────────────────────────────────────────────────────
 
-@dataclass
-class OptimizerConfig:
-    lr:                  float = 8e-6
-    head_lr_multiplier:  float = 4.0    # LR têtes = lr * multiplier
-    warmup_epochs:       int   = 0
-    max_grad_norm:       float = 1.0
-    layer_lr_decay:      float = 0.9    # layer-wise LR decay
-    ema_decay:           float = 0.999
-    class_weight_power:  float = 0.5
-    label_smoothing:     float = 0.0
+class OptimizerConfig(BaseModel):
+    lr:                 float = Field(8e-6,  gt=0.0)
+    head_lr_multiplier: float = Field(4.0,   gt=0.0)
+    warmup_epochs:      int   = Field(0,     ge=0)
+    max_grad_norm:      float = Field(1.0,   gt=0.0)
+    layer_lr_decay:     float = Field(0.9,   gt=0.0, le=1.0)
+    ema_decay:          float = Field(0.999, gt=0.0, lt=1.0)
+    class_weight_power: float = Field(0.5,   ge=0.0, le=2.0)
+    label_smoothing:    float = Field(0.0,   ge=0.0, lt=1.0)
 
 
 # ─────────────────────────────────────────────────────────────
 #  Hardware
 # ─────────────────────────────────────────────────────────────
 
-@dataclass
-class HardwareProfile:
-    bs:      int          # batch size
-    accum:   int  = 1     # gradient accumulation steps
-    workers: int  = 0     # DataLoader workers (0 = main process, pas de multiprocessing)
+class HardwareProfile(BaseModel):
+    bs:      int = Field(ge=1)
+    accum:   int = Field(1, ge=1)
+    workers: int = Field(0, ge=0)
 
 
-@dataclass
-class HardwareConfig:
-    """Profils hardware — sélectionnés automatiquement selon VRAM détectée."""
+class HardwareConfig(BaseModel):
     default:   HardwareProfile
     h100_80gb: Optional[HardwareProfile] = None
     l40s_48gb: Optional[HardwareProfile] = None
@@ -334,38 +339,73 @@ class HardwareConfig:
 #  Config racine
 # ─────────────────────────────────────────────────────────────
 
-@dataclass
-class RunConfig:
+class RunConfig(BaseModel):
     name_suffix:    str
-    max_epochs:     int
-    loss_weighting: str  = "fixed"   # "fixed" | "uncertainty" | "gradnorm"
-    ner_only_bench: bool = False
+    max_epochs:     int                   = Field(ge=1)
+    loss_weighting: LossWeightingStrategy = LossWeightingStrategy.FIXED
+    ner_only_bench: bool                  = False
 
 
-@dataclass
-class MultiTaskConfig:
+class MultiTaskConfig(BaseModel):
     """
-    Modèle de haut niveau du système d'entraînement.
-    Chaque fichier JSON de config est une instanciation de cette classe.
+    Modèle de haut niveau — chaque fichier JSON de config est une instanciation de cette classe.
 
-    Hiérarchie :
-        MultiTaskConfig
-        ├── run          : RunConfig            — paramètres du run W&B
-        ├── architecture : ArchitectureConfig   — modèle + têtes
-        ├── dataset      : DatasetConfig        — données + labels
-        ├── optimizer    : OptimizerConfig      — LR, EMA, grad norm
-        ├── curriculum   : CurriculumConfig     — phases, difficultés, rescue
-        └── hardware     : HardwareConfig       — profils GPU
-
-    Usage futur (avec reader) :
-        cfg = MultiTaskConfig.from_json("configs/svo-v820-rc1.json")
-        model = MultiTaskModel(cfg.architecture)
-        trainer = Trainer(model, cfg)
+    Usage :
+        cfg = MultiTaskConfig.from_json_file("configs/svo-v820-rc1.json")
+        schema = MultiTaskConfig.model_json_schema()
     """
+    model_config = ConfigDict(extra="ignore")   # ignore _comment, _version, _schema, _note…
+
     run:          RunConfig
     architecture: ArchitectureConfig
-    dataset:      DatasetConfig
-    optimizer:    OptimizerConfig
+    dataset:      DatasetConfig      = Field(default_factory=DatasetConfig)
+    optimizer:    OptimizerConfig    = Field(default_factory=OptimizerConfig)
     curriculum:   CurriculumConfig
     hardware:     HardwareConfig
 
+    @classmethod
+    def from_json_file(cls, path: str | Path) -> MultiTaskConfig:
+        """Lit, nettoie les clés _* et valide un fichier JSON de config."""
+        raw = Path(path).read_text(encoding="utf-8")
+        # Supprime les clés de documentation (_comment, _note, _version…)
+        raw = re.sub(r'"_[^"]*"\s*:\s*(?:"[^"]*"|\[[^\]]*\]|[^,}\n]+),?\n?', "", raw)
+        data = json.loads(raw)
+        return cls.model_validate(data)
+
+    @classmethod
+    def save_schema(cls, path: str | Path | None = None) -> dict:
+        """Génère le JSON Schema et l'écrit sur disque si path fourni."""
+        schema = cls.model_json_schema()
+        if path:
+            Path(path).write_text(
+                json.dumps(schema, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            print(f"✅ JSON Schema écrit dans {path}")
+        return schema
+
+
+# ─────────────────────────────────────────────────────────────
+#  CLI
+# ─────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Génère ou valide le schéma de config MultiTask")
+    parser.add_argument("--out",      default="configs/config_schema.json",
+                        help="Fichier de sortie du JSON Schema")
+    parser.add_argument("--validate", default=None,
+                        help="Valide un fichier JSON de config (ex: configs/svo-v819-rc2.json)")
+    args = parser.parse_args()
+
+    if args.validate:
+        try:
+            cfg = MultiTaskConfig.from_json_file(args.validate)
+            print(f"✅ {args.validate} — valide")
+            print(f"   backbone         = {cfg.architecture.backbone.model_id}")
+            print(f"   heads            = {[h.name for h in cfg.architecture.heads]}")
+            print(f"   max_epochs       = {cfg.run.max_epochs}")
+        except Exception as e:
+            print(f"❌ Erreur de validation :\n{e}")
+            raise SystemExit(1)
+    else:
+        MultiTaskConfig.save_schema(args.out)

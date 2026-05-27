@@ -1,0 +1,974 @@
+{
+  "$defs": {
+    "ArchitectureConfig": {
+      "properties": {
+        "backbone": {
+          "$ref": "#/$defs/BackboneConfig"
+        },
+        "span_encoder": {
+          "$ref": "#/$defs/SpanEncoderConfig"
+        },
+        "context_modules": {
+          "$ref": "#/$defs/ContextModulesConfig"
+        },
+        "heads": {
+          "items": {
+            "$ref": "#/$defs/HeadConfig"
+          },
+          "minItems": 1,
+          "title": "Heads",
+          "type": "array"
+        }
+      },
+      "required": [
+        "backbone",
+        "span_encoder",
+        "context_modules",
+        "heads"
+      ],
+      "title": "ArchitectureConfig",
+      "type": "object"
+    },
+    "BackboneConfig": {
+      "properties": {
+        "model_id": {
+          "title": "Model Id",
+          "type": "string"
+        },
+        "max_length": {
+          "default": 512,
+          "maximum": 4096,
+          "minimum": 64,
+          "title": "Max Length",
+          "type": "integer"
+        },
+        "hidden_size": {
+          "default": 768,
+          "minimum": 128,
+          "title": "Hidden Size",
+          "type": "integer"
+        },
+        "freeze_layers": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Freeze Layers",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "model_id"
+      ],
+      "title": "BackboneConfig",
+      "type": "object"
+    },
+    "CandidatesConfig": {
+      "properties": {
+        "strategy": {
+          "default": "all_ngrams",
+          "pattern": "^all_ngrams$",
+          "title": "Strategy",
+          "type": "string"
+        },
+        "max_span_width": {
+          "default": 8,
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Max Span Width",
+          "type": "integer"
+        },
+        "include_svo": {
+          "default": true,
+          "title": "Include Svo",
+          "type": "boolean"
+        }
+      },
+      "title": "CandidatesConfig",
+      "type": "object"
+    },
+    "ClassWeightStrategy": {
+      "enum": [
+        "auto",
+        "none"
+      ],
+      "title": "ClassWeightStrategy",
+      "type": "string"
+    },
+    "ContextModulesConfig": {
+      "properties": {
+        "verb_ctx": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VerbCtxConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "ContextModulesConfig",
+      "type": "object"
+    },
+    "CurriculumConfig": {
+      "properties": {
+        "phases": {
+          "items": {
+            "$ref": "#/$defs/PhaseConfig"
+          },
+          "title": "Phases",
+          "type": "array"
+        },
+        "difficulty_levels": {
+          "$ref": "#/$defs/DifficultyConfig"
+        },
+        "rescue": {
+          "$ref": "#/$defs/RescueConfig"
+        },
+        "early_stopping": {
+          "$ref": "#/$defs/EarlyStoppingConfig"
+        }
+      },
+      "required": [
+        "phases",
+        "difficulty_levels"
+      ],
+      "title": "CurriculumConfig",
+      "type": "object"
+    },
+    "DatasetConfig": {
+      "properties": {
+        "format": {
+          "default": "jsonl_spans",
+          "title": "Format",
+          "type": "string"
+        },
+        "label_sets": {
+          "additionalProperties": {
+            "$ref": "#/$defs/LabelSetConfig"
+          },
+          "title": "Label Sets",
+          "type": "object"
+        },
+        "candidates": {
+          "$ref": "#/$defs/CandidatesConfig"
+        },
+        "hard_negatives": {
+          "$ref": "#/$defs/HardNegativesConfig"
+        },
+        "gold_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gold Version"
+        }
+      },
+      "title": "DatasetConfig",
+      "type": "object"
+    },
+    "DifficultyConfig": {
+      "properties": {
+        "names": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Names",
+          "type": "array"
+        },
+        "hard_per_gold": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Hard Per Gold",
+          "type": "array"
+        },
+        "soft_factors": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Soft Factors",
+          "type": "array"
+        },
+        "max_epochs_per_level": {
+          "default": 6,
+          "minimum": 1,
+          "title": "Max Epochs Per Level",
+          "type": "integer"
+        },
+        "min_delta_for_progress": {
+          "default": 0.0003,
+          "minimum": 0.0,
+          "title": "Min Delta For Progress",
+          "type": "number"
+        },
+        "patience": {
+          "default": 5,
+          "minimum": 1,
+          "title": "Patience",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "names",
+        "hard_per_gold",
+        "soft_factors"
+      ],
+      "title": "DifficultyConfig",
+      "type": "object"
+    },
+    "EarlyStoppingConfig": {
+      "properties": {
+        "patience": {
+          "default": 5,
+          "minimum": 1,
+          "title": "Patience",
+          "type": "integer"
+        },
+        "min_delta": {
+          "default": 0.0003,
+          "minimum": 0.0,
+          "title": "Min Delta",
+          "type": "number"
+        }
+      },
+      "title": "EarlyStoppingConfig",
+      "type": "object"
+    },
+    "GateConfig": {
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/GateType"
+        },
+        "metric": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Ex: 'val/boundary_f1'",
+          "title": "Metric"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threshold"
+        },
+        "epoch": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Epoch"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "GateConfig",
+      "type": "object"
+    },
+    "GateType": {
+      "enum": [
+        "always",
+        "metric_threshold",
+        "epoch_threshold"
+      ],
+      "title": "GateType",
+      "type": "string"
+    },
+    "HardNegativesConfig": {
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "every_n_epochs": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Every N Epochs",
+          "type": "integer"
+        },
+        "decay": {
+          "default": 0.85,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Decay",
+          "type": "number"
+        },
+        "max_weight": {
+          "default": 8.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Max Weight",
+          "type": "number"
+        },
+        "min_weight": {
+          "default": 0.3,
+          "exclusiveMinimum": 0.0,
+          "title": "Min Weight",
+          "type": "number"
+        },
+        "boost_fp_boundary": {
+          "default": 5.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Boost Fp Boundary",
+          "type": "number"
+        },
+        "boost_fn_boundary": {
+          "default": 2.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Boost Fn Boundary",
+          "type": "number"
+        },
+        "boost_coarse_err": {
+          "default": 2.5,
+          "exclusiveMinimum": 0.0,
+          "title": "Boost Coarse Err",
+          "type": "number"
+        },
+        "boost_fine_err": {
+          "default": 3.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Boost Fine Err",
+          "type": "number"
+        },
+        "boost_fp_svo": {
+          "default": 3.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Boost Fp Svo",
+          "type": "number"
+        },
+        "boost_fn_svo": {
+          "default": 2.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Boost Fn Svo",
+          "type": "number"
+        },
+        "boost_role_coarse": {
+          "default": 2.5,
+          "exclusiveMinimum": 0.0,
+          "title": "Boost Role Coarse",
+          "type": "number"
+        }
+      },
+      "title": "HardNegativesConfig",
+      "type": "object"
+    },
+    "HardwareConfig": {
+      "properties": {
+        "default": {
+          "$ref": "#/$defs/HardwareProfile"
+        },
+        "h100_80gb": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HardwareProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "l40s_48gb": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HardwareProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "a100_40gb": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HardwareProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rtx_4090": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HardwareProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rtx_3090": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HardwareProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "default"
+      ],
+      "title": "HardwareConfig",
+      "type": "object"
+    },
+    "HardwareProfile": {
+      "properties": {
+        "bs": {
+          "minimum": 1,
+          "title": "Bs",
+          "type": "integer"
+        },
+        "accum": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Accum",
+          "type": "integer"
+        },
+        "workers": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Workers",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "bs"
+      ],
+      "title": "HardwareProfile",
+      "type": "object"
+    },
+    "HeadConfig": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/HeadType"
+        },
+        "input": {
+          "$ref": "#/$defs/InputTensor"
+        },
+        "loss": {
+          "$ref": "#/$defs/LossConfig"
+        },
+        "lambda": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LambdaRamp"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "description": "Float constant ou {start, target, ramp_epochs}",
+          "title": "Lambda"
+        },
+        "gate": {
+          "$ref": "#/$defs/GateConfig"
+        },
+        "label_set": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label Set"
+        },
+        "seq_input": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputTensor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "sub_heads": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/SubHeadConfig"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sub Heads"
+        },
+        "class_weights": {
+          "$ref": "#/$defs/ClassWeightStrategy",
+          "default": "auto"
+        },
+        "class_weight_power": {
+          "default": 0.5,
+          "maximum": 2.0,
+          "minimum": 0.0,
+          "title": "Class Weight Power",
+          "type": "number"
+        },
+        "ignore_none": {
+          "default": false,
+          "title": "Ignore None",
+          "type": "boolean"
+        },
+        "num_layers": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Num Layers",
+          "type": "integer"
+        },
+        "hidden_dim": {
+          "anyOf": [
+            {
+              "minimum": 32,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hidden Dim"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "input",
+        "loss",
+        "lambda",
+        "gate"
+      ],
+      "title": "HeadConfig",
+      "type": "object"
+    },
+    "HeadType": {
+      "description": "Type de tête de prédiction.",
+      "enum": [
+        "span_binary",
+        "span_multiclass",
+        "span_multiclass_multi",
+        "token_pointer",
+        "span_bilinear"
+      ],
+      "title": "HeadType",
+      "type": "string"
+    },
+    "InputTensor": {
+      "description": "Tenseur d'entrée d'une tête.",
+      "enum": [
+        "span_h",
+        "span_h_role",
+        "encoder_hidden"
+      ],
+      "title": "InputTensor",
+      "type": "string"
+    },
+    "LabelSetConfig": {
+      "properties": {
+        "source": {
+          "description": "Ex: 'labels.FINE2ID'",
+          "title": "Source",
+          "type": "string"
+        },
+        "none_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "None Id"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "title": "LabelSetConfig",
+      "type": "object"
+    },
+    "LambdaRamp": {
+      "description": "Montée progressive du lambda : start → target sur ramp_epochs epochs.",
+      "properties": {
+        "start": {
+          "exclusiveMinimum": 0,
+          "title": "Start",
+          "type": "number"
+        },
+        "target": {
+          "exclusiveMinimum": 0,
+          "title": "Target",
+          "type": "number"
+        },
+        "ramp_epochs": {
+          "minimum": 1,
+          "title": "Ramp Epochs",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start",
+        "target",
+        "ramp_epochs"
+      ],
+      "title": "LambdaRamp",
+      "type": "object"
+    },
+    "LossConfig": {
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/LossType"
+        },
+        "gamma": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Requis si type=focal",
+          "title": "Gamma"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "LossConfig",
+      "type": "object"
+    },
+    "LossType": {
+      "enum": [
+        "cross_entropy",
+        "focal",
+        "bce"
+      ],
+      "title": "LossType",
+      "type": "string"
+    },
+    "LossWeightingStrategy": {
+      "enum": [
+        "fixed",
+        "uncertainty",
+        "gradnorm"
+      ],
+      "title": "LossWeightingStrategy",
+      "type": "string"
+    },
+    "OptimizerConfig": {
+      "properties": {
+        "lr": {
+          "default": 8e-06,
+          "exclusiveMinimum": 0.0,
+          "title": "Lr",
+          "type": "number"
+        },
+        "head_lr_multiplier": {
+          "default": 4.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Head Lr Multiplier",
+          "type": "number"
+        },
+        "warmup_epochs": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Warmup Epochs",
+          "type": "integer"
+        },
+        "max_grad_norm": {
+          "default": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Max Grad Norm",
+          "type": "number"
+        },
+        "layer_lr_decay": {
+          "default": 0.9,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Layer Lr Decay",
+          "type": "number"
+        },
+        "ema_decay": {
+          "default": 0.999,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Ema Decay",
+          "type": "number"
+        },
+        "class_weight_power": {
+          "default": 0.5,
+          "maximum": 2.0,
+          "minimum": 0.0,
+          "title": "Class Weight Power",
+          "type": "number"
+        },
+        "label_smoothing": {
+          "default": 0.0,
+          "exclusiveMaximum": 1.0,
+          "minimum": 0.0,
+          "title": "Label Smoothing",
+          "type": "number"
+        }
+      },
+      "title": "OptimizerConfig",
+      "type": "object"
+    },
+    "PhaseConfig": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "heads_active": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Heads Active",
+          "type": "array"
+        },
+        "gate": {
+          "$ref": "#/$defs/GateConfig"
+        }
+      },
+      "required": [
+        "name",
+        "heads_active",
+        "gate"
+      ],
+      "title": "PhaseConfig",
+      "type": "object"
+    },
+    "PoolingType": {
+      "enum": [
+        "mean",
+        "max",
+        "first_last"
+      ],
+      "title": "PoolingType",
+      "type": "string"
+    },
+    "RescueConfig": {
+      "properties": {
+        "boundary_window": {
+          "default": 5,
+          "minimum": 2,
+          "title": "Boundary Window",
+          "type": "integer"
+        },
+        "boundary_target": {
+          "default": 0.9,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Boundary Target",
+          "type": "number"
+        },
+        "boundary_min_delta": {
+          "default": 0.003,
+          "minimum": 0.0,
+          "title": "Boundary Min Delta",
+          "type": "number"
+        },
+        "bnd_boost_factor": {
+          "default": 1.2,
+          "exclusiveMinimum": 1.0,
+          "title": "Bnd Boost Factor",
+          "type": "number"
+        },
+        "regression_window": {
+          "default": 3,
+          "minimum": 2,
+          "title": "Regression Window",
+          "type": "integer"
+        },
+        "regression_delta": {
+          "default": 0.008,
+          "minimum": 0.0,
+          "title": "Regression Delta",
+          "type": "number"
+        }
+      },
+      "title": "RescueConfig",
+      "type": "object"
+    },
+    "RunConfig": {
+      "properties": {
+        "name_suffix": {
+          "title": "Name Suffix",
+          "type": "string"
+        },
+        "max_epochs": {
+          "minimum": 1,
+          "title": "Max Epochs",
+          "type": "integer"
+        },
+        "loss_weighting": {
+          "$ref": "#/$defs/LossWeightingStrategy",
+          "default": "fixed"
+        },
+        "ner_only_bench": {
+          "default": false,
+          "title": "Ner Only Bench",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name_suffix",
+        "max_epochs"
+      ],
+      "title": "RunConfig",
+      "type": "object"
+    },
+    "SpanEncoderConfig": {
+      "properties": {
+        "pooling": {
+          "$ref": "#/$defs/PoolingType",
+          "default": "mean"
+        },
+        "hidden_dim": {
+          "default": 512,
+          "minimum": 64,
+          "title": "Hidden Dim",
+          "type": "integer"
+        },
+        "dropout": {
+          "default": 0.1,
+          "maximum": 0.9,
+          "minimum": 0.0,
+          "title": "Dropout",
+          "type": "number"
+        }
+      },
+      "title": "SpanEncoderConfig",
+      "type": "object"
+    },
+    "SubHeadConfig": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "label_set": {
+          "title": "Label Set",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "label_set"
+      ],
+      "title": "SubHeadConfig",
+      "type": "object"
+    },
+    "VerbCtxConfig": {
+      "description": "span_h_role = span_h + verb_ctx_proj(softmax(verb_ptr_logits.detach()) @ encoder_hidden)",
+      "properties": {
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "mode": {
+          "default": "soft_attention",
+          "pattern": "^(soft_attention|hard_pointer)$",
+          "title": "Mode",
+          "type": "string"
+        },
+        "source": {
+          "default": "verb_ptr_logits",
+          "title": "Source",
+          "type": "string"
+        },
+        "projection_dim": {
+          "default": 512,
+          "minimum": 64,
+          "title": "Projection Dim",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "title": "VerbCtxConfig",
+      "type": "object"
+    }
+  },
+  "description": "Modèle de haut niveau — chaque fichier JSON de config est une instanciation de cette classe.\n\nUsage :\n    cfg = MultiTaskConfig.from_json_file(\"configs/svo-v820-rc1.json\")\n    schema = MultiTaskConfig.model_json_schema()",
+  "properties": {
+    "run": {
+      "$ref": "#/$defs/RunConfig"
+    },
+    "architecture": {
+      "$ref": "#/$defs/ArchitectureConfig"
+    },
+    "dataset": {
+      "$ref": "#/$defs/DatasetConfig"
+    },
+    "optimizer": {
+      "$ref": "#/$defs/OptimizerConfig"
+    },
+    "curriculum": {
+      "$ref": "#/$defs/CurriculumConfig"
+    },
+    "hardware": {
+      "$ref": "#/$defs/HardwareConfig"
+    }
+  },
+  "required": [
+    "run",
+    "architecture",
+    "curriculum",
+    "hardware"
+  ],
+  "title": "MultiTaskConfig",
+  "type": "object"
+}
