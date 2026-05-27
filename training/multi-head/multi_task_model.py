@@ -81,19 +81,8 @@ class SpanMultiTaskModel(nn.Module):
         self.verb_ptr_query = nn.Linear(span_hidden_dim, _ptr_dim, bias=False)
         self.verb_ptr_key   = nn.Linear(hidden_size,     _ptr_dim, bias=False)
 
-        # Verb context pour role conditioning (soft-attention sur encoder via verb_ptr)
-        # Conditionne role_coarse sur le verbe pointé : SUBJ de "accuse" ≠ SUBJ de "se rendre"
-        # La soft-attention est différentiable et donne un contexte uniforme early training
-        # (verb_ptr aléatoire ≈ moyenne encoder), puis se concentre sur le verbe réel.
-        self.verb_ctx_proj  = nn.Linear(hidden_size, span_hidden_dim)
-        # Position relative du span par rapport au verbe pointé (3 features) :
-        #   [rel_pos_norm, is_before_verb, is_after_verb]
-        # Critical : sans ça, verb_ctx biaise tout vers SUBJ (le rôle le plus fréquent)
-        # car le hidden state du verbe encode "ce verbe attend un sujet".
-        self.rel_pos_proj   = nn.Linear(3, span_hidden_dim, bias=False)
-        # Gate appris : sigmoid(-3) ~ 0.05 au départ → bruit minimal
-        # S'ouvre progressivement quand verb_ctx devient fiable
-        self.verb_ctx_gate  = nn.Parameter(torch.tensor(-3.0))
+        # NOTE : verb_ctx_proj / rel_pos_proj / verb_ctx_gate supprimés — causaient des collapses.
+        # Réintroduire uniquement après stabilisation de role_coarse > 0.25 (cf. svo-isolated diag).
 
         # SVO→NER cascade : injecte le score SVO du span conteneur dans la repr NER
         # Permet aux têtes NER de savoir si ce span est dans une zone argumentale SVO.
@@ -210,37 +199,11 @@ class SpanMultiTaskModel(nn.Module):
             # → contexte ≈ moyenne de la phrase. Late training : se concentre sur le verbe.
             # Hard pointer: hidden du token verbe predit - O(N*H) vs O(N*seq*H)
             # gathered_hidden [N,512,768] ~ 6GB avec BS=80 sur RTX 4090 -> OOM
-            verb_best   = verb_ptr_logits.detach().argmax(dim=-1)    # [N]
-            verb_ctx    = hidden[span_batch_idx, verb_best].detach() # [N, H]
-            verb_ctx_w  = torch.sigmoid(self.verb_ctx_gate)          # scalar gate ~ 0.05 init
-
-            # Position relative du span par rapport au verbe.
-            # PROBLÈME avec verb_best aléatoire (early training) : un span SUBJ en position 5/512
-            # a P(is_after_verb=1) ≈ 97% avec verb_best ~ Uniform[0,511] → le modèle apprend
-            # "SUBJ = après verbe" pendant 6 epochs, puis tout s'effondre quand verb_ptr corrige.
-            # FIX : pendant l'entraînement, utiliser les positions GOLD (gov_verb_labels) pour
-            # rel_pos — toujours correctes dès ep1. En inférence : prédictions du modèle.
-            seq_len = hidden.size(1)
-            gov_verb_raw = batch.get("gov_verb_labels")   # [N] ou None si pas SVO
-            if self.training and gov_verb_raw is not None:
-                gvl = gov_verb_raw.to(device=hidden.device)
-                valid_gold = (gvl >= 0) & (gvl < seq_len)
-                verb_for_pos = torch.where(valid_gold, gvl, verb_best)  # gold si dispo, sinon prédit
-            else:
-                verb_for_pos = verb_best  # inférence : utilise la prédiction
-
-            span_center  = (span_positions[:, 0].float() + span_positions[:, 1].float()) / 2  # [N]
-            rel_raw      = span_center - verb_for_pos.float()              # [N] <0=before, >0=after
-            rel_norm     = rel_raw.clamp(-64, 64) / 64.0                   # [N] normalisé
-            pos_feat     = torch.stack([
-                rel_norm,
-                (rel_raw < 0).float(),   # is_before_verb  (→ SUBJ typique)
-                (rel_raw > 0).float(),   # is_after_verb   (→ OBJ / OBLIQ typique)
-            ], dim=1).to(verb_ctx.dtype)                                    # [N, 3]
-
-            span_h_role = span_h + verb_ctx_w * (
-                self.verb_ctx_proj(verb_ctx) + self.rel_pos_proj(pos_feat)
-            )  # [N, span_hidden_dim]
+            # NOTE : verb conditioning sur role_coarse retiré — toutes les tentatives
+            # (verb_ctx seul, + rel_pos random, + rel_pos gold) ont causé des collapses.
+            # Sans verb conditioning, role_coarse atteignait 0.231 (svo-v819, mai 26).
+            # À réintroduire uniquement après stabilisation de role_coarse > 0.25.
+            span_h_role = span_h
         else:
             verb_ptr_logits = torch.zeros(
                 (0, hidden.size(1)), device=hidden.device
