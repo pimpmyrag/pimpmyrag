@@ -826,9 +826,11 @@ def run_epoch(
                 all_rc_from_role_true.append(rct)
                 all_rc_from_role_pred.append(rcfr)
 
-        # Role oblique metrics = spans avec role_oblique annoté (< ROLE_OBLIQUE_NONE_ID)
+        # Role oblique metrics = spans avec sous-type fin annoté (< NONE_ID ET != générique)
+        # Exclure OBLIQUE générique (id=0, 77.7%) qui noie les sous-types fins — même fix que role_coarse/OTHER
+        _OBLIQUE_GENERIC_ID = 0  # ROLE_OBLIQUE2ID["OBLIQUE"]
         for rot, rop in zip(role_oblique_true, role_oblique_pred_raw):
-            if 0 <= rot < ROLE_OBLIQUE_NONE_ID:
+            if 0 < rot < ROLE_OBLIQUE_NONE_ID:  # >0 exclut générique, <NONE_ID exclut sentinel
                 all_ro_true.append(rot)
                 all_ro_pred.append(rop)
 
@@ -836,7 +838,7 @@ def run_epoch(
         # Simule l'inférence réelle : un span reçoit role_oblique seulement si prédit OBLIQ par la dérivée
         _OBLIQ_RC = ROLE_COARSE2ID["OBLIQ"]
         for rot, rop, rcfr in zip(role_oblique_true, role_oblique_pred_raw, role_coarse_from_role_pred_raw):
-            if rcfr == _OBLIQ_RC and 0 <= rot < ROLE_OBLIQUE_NONE_ID:
+            if rcfr == _OBLIQ_RC and 0 < rot < ROLE_OBLIQUE_NONE_ID:
                 all_ro_cascaded_true.append(rot)
                 all_ro_cascaded_pred.append(rop)
 

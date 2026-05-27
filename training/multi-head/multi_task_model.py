@@ -446,7 +446,14 @@ class SpanMultiTaskModel(nn.Module):
 
         # ── 6c) Role oblique fin (maské aux spans OBLIQ, avec CWP) ────────────
         # Supervisé uniquement sur spans où role_oblique_label < ROLE_OBLIQUE_NONE_ID
-        ro_mask = (role_oblique_labels >= 0) & (role_oblique_labels < role_oblique_logits.size(-1))
+        # ET != OBLIQUE générique (id=0, 77.7% des spans) qui noie les sous-types fins
+        # → même correctif que role_coarse/OTHER : le générique est trop dominant
+        _OBLIQUE_GENERIC_ID = 0  # ROLE_OBLIQUE2ID["OBLIQUE"]
+        ro_mask = (
+            (role_oblique_labels >= 0)
+            & (role_oblique_labels < role_oblique_logits.size(-1))
+            & (role_oblique_labels != _OBLIQUE_GENERIC_ID)
+        )
         if ro_mask.any():
             _obl_w = oblique_class_weights if oblique_class_weights is not None else None
             loss_role_oblique = (F.cross_entropy(role_oblique_logits[ro_mask], role_oblique_labels[ro_mask],
