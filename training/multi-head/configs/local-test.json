@@ -1,0 +1,116 @@
+{
+  "_comment": "Config de test local rapide — 2 epochs CPU/MPS, pas de RunPod. Usage : python3 test_local_launch.py",
+  "_version": "local-test",
+
+  "run": {
+    "name_suffix": "local-test",
+    "max_epochs": 2,
+    "model": "microsoft/deberta-v3-base",
+    "loss_weighting": "fixed",
+    "ner_only_bench": false
+  },
+
+  "optimizer": {
+    "lr": 8e-6,
+    "head_lr_multiplier": 4.0,
+    "warmup_epochs": 0,
+    "max_grad_norm": 1.0,
+    "layer_lr_decay": 0.9,
+    "ema_decay": 0.999,
+    "class_weight_power": 0.5
+  },
+
+  "lambdas": {
+    "boundary":     4.0,
+    "coarse":       0.75,
+    "fine":         1.8,
+    "svo_boundary": 0.55,
+    "svo":          0.70,
+    "role_coarse":  0.55,
+    "role_oblique": 0.20,
+    "voice":        0.15,
+    "certainty":    0.30,
+    "morpho":       0.10,
+    "verb_ptr":     0.60,
+    "compat":       0.2
+  },
+
+  "focal": {
+    "boundary_gamma":  0.5,
+    "fine_gamma":      1.5,
+    "coarse_gamma":    0.0
+  },
+
+  "boundary_first": {
+    "enabled": true,
+    "unlock_threshold":    0.92,
+    "unlock_ramp_epochs":  1,
+    "coarse_warmup_lambda": 0.05,
+    "fine_warmup_lambda":   0.15
+  },
+
+  "svo_cascade": {
+    "role_coarse_bnd_thr":       0.01,
+    "role_coarse_warmup_lambda": 0.55,
+    "role_ramp_epochs":          1,
+    "role_thr_svo_bnd":          0.01,
+    "phase2_ramp_epochs":        1,
+    "oblique_thr_role_crs":      0.01,
+    "oblique_ramp_epochs":       1
+  },
+
+  "boundary_rescue": {
+    "window":          2,
+    "target":          0.50,
+    "min_delta":       0.001,
+    "factor_vptr_voice": 0.65,
+    "factor_coarse":     0.75,
+    "bnd_boost":         1.20
+  },
+
+  "boundary_plateau": {
+    "window":            2,
+    "min_delta":         0.001,
+    "regression_window": 2,
+    "regression_delta":  0.005
+  },
+
+  "hard_negatives": {
+    "every_n_epochs": 999,
+    "decay":          0.85,
+    "max_weight":     8.0,
+    "min_weight":     0.3,
+    "boost_fp":       5.0,
+    "boost_fn":       2.0,
+    "boost_coarse":   2.5,
+    "boost_fine":     3.0,
+    "boost_fp_svo":   3.0,
+    "boost_fn_svo":   2.0,
+    "boost_role_coarse": 2.5
+  },
+
+  "difficulty_levels": {
+    "names":         ["easy", "easy+", "medium", "medium+", "hard", "full"],
+    "hard_per_gold": [2,      2,       3,        4,         5,      6],
+    "soft_factors":  [1.0,    1.25,    1.5,      2.0,       2.0,    2.0],
+    "max_epochs_per_level":   2,
+    "min_delta_for_progress": 0.0001,
+    "patience": 2
+  },
+
+  "early_stopping": {
+    "patience":   2,
+    "min_delta":  0.0001
+  },
+
+  "hardware": {
+    "_comment": "workers=0 obligatoire pour CPU/MPS (pas de multiprocessing spawn). BS petit pour éviter OOM.",
+    "h100_80gb":  {"bs":  8, "accum": 1, "workers": 0},
+    "l40s_48gb":  {"bs":  8, "accum": 1, "workers": 0},
+    "a100_40gb":  {"bs":  8, "accum": 1, "workers": 0},
+    "rtx_4090":   {"bs":  8, "accum": 1, "workers": 0},
+    "rtx_3090":   {"bs":  8, "accum": 1, "workers": 0},
+    "default":    {"bs":  4, "accum": 1, "workers": 0}
+  }
+}
+

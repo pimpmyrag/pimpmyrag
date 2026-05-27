@@ -115,11 +115,15 @@ pimpmyrag/
 ├── launch_training.py              ← SCRIPT DE LANCEMENT STABLE (référence)
 ├── monitor_run.py                  ← SCRIPT DE MONITORING W&B (référence)
 ├── training/multi-head/
+│   ├── test_local_launch.py        ← ⚠️ TOUJOURS exécuter avant RunPod (2 epochs CPU)
 │   ├── setup_runpod.sh             ← Setup pod : deps + DVC pull + labels check
 │   ├── run_adaptive_training.sh    ← Training adaptatif (hard negatives, ramp SVO)
 │   ├── build_multitask_dataset.py  ← Construit le dataset multitask (char → tokens)
 │   ├── train_multitask.py          ← Script d'entraînement principal
 │   ├── labels.py                   ← Labels NER/SVO/morpho (NUM_FINE=38, etc.)
+│   ├── configs/
+│   │   ├── local-test.json         ← Config test local (2 epochs, CPU, workers=0)
+│   │   └── svo-v819-rc2.json       ← Config RunPod courante
 │   ├── .secrets.env                ← Credentials (NE PAS committer !)
 │   ├── venv/                       ← Python venv local
 │   └── data/                       ← Datasets (gérés par DVC, non committés)
@@ -287,5 +291,6 @@ Objectif : enrichir le dataset avec des paires contrastives pour améliorer la d
 - [ ] zsh friendly ? → Pas de heredoc, pas de `-c` complexe
 - [ ] Commit dataset ? → `dvc add` → `dvc push` → `git add *.dvc` → `git commit`
 - [ ] Monitorer / analyser W&B ? → `python3 monitor_run.py` (PAS de nouveau script `/tmp/check_wandb_*.py`)
+- [ ] **Avant de lancer sur RunPod ?** → `python3 training/multi-head/test_local_launch.py` ✅ obligatoire
 - [ ] Lancer training ? → `python3 launch_training.py` (PAS de nouveau launch_vX.Y.py)
 - [ ] Changer version dataset ? → 1 ligne dans `launch_training.py` + `GOLD_VERSION` dans les 2 scripts sh
