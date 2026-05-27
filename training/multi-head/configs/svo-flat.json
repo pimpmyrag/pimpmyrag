@@ -31,17 +31,17 @@
   },
 
   "lambdas": {
-    "_comment": "Tout à 1.0 sauf verb_ptr=0 — role_coarse apprend seul sur span_h, sans interférence du pointer.",
+    "_comment": "Tout à 1.0 — NER coarse+fine actifs, verb_ptr=0. Test si NER enrichit span_h pour role_coarse.",
     "boundary":     1.0,
-    "coarse":       0.0,
-    "fine":         0.0,
+    "coarse":       1.0,
+    "fine":         1.0,
     "svo_boundary": 1.0,
     "svo":          1.0,
     "role_coarse":  1.0,
     "role_oblique": 1.0,
     "voice":        1.0,
     "certainty":    1.0,
-    "morpho":       0.0,
+    "morpho":       1.0,
     "verb_ptr":     0.0,
     "compat":       0.0
   },
