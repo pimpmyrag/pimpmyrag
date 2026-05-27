@@ -444,15 +444,17 @@ class SpanMultiTaskModel(nn.Module):
         else:
             loss_role = torch.tensor(0.0, device=device)
 
-        # ── 6c) Role oblique fin (maské aux spans OBLIQ, avec CWP) ────────────
-        # Supervisé uniquement sur spans où role_oblique_label < ROLE_OBLIQUE_NONE_ID
-        # ET != OBLIQUE générique (id=0, 77.7% des spans) qui noie les sous-types fins
-        # → même correctif que role_coarse/OTHER : le générique est trop dominant
-        _OBLIQUE_GENERIC_ID = 0  # ROLE_OBLIQUE2ID["OBLIQUE"]
+        # ── 6c) Role oblique fin (conditionné role_coarse==OBLIQ, OBLIQUE_GENERIC inclus) ──
+        # ANCIENNE APPROCHE : excluait OBLIQUE_GENERIC (id=0, 77.7% des obliques) → seulement
+        # 22% des obliques recevaient un gradient → signal 5× plus faible que role_head → sous-perfs.
+        # NOUVELLE APPROCHE : on conditionne sur role_coarse==OBLIQ (= spans vraiment obliques),
+        # ce qui inclut OBLIQUE_GENERIC. Les class weights gèrent le déséquilibre.
+        # Cohérence entraînement / inférence : la tête est utilisée IFF role_coarse==OBLIQ → mask identique.
+        _OBLIQ_RC_ID = 2  # ROLE_COARSE_LABELS.index("OBLIQ")
         ro_mask = (
-            (role_oblique_labels >= 0)
+            (role_coarse_labels == _OBLIQ_RC_ID)
+            & (role_oblique_labels >= 0)
             & (role_oblique_labels < role_oblique_logits.size(-1))
-            & (role_oblique_labels != _OBLIQUE_GENERIC_ID)
         )
         if ro_mask.any():
             _obl_w = oblique_class_weights if oblique_class_weights is not None else None
