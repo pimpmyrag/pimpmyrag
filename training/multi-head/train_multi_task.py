@@ -286,7 +286,7 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
                 if rc_id < ROLE_COARSE_OTHER_ID:  # 0..3 seulement
                     role_coarse_counts[rc_id] += 1
 
-    def make_weights(counts, num_classes, power=0.5):
+    def make_weights(counts, num_classes, power=0.5, max_weight=None):
         total = sum(counts.values())
         weights = torch.ones(num_classes, dtype=torch.float32)
         if total == 0:
@@ -295,7 +295,12 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
             n_i = counts.get(i, 0)
             if n_i > 0:
                 inv_freq = total / (num_classes * n_i)
-                weights[i] = float(inv_freq) ** float(power)
+                w = float(inv_freq) ** float(power)
+                # Plafond avant normalisation : évite que classes ultra-rares gonflent
+                # la moyenne et écrasent les classes fréquentes (OBL_TIME/OBL_LOC)
+                if max_weight is not None:
+                    w = min(w, float(max_weight))
+                weights[i] = w
             else:
                 weights[i] = 1.0
         weights = weights / weights.mean()
@@ -315,7 +320,10 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
         make_weights(coarse_counts, len(COARSE_LABELS), power=0.0),
         make_weights(fine_counts, len(FINE_LABELS), power=power),
         make_weights(certainty_counts, NUM_CERTAINTY, power=power),
-        make_weights(oblique_counts, NUM_ROLE_OBLIQUE, power=power),
+        # max_weight=3.0 : plafonne les classes ultra-rares (OBL_COMITATIVE ~0.7%, weight brut ~15x)
+        # avant normalisation par la moyenne — sans ce plafond, OBL_TIME/OBL_LOC (16%/25%)
+        # obtiennent weight_final < 0.1 (quasi éliminés) car la moyenne est gonflée par les rares.
+        make_weights(oblique_counts, NUM_ROLE_OBLIQUE, power=power, max_weight=3.0),
         rc_w_full,
         boundary_counts,
         coarse_counts,
@@ -826,19 +834,20 @@ def run_epoch(
                 all_rc_from_role_true.append(rct)
                 all_rc_from_role_pred.append(rcfr)
 
-        # Role oblique metrics = spans avec sous-type fin annoté (< NONE_ID ET != générique)
-        # Exclure OBLIQUE générique (id=0, 77.7%) qui noie les sous-types fins — même fix que role_coarse/OTHER
-        _OBLIQUE_GENERIC_ID = 0  # ROLE_OBLIQUE2ID["OBLIQUE"]
-        for rot, rop in zip(role_oblique_true, role_oblique_pred_raw):
-            if 0 < rot < ROLE_OBLIQUE_NONE_ID:  # >0 exclut générique, <NONE_ID exclut sentinel
+        # Role oblique metrics = spans COARSE-OBLIQ annotés (role_coarse_true==OBLIQ),
+        # tous sous-types inclus (OBLIQUE_GENERIC id=0 inclus — cohérence avec la loss).
+        # Conditionner sur role_coarse gold (pas sur role_oblique_true>0) évite le biais
+        # d'évaluation qui masquait 77.7% des données d'obligues.
+        _OBLIQ_RC = ROLE_COARSE2ID["OBLIQ"]
+        for rot, rop, rct in zip(role_oblique_true, role_oblique_pred_raw, role_coarse_true):
+            if rct == _OBLIQ_RC and rot >= 0 and rot < ROLE_OBLIQUE_NONE_ID:
                 all_ro_true.append(rot)
                 all_ro_pred.append(rop)
 
         # Role oblique CASCADE — gate = role_coarse_from_role prédit OBLIQ
         # Simule l'inférence réelle : un span reçoit role_oblique seulement si prédit OBLIQ par la dérivée
-        _OBLIQ_RC = ROLE_COARSE2ID["OBLIQ"]
         for rot, rop, rcfr in zip(role_oblique_true, role_oblique_pred_raw, role_coarse_from_role_pred_raw):
-            if rcfr == _OBLIQ_RC and 0 < rot < ROLE_OBLIQUE_NONE_ID:
+            if rcfr == _OBLIQ_RC and rot >= 0 and rot < ROLE_OBLIQUE_NONE_ID:
                 all_ro_cascaded_true.append(rot)
                 all_ro_cascaded_pred.append(rop)
 
