@@ -1811,11 +1811,16 @@ def main():
                 + val_metrics["fine_macro_f1"] * 2.0
             ) / 4.5
         else:
+            # Score composite NER + SVO roles (coarse dérivée + oblique cascade)
+            # role_coarse_from_role : F1 sur SUBJ/OBJ/OBLIQ/APPOS via logsumexp (gate fiable)
+            # role_oblique_cascaded : F1 sous-types oblique en mode inférence réelle
             score = (
-                val_metrics["boundary_f1"] * 1.5
-                + val_metrics["coarse_macro_f1"] * 1.0
-                + val_metrics["fine_macro_f1"] * 2.0
-            ) / 4.5
+                val_metrics["boundary_f1"]                                      * 1.5
+                + val_metrics["coarse_macro_f1"]                                * 1.0
+                + val_metrics["fine_macro_f1"]                                  * 2.0
+                + val_metrics.get("role_coarse_from_role_macro_f1", 0.0)        * 1.0
+                + val_metrics.get("role_oblique_cascaded_macro_f1", 0.0)        * 0.5
+            ) / 6.0
 
         print(f"\n📅 Epoch {epoch}")
         print(
