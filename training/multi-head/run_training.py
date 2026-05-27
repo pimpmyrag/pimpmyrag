@@ -672,10 +672,11 @@ def main():
 
         # ── Changement de niveau de difficulté ───────────────────────────────
         state["epochs_at_level"] += 1
+        es_active = es["patience"] > 0
         needs_level_up = (
             (
-                state["stagnation"] >= es["patience"]
-                or state["boundary_stagnation"] >= es["patience"]
+                (es_active and state["stagnation"] >= es["patience"])
+                or (es_active and state["boundary_stagnation"] >= es["patience"])
                 or state["epochs_at_level"] >= levels["max_epochs_per_level"]
             )
             and state["level"] < len(levels["names"]) - 1
@@ -688,7 +689,7 @@ def main():
             state["epochs_at_level"] = 0
             log(f"⬆️  Passage au niveau {state['level_name']} (level {state['level']})")
             rebuild_dataset(state["level"], cfg, gold_version, state)
-        elif state["stagnation"] >= es["patience"] and state["level"] >= len(levels["names"]) - 1:
+        elif es_active and state["stagnation"] >= es["patience"] and state["level"] >= len(levels["names"]) - 1:
             log(f"🛑 Early stopping — plus aucune amélioration au niveau max")
             break
 
