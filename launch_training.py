@@ -55,6 +55,12 @@ def load_secrets():
             os.environ.setdefault(k.strip(), v.strip())
 
 def build_start_cmd(ref: str, gold_version: str, loss_weighting: str = "fixed", config: str = None) -> str:
+    if config:
+        # Normalise : "svo-v819-rc2" → "configs/svo-v819-rc2.json"
+        if "/" not in config and not config.endswith(".json"):
+            config = f"configs/{config}.json"
+        elif not config.endswith(".json"):
+            config = f"{config}.json"
     config_env = f"CONFIG={config} " if config else ""
     return (
         "bash -c '"
