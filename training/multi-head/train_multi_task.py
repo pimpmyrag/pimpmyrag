@@ -472,6 +472,8 @@ def run_epoch(
     all_svob_true, all_svob_pred = [], []
     # role_coarse positive-only (spans avec role_coarse != ROLE_COARSE_NONE_ID)
     all_rc_true, all_rc_pred = [], []
+    # role_coarse dérivée depuis role_head (même mask — diagnostic comparatif)
+    all_rc_from_role_true, all_rc_from_role_pred = [], []
     # role_oblique positive-only (spans avec role_oblique < ROLE_OBLIQUE_NONE_ID)
     all_ro_true, all_ro_pred = [], []
     # role fin (12 labels) : spans avec rôle annoté (< ROLE_NONE_ID)
@@ -752,6 +754,7 @@ def run_epoch(
         f_pred = masked_fine_predictions(outputs["fine_logits"], c_pred, coarse_fine_mask)
         svob_pred    = outputs["svo_boundary_logits"].argmax(dim=-1).detach().cpu().tolist()
         role_coarse_pred_raw = outputs["role_coarse_logits"].argmax(dim=-1).detach().cpu().tolist()
+        role_coarse_from_role_pred_raw = outputs["role_coarse_from_role_logits"].argmax(dim=-1).detach().cpu().tolist()
         role_oblique_pred_raw = outputs["role_oblique_logits"].argmax(dim=-1).detach().cpu().tolist()
         role_pred_raw = outputs["role_logits"].argmax(dim=-1).detach().cpu().tolist()
         voice_pred_raw = outputs["voice_logits"].argmax(dim=-1).detach().cpu().tolist()
@@ -814,10 +817,12 @@ def run_epoch(
 
         # Role coarse metrics = spans avec vrai rôle SVO (< ROLE_COARSE_NONE_ID, != OTHER)
         # OTHER est dans le softmax pour cascade inférence mais exclu du training + métriques
-        for rct, rcp in zip(role_coarse_true, role_coarse_pred_raw):
+        for rct, rcp, rcfr in zip(role_coarse_true, role_coarse_pred_raw, role_coarse_from_role_pred_raw):
             if 0 <= rct < ROLE_COARSE_NONE_ID and rct != ROLE_COARSE_OTHER_ID:
                 all_rc_true.append(rct)
                 all_rc_pred.append(rcp)
+                all_rc_from_role_true.append(rct)
+                all_rc_from_role_pred.append(rcfr)
 
         # Role oblique metrics = spans avec role_oblique annoté (< ROLE_OBLIQUE_NONE_ID)
         for rot, rop in zip(role_oblique_true, role_oblique_pred_raw):
@@ -969,6 +974,11 @@ def run_epoch(
             all_rc_true, all_rc_pred,
             labels=[l for l in range(NUM_ROLE_COARSE) if l in set(all_rc_true)]
         ) if all_rc_true else 0.0,
+        # coarse dérivée depuis role_head — même mask, diagnostic comparatif
+        "role_coarse_from_role_macro_f1": safe_macro_f1_local(
+            all_rc_from_role_true, all_rc_from_role_pred,
+            labels=[l for l in range(4) if l in set(all_rc_from_role_true)]
+        ) if all_rc_from_role_true else 0.0,
         "role_oblique_macro_f1": safe_macro_f1_local(
             all_ro_true, all_ro_pred,
             labels=[l for l in range(NUM_ROLE_OBLIQUE) if l in set(all_ro_true)]
@@ -1030,6 +1040,13 @@ def run_epoch(
             target_names=[l for i, l in enumerate(ROLE_COARSE_LABELS) if i != ROLE_COARSE_OTHER_ID],
             digits=3, zero_division=0
         ) if all_rc_true else "N/A",
+        # coarse dérivée depuis role_head — même mask, diagnostic comparatif
+        "role_coarse_from_role_report": classification_report(
+            all_rc_from_role_true, all_rc_from_role_pred,
+            labels=[0, 1, 2, 3],
+            target_names=["SUBJ", "OBJ", "OBLIQ", "APPOS"],
+            digits=3, zero_division=0
+        ) if all_rc_from_role_true else "N/A",
         # role_oblique : tous les 10 sous-types affichés (y compris OBLIQUE_TIME/LOC à zéro)
         "role_oblique_report": classification_report(
             all_ro_true, all_ro_pred,
@@ -1833,6 +1850,7 @@ def main():
                 "val/fine_abstract_f1": val_metrics["fine_abstract_f1"],
                 "val/svo_boundary_f1":  val_metrics["svo_boundary_f1"],
                 "val/role_coarse_f1":   val_metrics["role_coarse_macro_f1"],
+                "val/role_coarse_from_role_f1": val_metrics["role_coarse_from_role_macro_f1"],
                 "val/role_oblique_f1":  val_metrics["role_oblique_macro_f1"],
                 "val/role_f1":          val_metrics["role_macro_f1"],
                 "val/voice_f1":         val_metrics["voice_macro_f1"],
@@ -1848,12 +1866,13 @@ def main():
             from labels import COARSE_TO_FINE, ID2COARSE
             fine_metrics_by_label = {}  # hint_xxx -> {f1, prec, rec}
             for report_key, prefix in [
-                ("fine_report",         "val/fine"),
-                ("coarse_report",       "val/coarse"),
-                ("role_coarse_report",  "val/role_coarse"),
-                ("role_oblique_report", "val/role_oblique"),
-                ("role_report",         "val/role"),
-                ("svo_boundary_report", "val/svo_bnd"),
+                ("fine_report",                   "val/fine"),
+                ("coarse_report",                 "val/coarse"),
+                ("role_coarse_report",            "val/role_coarse"),
+                ("role_coarse_from_role_report",  "val/role_coarse_from_role"),
+                ("role_oblique_report",           "val/role_oblique"),
+                ("role_report",                   "val/role"),
+                ("svo_boundary_report",           "val/svo_bnd"),
             ]:
                 report_str = val_metrics.get(report_key, "")
                 for line in report_str.splitlines():
@@ -1919,6 +1938,11 @@ def main():
         print(f"Val Role Crs F1={val_metrics.get('role_coarse_macro_f1', 0.0):.4f}")
         print("[VAL role coarse (SUBJ/OBJ/OBLIQ/APPOS)]")
         print(val_metrics["role_coarse_report"])
+        # ── Diagnostic comparatif : coarse dérivée depuis role_head ──────────
+        rc_from_role_f1 = val_metrics.get("role_coarse_from_role_macro_f1", 0.0)
+        print(f"Val Role Crs (from role_head) F1={rc_from_role_f1:.4f}  {'✅ MEILLEURE' if rc_from_role_f1 > val_metrics.get('role_coarse_macro_f1', 0.0) + 0.02 else '≈ égale' if abs(rc_from_role_f1 - val_metrics.get('role_coarse_macro_f1', 0.0)) <= 0.02 else '❌ moins bonne'}")
+        print("[VAL role coarse FROM role_head (SUBJ/OBJ/OBLIQ/APPOS — diagnostic)]")
+        print(val_metrics.get("role_coarse_from_role_report", "N/A"))
         if val_metrics.get("role_oblique_report") and val_metrics["role_oblique_report"] != "N/A":
             print("[VAL role oblique (sous-types OBLIQ)]")
             print(val_metrics["role_oblique_report"])

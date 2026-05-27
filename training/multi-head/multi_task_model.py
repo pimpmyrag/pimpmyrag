@@ -14,9 +14,18 @@ from labels import (
     SYN_NONE_ID, VOICE_NONE_ID, CERTAINTY_NONE_ID,
     COARSE_NONE_ID,
     build_coarse_to_fine_mask,
+    # coarse dérivée depuis role_head
+    ROLE_DERIVED_SUBJ_IDS, ROLE_DERIVED_OBJ_IDS,
+    ROLE_DERIVED_OBLIQ_IDS, ROLE_DERIVED_APPOS_IDS,
     # compat
     NUM_SVO,
 )
+
+
+def _agg_group_logit(logits: torch.Tensor, ids: list) -> torch.Tensor:
+    """Agrège les logits d'un groupe d'IDs via logsumexp (probabilistiquement stable)."""
+    idx = torch.tensor(ids, device=logits.device, dtype=torch.long)
+    return torch.logsumexp(logits.index_select(-1, idx), dim=-1)
 from labels import FINE_LABELS
 
 
@@ -210,6 +219,20 @@ class SpanMultiTaskModel(nn.Module):
             )
             span_h_role = span_h
 
+        role_logits = self.role_head(span_h_role)
+
+        # ── Coarse dérivée depuis role_head (logsumexp par groupe) ───────────
+        # Comparaison directe avec role_coarse_head native pour diagnostic.
+        # Ordre : 0=SUBJ, 1=OBJ, 2=OBLIQ, 3=APPOS (aligné sur ROLE_COARSE_LABELS[:4])
+        if role_logits.size(0) > 0:
+            _subj  = _agg_group_logit(role_logits, ROLE_DERIVED_SUBJ_IDS)
+            _obj   = _agg_group_logit(role_logits, ROLE_DERIVED_OBJ_IDS)
+            _obliq = _agg_group_logit(role_logits, ROLE_DERIVED_OBLIQ_IDS)
+            _appos = _agg_group_logit(role_logits, ROLE_DERIVED_APPOS_IDS)
+            role_coarse_from_role_logits = torch.stack([_subj, _obj, _obliq, _appos], dim=-1)
+        else:
+            role_coarse_from_role_logits = torch.zeros((0, 4), device=span_h.device)
+
         return {
             "span_reps":           span_h,
             "span_indices":        span_indices,
@@ -222,7 +245,8 @@ class SpanMultiTaskModel(nn.Module):
             "syn_logits":           self.syn_head(span_h),
             # role_coarse conditionné sur le verbe (soft-attention verb_ptr)
             "role_coarse_logits":   self.role_coarse_head(span_h_role),
-            "role_logits":          self.role_head(span_h_role),           # ancienne tête (12 labels)
+            "role_logits":          role_logits,                        # ancienne tête (12 labels)
+            "role_coarse_from_role_logits": role_coarse_from_role_logits,  # coarse dérivée (diagnostic)
             # Tête oblique fine : span_h_role enrichi du signal NER fine détaché (38 labels)
             # Cohérent avec dataset builder : OBLIQUE_TIME/LOC inférés depuis labels NER fine
             "role_oblique_logits": self.role_oblique_head(

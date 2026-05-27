@@ -393,8 +393,46 @@ NUM_PERSON     = len(PERSON_LABELS)
 PERSON_NONE_ID = NUM_PERSON   # sentinel = 3
 
 # ─────────────────────────────────────────────────────────────
+# ROLE COARSE DÉRIVÉE DEPUIS ROLE_HEAD (12 labels)
+# Groupes d'IDs pour agrégation logsumexp : 0=SUBJ 1=OBJ 2=OBLIQ 3=APPOS
+# Ordre aligné sur ROLE_COARSE_LABELS[:4]
+# ─────────────────────────────────────────────────────────────
+ROLE_DERIVED_SUBJ_IDS   = [ROLE2ID["SUBJECT"]]
+ROLE_DERIVED_OBJ_IDS    = [ROLE2ID["OBJECT"]]
+ROLE_DERIVED_OBLIQ_IDS  = [
+    ROLE2ID["OBLIQUE"],
+    ROLE2ID["OBLIQUE_AGENT"],
+    ROLE2ID["OBLIQUE_CAUSE"],
+    ROLE2ID["OBLIQUE_ADVERSARY"],
+    ROLE2ID["OBLIQUE_BENEFICIARY"],
+    ROLE2ID["OBLIQUE_COMITATIVE"],
+    ROLE2ID["OBLIQUE_DOMAIN"],
+    ROLE2ID["OBLIQUE_SOURCE"],
+]
+ROLE_DERIVED_APPOS_IDS  = [ROLE2ID["APPOS"]]
+
+# ─────────────────────────────────────────────────────────────
 # Compat aliases (pour ne pas casser les imports existants)
 # ─────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────
+# COARSE DÉRIVÉE DEPUIS ROLE_HEAD (12 labels)
+# Groupes d'IDs pour agrégation logsumexp : 0=SUBJ 1=OBJ 2=OBLIQ 3=APPOS
+# Ordre aligné sur ROLE_COARSE_LABELS[:4]
+# ─────────────────────────────────────────────────────────────
+ROLE_DERIVED_SUBJ_IDS   = [ROLE2ID["SUBJECT"]]
+ROLE_DERIVED_OBJ_IDS    = [ROLE2ID["OBJECT"]]
+ROLE_DERIVED_OBLIQ_IDS  = [
+    ROLE2ID["OBLIQUE"],
+    ROLE2ID["OBLIQUE_AGENT"],
+    ROLE2ID["OBLIQUE_CAUSE"],
+    ROLE2ID["OBLIQUE_ADVERSARY"],
+    ROLE2ID["OBLIQUE_BENEFICIARY"],
+    ROLE2ID["OBLIQUE_COMITATIVE"],
+    ROLE2ID["OBLIQUE_DOMAIN"],
+    ROLE2ID["OBLIQUE_SOURCE"],
+]
+ROLE_DERIVED_APPOS_IDS  = [ROLE2ID["APPOS"]]
 SVO_LABELS   = SYN_LABELS    # alias
 SVO2ID       = SYN2ID
 ID2SVO       = ID2SYN
