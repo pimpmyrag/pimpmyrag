@@ -37,10 +37,10 @@
     "role_oblique": 1.0,
     "role":         1.0,
     "voice":        1.0,
-    "certainty":    0.3,
-    "morpho":       0.3,
-    "verb_ptr":     0.5,
-    "compat":       0.5
+    "certainty":    0.2,
+    "morpho":       0.2,
+    "verb_ptr":     0.3,
+    "compat":       0.3
   },
 
   "focal": {
