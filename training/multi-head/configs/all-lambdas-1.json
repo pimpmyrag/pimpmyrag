@@ -28,19 +28,19 @@
 
   "lambdas": {
     "_comment": "Toutes les lambdas à 1 — role_head ET role_coarse actifs simultanément.",
-    "boundary":     1.0,
-    "coarse":       1.0,
-    "fine":         1.0,
-    "svo_boundary": 1.0,
-    "svo":          1.0,
-    "role_coarse":  1.0,
-    "role_oblique": 1.0,
-    "role":         1.0,
-    "voice":        1.0,
-    "certainty":    0.2,
-    "morpho":       0.2,
-    "verb_ptr":     0.3,
-    "compat":       0.3
+    "boundary":     2.5,
+    "coarse":       0.5,
+    "fine":         0.5,
+    "svo_boundary": 0.5,
+    "svo":          0.7,
+    "role_coarse":  0.0,
+    "role_oblique": 0.5,
+    "role":         0.7,
+    "voice":        0.3,
+    "certainty":    0.3,
+    "morpho":       0.3,
+    "verb_ptr":     0.5,
+    "compat":       0.5
   },
 
   "focal": {
