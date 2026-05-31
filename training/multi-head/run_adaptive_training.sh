@@ -5,7 +5,7 @@ set -e
 
 cd /workspace/pimpmyrag/training/multi-head
 
-CONFIG="${CONFIG:-configs/all-lambdas-deberta.json}"
+CONFIG="${CONFIG:-configs/bnd-fine-balanced.json}"
 GOLD_VERSION="${GOLD_VERSION:-v8.20}"
 export TOKENIZERS_PARALLELISM="false"
 export AUTO_BS=0  # BS statique via config hardware — auto-BS désactivé (fake batch instable)
