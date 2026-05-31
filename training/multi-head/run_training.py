@@ -388,6 +388,7 @@ def rebuild_dataset(level: int, cfg: dict, gold_version: str, state: dict):
     soft = levels["soft_factors"][level]
     name = levels["names"][level]
     suffix = state.get("run_suffix", "adaptive")
+    model_name = cfg.get("run", {}).get("model", "microsoft/deberta-v3-base")
     print(f"\n📦 Rebuild dataset niveau {name} (hard={hard}, soft={soft})")
 
     # Build train adaptatif (hard negatives selon niveau)
@@ -395,6 +396,7 @@ def rebuild_dataset(level: int, cfg: dict, gold_version: str, state: dict):
         "python3", "build_multitask_dataset.py",
         "--input",         f"data/train_{gold_version}.jsonl",
         "--output",        f"data/train.{suffix}.multitask.jsonl",
+        "--model-name",    model_name,
         "--hard-per-gold", str(hard),
         "--soft-factor",   str(soft),
     ], check=True)
@@ -405,6 +407,7 @@ def rebuild_dataset(level: int, cfg: dict, gold_version: str, state: dict):
             "python3", "build_multitask_dataset.py",
             "--input",  f"data/{split}_{gold_version}.jsonl",
             "--output", f"data/{split}.multitask.jsonl",
+            "--model-name", model_name,
             "--hard-per-gold", "2",
             "--soft-factor",   "1.0",
         ], check=True)
@@ -702,4 +705,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
