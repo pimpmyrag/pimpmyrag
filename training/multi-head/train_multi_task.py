@@ -35,6 +35,12 @@ from labels import (
     ROLE_COARSE2ID,
     PERSON_LABELS,
     FINE_CONCRETE_IDS, FINE_ABSTRACT_IDS,
+    # VerbFam
+    VERB_FAMILY_LABELS, NUM_VERB_FAMILY, VERB_FAMILY_NONE_ID,
+    VERB_FAMILY_FINE_LABELS, NUM_VERB_FAMILY_FINE, VERB_FAMILY_FINE_NONE_ID,
+    VERB_POLARITY_LABELS, NUM_VERB_POLARITY, VERB_POLARITY_NONE_ID,
+    VERB_ASPECT_LABELS, NUM_VERB_ASPECT, VERB_ASPECT_NONE_ID,
+    VERB_SOURCE_LABELS, NUM_VERB_SOURCE, VERB_SOURCE_NONE_ID,
     # compat
     SVO_LABELS, NUM_SVO,
 )
@@ -377,7 +383,12 @@ def run_epoch(
         lambda_certainty=0.4,
         lambda_morpho=0.3,
         lambda_verb_ptr=0.25,
-        lambda_compat=0.0,   # transmis à compute_loss (compat inter-têtes pour eventlets)
+        lambda_compat=0.0,
+        lambda_verb_family=0.0,
+        lambda_verb_family_fine=0.0,
+        lambda_verb_polarity=0.0,
+        lambda_verb_aspect=0.0,
+        lambda_verb_source=0.0,
         accum_steps=1,
         log_every=50,
         focal_gamma=0.0,
@@ -505,6 +516,13 @@ def run_epoch(
     # verb pointer : accuracy sur spans avec gov_verb_labels >= 0
     all_ptr_true, all_ptr_pred = [], []
 
+    # VerbFam (verb_trigger uniquement)
+    all_vfam_true,      all_vfam_pred      = [], []
+    all_vfam_fine_true, all_vfam_fine_pred = [], []
+    all_vpol_true,      all_vpol_pred      = [], []
+    all_vasp_true,      all_vasp_pred      = [], []
+    all_vsrc_true,      all_vsrc_pred      = [], []
+
     # inline HN mining : id → list[(err_type|None, pred_coarse, pred_fine)]
     hn_results_by_id: dict[str, list] = {} if collect_hn else None
 
@@ -556,6 +574,18 @@ def run_epoch(
         person_labels = batch["person_labels"].to(device)
         gov_verb_labels = batch["gov_verb_labels"].to(device)
         sample_weights = batch["sample_weights"].to(device)
+        # VerbFam labels (optionnels pour compat datasets anciens)
+        verb_family_labels      = batch.get("verb_family_labels")
+        verb_family_fine_labels = batch.get("verb_family_fine_labels")
+        verb_polarity_labels    = batch.get("verb_polarity_labels")
+        verb_aspect_labels      = batch.get("verb_aspect_labels")
+        verb_source_labels      = batch.get("verb_source_labels")
+        if verb_family_labels is not None:
+            verb_family_labels      = verb_family_labels.to(device)
+            verb_family_fine_labels = verb_family_fine_labels.to(device)
+            verb_polarity_labels    = verb_polarity_labels.to(device)
+            verb_aspect_labels      = verb_aspect_labels.to(device)
+            verb_source_labels      = verb_source_labels.to(device)
 
         # Sanity check avant forward
         num_spans = sum(len(x) for x in spans)
@@ -612,6 +642,11 @@ def run_epoch(
                     person_labels_loss       = person_labels[si]
                     gov_verb_labels_loss     = gov_verb_labels[si]
                     sample_weights_loss      = sample_weights[si]
+                    verb_family_labels_loss      = verb_family_labels[si]      if verb_family_labels is not None else None
+                    verb_family_fine_labels_loss = verb_family_fine_labels[si] if verb_family_fine_labels is not None else None
+                    verb_polarity_labels_loss    = verb_polarity_labels[si]    if verb_polarity_labels is not None else None
+                    verb_aspect_labels_loss      = verb_aspect_labels[si]      if verb_aspect_labels is not None else None
+                    verb_source_labels_loss      = verb_source_labels[si]      if verb_source_labels is not None else None
                 else:
                     boundary_labels_loss     = boundary_labels
                     coarse_labels_loss       = coarse_labels
@@ -628,6 +663,11 @@ def run_epoch(
                     person_labels_loss       = person_labels
                     gov_verb_labels_loss     = gov_verb_labels
                     sample_weights_loss      = sample_weights
+                    verb_family_labels_loss      = verb_family_labels
+                    verb_family_fine_labels_loss = verb_family_fine_labels
+                    verb_polarity_labels_loss    = verb_polarity_labels
+                    verb_aspect_labels_loss      = verb_aspect_labels
+                    verb_source_labels_loss      = verb_source_labels
 
                 # Sanity check apres forward / avant loss
                 num_logits = outputs["fine_logits"].size(0)
@@ -665,6 +705,12 @@ def run_epoch(
                     person_labels=person_labels_loss,
                     gov_verb_labels=gov_verb_labels_loss,
                     sample_weights=sample_weights_loss,
+                    # verbfam (optionnel)
+                    verb_family_labels=verb_family_labels_loss,
+                    verb_family_fine_labels=verb_family_fine_labels_loss,
+                    verb_polarity_labels=verb_polarity_labels_loss,
+                    verb_aspect_labels=verb_aspect_labels_loss,
+                    verb_source_labels=verb_source_labels_loss,
                     boundary_class_weights=boundary_class_weights,
                     coarse_class_weights=coarse_class_weights,
                     fine_class_weights=fine_class_weights,
@@ -684,6 +730,11 @@ def run_epoch(
                     lambda_morpho=lambda_morpho,
                     lambda_verb_ptr=lambda_verb_ptr,
                     lambda_compat=lambda_compat,
+                    lambda_verb_family=lambda_verb_family,
+                    lambda_verb_family_fine=lambda_verb_family_fine,
+                    lambda_verb_polarity=lambda_verb_polarity,
+                    lambda_verb_aspect=lambda_verb_aspect,
+                    lambda_verb_source=lambda_verb_source,
                     focal_gamma=focal_gamma,
                     focal_coarse_gamma=focal_coarse_gamma,
                     focal_fine_gamma=focal_fine_gamma,
@@ -782,6 +833,12 @@ def run_epoch(
         # verb pointer : argmax sur la dim seq pour chaque span
         vptr_logits_cpu = outputs["verb_ptr_logits"].detach().cpu()  # [N, seq]
         ptr_pred_raw = vptr_logits_cpu.argmax(dim=-1).tolist()       # [N]
+        # VerbFam heads
+        vfam_pred_raw      = outputs["verb_family_logits"].argmax(dim=-1).detach().cpu().tolist()
+        vfam_fine_pred_raw = outputs["verb_family_fine_logits"].argmax(dim=-1).detach().cpu().tolist()
+        vpol_pred_raw      = outputs["verb_polarity_logits"].argmax(dim=-1).detach().cpu().tolist()
+        vasp_pred_raw      = outputs["verb_aspect_logits"].argmax(dim=-1).detach().cpu().tolist()
+        vsrc_pred_raw      = outputs["verb_source_logits"].argmax(dim=-1).detach().cpu().tolist()
 
         # Vérité terrain alignée sur les spans scorés
         if span_indices is not None:
@@ -799,6 +856,11 @@ def run_epoch(
             number_true  = number_labels.detach().cpu()[si_cpu].tolist()
             person_true  = person_labels.detach().cpu()[si_cpu].tolist()
             gov_verb_true = gov_verb_labels.detach().cpu()[si_cpu].tolist()
+            vfam_true      = verb_family_labels.detach().cpu()[si_cpu].tolist()      if verb_family_labels is not None else [VERB_FAMILY_NONE_ID] * len(si_cpu)
+            vfam_fine_true = verb_family_fine_labels.detach().cpu()[si_cpu].tolist() if verb_family_fine_labels is not None else [VERB_FAMILY_FINE_NONE_ID] * len(si_cpu)
+            vpol_true      = verb_polarity_labels.detach().cpu()[si_cpu].tolist()    if verb_polarity_labels is not None else [VERB_POLARITY_NONE_ID] * len(si_cpu)
+            vasp_true      = verb_aspect_labels.detach().cpu()[si_cpu].tolist()      if verb_aspect_labels is not None else [VERB_ASPECT_NONE_ID] * len(si_cpu)
+            vsrc_true      = verb_source_labels.detach().cpu()[si_cpu].tolist()      if verb_source_labels is not None else [VERB_SOURCE_NONE_ID] * len(si_cpu)
         else:
             b_true    = boundary_labels.detach().cpu().tolist()
             c_true    = coarse_labels.detach().cpu().tolist()
@@ -813,6 +875,12 @@ def run_epoch(
             number_true  = number_labels.detach().cpu().tolist()
             person_true  = person_labels.detach().cpu().tolist()
             gov_verb_true = gov_verb_labels.detach().cpu().tolist()
+            n_all = len(boundary_labels)
+            vfam_true      = verb_family_labels.detach().cpu().tolist()      if verb_family_labels is not None else [VERB_FAMILY_NONE_ID] * n_all
+            vfam_fine_true = verb_family_fine_labels.detach().cpu().tolist() if verb_family_fine_labels is not None else [VERB_FAMILY_FINE_NONE_ID] * n_all
+            vpol_true      = verb_polarity_labels.detach().cpu().tolist()    if verb_polarity_labels is not None else [VERB_POLARITY_NONE_ID] * n_all
+            vasp_true      = verb_aspect_labels.detach().cpu().tolist()      if verb_aspect_labels is not None else [VERB_ASPECT_NONE_ID] * n_all
+            vsrc_true      = verb_source_labels.detach().cpu().tolist()      if verb_source_labels is not None else [VERB_SOURCE_NONE_ID] * n_all
 
 
         # Accumulate boundary / coarse
@@ -904,6 +972,28 @@ def run_epoch(
             if gvt >= 0 and gvt < seq_len_ptr:
                 all_ptr_true.append(gvt)
                 all_ptr_pred.append(gvp)
+
+        # VerbFam : seulement les verb_trigger annotés (label < sentinel)
+        for vft, vfp in zip(vfam_true, vfam_pred_raw):
+            if vft < VERB_FAMILY_NONE_ID:
+                all_vfam_true.append(vft)
+                all_vfam_pred.append(vfp)
+        for vft, vfp in zip(vfam_fine_true, vfam_fine_pred_raw):
+            if vft < VERB_FAMILY_FINE_NONE_ID:
+                all_vfam_fine_true.append(vft)
+                all_vfam_fine_pred.append(vfp)
+        for vpt, vpp in zip(vpol_true, vpol_pred_raw):
+            if vpt < VERB_POLARITY_NONE_ID:
+                all_vpol_true.append(vpt)
+                all_vpol_pred.append(vpp)
+        for vat, vap in zip(vasp_true, vasp_pred_raw):
+            if vat < VERB_ASPECT_NONE_ID:
+                all_vasp_true.append(vat)
+                all_vasp_pred.append(vap)
+        for vst, vsp in zip(vsrc_true, vsrc_pred_raw):
+            if vst < VERB_SOURCE_NONE_ID:
+                all_vsrc_true.append(vst)
+                all_vsrc_pred.append(vsp)
 
         # ── Inline HN mining : collecter erreurs par candidat ────────────────
         if collect_hn:
@@ -1048,6 +1138,27 @@ def run_epoch(
             if all_ptr_true else 0.0
         ),
         "verb_ptr_n": len(all_ptr_true),
+        # VerbFam heads (verb_trigger uniquement)
+        "verb_family_macro_f1": safe_macro_f1_local(
+            all_vfam_true, all_vfam_pred,
+            labels=[l for l in range(NUM_VERB_FAMILY) if l in set(all_vfam_true)]
+        ) if all_vfam_true else 0.0,
+        "verb_family_fine_macro_f1": safe_macro_f1_local(
+            all_vfam_fine_true, all_vfam_fine_pred,
+            labels=[l for l in range(NUM_VERB_FAMILY_FINE) if l in set(all_vfam_fine_true)]
+        ) if all_vfam_fine_true else 0.0,
+        "verb_polarity_macro_f1": safe_macro_f1_local(
+            all_vpol_true, all_vpol_pred,
+            labels=[l for l in range(NUM_VERB_POLARITY) if l in set(all_vpol_true)]
+        ) if all_vpol_true else 0.0,
+        "verb_aspect_macro_f1": safe_macro_f1_local(
+            all_vasp_true, all_vasp_pred,
+            labels=[l for l in range(NUM_VERB_ASPECT) if l in set(all_vasp_true)]
+        ) if all_vasp_true else 0.0,
+        "verb_source_macro_f1": safe_macro_f1_local(
+            all_vsrc_true, all_vsrc_pred,
+            labels=[l for l in range(NUM_VERB_SOURCE) if l in set(all_vsrc_true)]
+        ) if all_vsrc_true else 0.0,
         "boundary_report": classification_report(
             all_b_true, all_b_pred, digits=3, zero_division=0
         ) if all_b_true else "N/A",
@@ -1067,34 +1178,7 @@ def run_epoch(
             labels=[0, 1], target_names=["non_verb", "verb_trigger"],
             digits=3, zero_division=0
         ) if all_svob_true else "N/A",
-        # role_coarse : SUBJ / OBJ / OBLIQ / APPOS (OTHER exclu du training + métriques)
-        "role_coarse_report": classification_report(
-            all_rc_true, all_rc_pred,
-            labels=[i for i in range(NUM_ROLE_COARSE) if i != ROLE_COARSE_OTHER_ID],
-            target_names=[l for i, l in enumerate(ROLE_COARSE_LABELS) if i != ROLE_COARSE_OTHER_ID],
-            digits=3, zero_division=0
-        ) if all_rc_true else "N/A",
-        # coarse dérivée depuis role_head — même mask, diagnostic comparatif
-        "role_coarse_from_role_report": classification_report(
-            all_rc_from_role_true, all_rc_from_role_pred,
-            labels=[0, 1, 2, 3],
-            target_names=["SUBJ", "OBJ", "OBLIQ", "APPOS"],
-            digits=3, zero_division=0
-        ) if all_rc_from_role_true else "N/A",
-        # role_oblique : tous les 10 sous-types affichés (y compris OBLIQUE_TIME/LOC à zéro)
-        "role_oblique_report": classification_report(
-            all_ro_true, all_ro_pred,
-            labels=list(range(NUM_ROLE_OBLIQUE)),
-            target_names=ROLE_OBLIQUE_LABELS,
-            digits=3, zero_division=0
-        ) if all_ro_true else "N/A",
-        # role_oblique CASCADE — mode inférence réelle (gate = role_coarse_from_role == OBLIQ)
-        "role_oblique_cascaded_report": classification_report(
-            all_ro_cascaded_true, all_ro_cascaded_pred,
-            labels=[l for l in range(NUM_ROLE_OBLIQUE) if l in set(all_ro_cascaded_true)],
-            target_names=[ROLE_OBLIQUE_LABELS[l] for l in range(NUM_ROLE_OBLIQUE) if l in set(all_ro_cascaded_true)],
-            digits=3, zero_division=0
-        ) if all_ro_cascaded_true else "N/A",
+        # role_coarse/oblique reports supprimés (têtes désactivées, lambda=0)
         # role fin (12 labels) : SUBJECT/OBJECT/OBLIQUE_* (NONE exclu)
         "role_report": classification_report(
             all_role_true, all_role_pred,
@@ -1102,6 +1186,37 @@ def run_epoch(
             target_names=[ROLE_LABELS[l] for l in range(NUM_ROLE) if l != ROLE_NONE_ID and l in set(all_role_true)],
             digits=3, zero_division=0
         ) if all_role_true else "N/A",
+        # VerbFam reports
+        "verb_family_report": classification_report(
+            all_vfam_true, all_vfam_pred,
+            labels=[l for l in range(NUM_VERB_FAMILY) if l in set(all_vfam_true)],
+            target_names=[VERB_FAMILY_LABELS[l] for l in range(NUM_VERB_FAMILY) if l in set(all_vfam_true)],
+            digits=3, zero_division=0
+        ) if all_vfam_true else "N/A",
+        "verb_family_fine_report": classification_report(
+            all_vfam_fine_true, all_vfam_fine_pred,
+            labels=[l for l in range(NUM_VERB_FAMILY_FINE) if l in set(all_vfam_fine_true)],
+            target_names=[VERB_FAMILY_FINE_LABELS[l] for l in range(NUM_VERB_FAMILY_FINE) if l in set(all_vfam_fine_true)],
+            digits=3, zero_division=0
+        ) if all_vfam_fine_true else "N/A",
+        "verb_polarity_report": classification_report(
+            all_vpol_true, all_vpol_pred,
+            labels=[l for l in range(NUM_VERB_POLARITY) if l in set(all_vpol_true)],
+            target_names=[VERB_POLARITY_LABELS[l] for l in range(NUM_VERB_POLARITY) if l in set(all_vpol_true)],
+            digits=3, zero_division=0
+        ) if all_vpol_true else "N/A",
+        "verb_aspect_report": classification_report(
+            all_vasp_true, all_vasp_pred,
+            labels=[l for l in range(NUM_VERB_ASPECT) if l in set(all_vasp_true)],
+            target_names=[VERB_ASPECT_LABELS[l] for l in range(NUM_VERB_ASPECT) if l in set(all_vasp_true)],
+            digits=3, zero_division=0
+        ) if all_vasp_true else "N/A",
+        "verb_source_report": classification_report(
+            all_vsrc_true, all_vsrc_pred,
+            labels=[l for l in range(NUM_VERB_SOURCE) if l in set(all_vsrc_true)],
+            target_names=[VERB_SOURCE_LABELS[l] for l in range(NUM_VERB_SOURCE) if l in set(all_vsrc_true)],
+            digits=3, zero_division=0
+        ) if all_vsrc_true else "N/A",
         "hn_results_by_id": hn_results_by_id,
     }
 
@@ -1224,8 +1339,12 @@ def main():
     parser.add_argument("--lambda-verb-ptr", type=float, default=0.5,
                         help="Pondération de la loss verb-pointer arg→verb (défaut=0.5)")
     parser.add_argument("--lambda-compat", type=float, default=0.2,
-                        help="Pondération loss compat inter-têtes : (A) role→boundary pour participants eventlets, "
-                             "(B) alignement soft boundary↔coarse. Défaut=0.2")
+                        help="Pondération loss compat inter-têtes")
+    parser.add_argument("--lambda-verb-family",      type=float, default=0.0)
+    parser.add_argument("--lambda-verb-family-fine", type=float, default=0.0)
+    parser.add_argument("--lambda-verb-polarity",    type=float, default=0.0)
+    parser.add_argument("--lambda-verb-aspect",      type=float, default=0.0)
+    parser.add_argument("--lambda-verb-source",      type=float, default=0.0)
     parser.add_argument("--focal-gamma", type=float, default=0.0,
                         help="Focal loss gamma pour boundary (0=CE, 2.0=focal)")
     parser.add_argument("--focal-fine-gamma", type=float, default=0.0,
@@ -1613,9 +1732,7 @@ def main():
         for i, name in enumerate(ROLE_OBLIQUE_LABELS):
             print(f"  {name:<25} count={oblique_counts.get(i, 0):>6} weight={oblique_w[i].item():.6f}")
 
-        print(f"\n[role_coarse counts / weights]  (CWP power={args.class_weight_power}, SUBJ/OBJ/OBLIQ/APPOS)")
-        for i, name in enumerate(ROLE_COARSE_LABELS[:ROLE_COARSE_OTHER_ID]):
-            print(f"  {name:<6} count={role_coarse_counts.get(i, 0):>6} weight={role_coarse_w[i].item():.6f}")
+
     else:
         print("⚖️ class weights désactivés")
         boundary_w = None
@@ -1746,6 +1863,11 @@ def main():
             lambda_morpho=args.lambda_morpho,
             lambda_verb_ptr=args.lambda_verb_ptr,
             lambda_compat=args.lambda_compat,
+            lambda_verb_family=args.lambda_verb_family,
+            lambda_verb_family_fine=args.lambda_verb_family_fine,
+            lambda_verb_polarity=args.lambda_verb_polarity,
+            lambda_verb_aspect=args.lambda_verb_aspect,
+            lambda_verb_source=args.lambda_verb_source,
             accum_steps=args.accum_steps,
             log_every=args.log_every,
             focal_gamma=args.focal_gamma,
@@ -1804,6 +1926,11 @@ def main():
             lambda_morpho=args.lambda_morpho,
             lambda_verb_ptr=args.lambda_verb_ptr,
             lambda_compat=args.lambda_compat,
+            lambda_verb_family=args.lambda_verb_family,
+            lambda_verb_family_fine=args.lambda_verb_family_fine,
+            lambda_verb_polarity=args.lambda_verb_polarity,
+            lambda_verb_aspect=args.lambda_verb_aspect,
+            lambda_verb_source=args.lambda_verb_source,
             accum_steps=args.accum_steps,
             log_every=args.log_every,
             focal_gamma=args.focal_gamma,
@@ -1880,14 +2007,17 @@ def main():
                 "train/fine_concrete_f1": train_metrics["fine_concrete_f1"],
                 "train/fine_abstract_f1": train_metrics["fine_abstract_f1"],
                 "train/svo_boundary_f1": train_metrics["svo_boundary_f1"],
-                "train/role_coarse_f1": train_metrics["role_coarse_macro_f1"],
-                "train/role_oblique_f1": train_metrics["role_oblique_macro_f1"],
                 "train/role_f1":        train_metrics["role_macro_f1"],
                 "train/voice_f1":       train_metrics["voice_macro_f1"],
                 "train/certainty_f1":   train_metrics["certainty_macro_f1"],
                 "train/gender_f1":      train_metrics["gender_macro_f1"],
                 "train/number_f1":      train_metrics["number_macro_f1"],
                 "train/person_f1":      train_metrics["person_macro_f1"],
+                "train/verb_family_f1":      train_metrics.get("verb_family_macro_f1", 0.0),
+                "train/verb_family_fine_f1": train_metrics.get("verb_family_fine_macro_f1", 0.0),
+                "train/verb_polarity_f1":    train_metrics.get("verb_polarity_macro_f1", 0.0),
+                "train/verb_aspect_f1":      train_metrics.get("verb_aspect_macro_f1", 0.0),
+                "train/verb_source_f1":      train_metrics.get("verb_source_macro_f1", 0.0),
                 "val/loss":             val_metrics["loss"],
                 "val/boundary_f1":      val_metrics["boundary_f1"],
                 "val/coarse_f1":        val_metrics["coarse_macro_f1"],
@@ -1895,10 +2025,6 @@ def main():
                 "val/fine_concrete_f1": val_metrics["fine_concrete_f1"],
                 "val/fine_abstract_f1": val_metrics["fine_abstract_f1"],
                 "val/svo_boundary_f1":  val_metrics["svo_boundary_f1"],
-                "val/role_coarse_f1":   val_metrics["role_coarse_macro_f1"],
-                "val/role_coarse_from_role_f1": val_metrics["role_coarse_from_role_macro_f1"],
-                "val/role_oblique_f1":  val_metrics["role_oblique_macro_f1"],
-                "val/role_oblique_cascaded_f1": val_metrics["role_oblique_cascaded_macro_f1"],
                 "val/role_f1":          val_metrics["role_macro_f1"],
                 "val/voice_f1":         val_metrics["voice_macro_f1"],
                 "val/certainty_f1":     val_metrics["certainty_macro_f1"],
@@ -1906,6 +2032,11 @@ def main():
                 "val/number_f1":        val_metrics["number_macro_f1"],
                 "val/verb_ptr_acc":     val_metrics["verb_ptr_acc"],
                 "val/verb_ptr_n":       val_metrics["verb_ptr_n"],
+                "val/verb_family_f1":      val_metrics.get("verb_family_macro_f1", 0.0),
+                "val/verb_family_fine_f1": val_metrics.get("verb_family_fine_macro_f1", 0.0),
+                "val/verb_polarity_f1":    val_metrics.get("verb_polarity_macro_f1", 0.0),
+                "val/verb_aspect_f1":      val_metrics.get("verb_aspect_macro_f1", 0.0),
+                "val/verb_source_f1":      val_metrics.get("verb_source_macro_f1", 0.0),
             }
             # Per-label F1 depuis le classification_report (val fine + coarse)
             import re as _re
@@ -1913,14 +2044,14 @@ def main():
             from labels import COARSE_TO_FINE, ID2COARSE
             fine_metrics_by_label = {}  # hint_xxx -> {f1, prec, rec}
             for report_key, prefix in [
-                ("fine_report",                   "val/fine"),
-                ("coarse_report",                 "val/coarse"),
-                ("role_coarse_report",            "val/role_coarse"),
-                ("role_coarse_from_role_report",  "val/role_coarse_from_role"),
-                ("role_oblique_report",           "val/role_oblique"),
-                ("role_oblique_cascaded_report",  "val/role_oblique_cascaded"),
-                ("role_report",                   "val/role"),
-                ("svo_boundary_report",           "val/svo_bnd"),
+                ("fine_report",          "val/fine"),
+                ("coarse_report",        "val/coarse"),
+                ("role_report",          "val/role"),
+                ("svo_boundary_report",  "val/svo_bnd"),
+                ("verb_family_report",   "val/verb_family"),
+                ("verb_polarity_report", "val/verb_polarity"),
+                ("verb_aspect_report",   "val/verb_aspect"),
+                ("verb_source_report",   "val/verb_source"),
             ]:
                 report_str = val_metrics.get(report_key, "")
                 for line in report_str.splitlines():
@@ -1980,25 +2111,22 @@ def main():
             print(f"[VAL fine exports] csv={val_metrics['fine_confusion_csv']} json={val_metrics['fine_diagnostics_json']}")
         print("[VAL svo boundary (verb_trigger)]")
         print(val_metrics["svo_boundary_report"])
-        # ⚠️ Ces lignes sont parsées par run_training.py extract_metric() pour la cascade SVO-first
-        # Format EXACT requis : "Val SVO Bnd F1=0.xxxx" et "Val Role Crs F1=0.xxxx"
+        # ⚠️ Ces lignes sont parsées par run_training.py extract_metric() — format EXACT requis
         print(f"Val SVO Bnd F1={val_metrics['svo_boundary_f1']:.4f}")
-        print(f"Val Role Crs F1={val_metrics.get('role_coarse_macro_f1', 0.0):.4f}")
-        print("[VAL role coarse (SUBJ/OBJ/OBLIQ/APPOS)]")
-        print(val_metrics["role_coarse_report"])
-        # ── Diagnostic comparatif : coarse dérivée depuis role_head ──────────
-        rc_from_role_f1 = val_metrics.get("role_coarse_from_role_macro_f1", 0.0)
-        print(f"Val Role Crs (from role_head) F1={rc_from_role_f1:.4f}  {'✅ MEILLEURE' if rc_from_role_f1 > val_metrics.get('role_coarse_macro_f1', 0.0) + 0.02 else '≈ égale' if abs(rc_from_role_f1 - val_metrics.get('role_coarse_macro_f1', 0.0)) <= 0.02 else '❌ moins bonne'}")
-        print("[VAL role coarse FROM role_head (SUBJ/OBJ/OBLIQ/APPOS — diagnostic)]")
-        print(val_metrics.get("role_coarse_from_role_report", "N/A"))
-        if val_metrics.get("role_oblique_report") and val_metrics["role_oblique_report"] != "N/A":
-            ro_oracle_f1  = val_metrics.get("role_oblique_macro_f1", 0.0)
-            ro_cascade_f1 = val_metrics.get("role_oblique_cascaded_macro_f1", 0.0)
-            print(f"[VAL role oblique (sous-types OBLIQ)]  oracle F1={ro_oracle_f1:.4f}  cascade F1={ro_cascade_f1:.4f}  (cascade = gate role_coarse_from_role)")
-            print(val_metrics["role_oblique_report"])
-            if val_metrics.get("role_oblique_cascaded_report") and val_metrics["role_oblique_cascaded_report"] != "N/A":
-                print("[VAL role oblique CASCADE (inférence réelle — gate=role_coarse_from_role)]")
-                print(val_metrics["role_oblique_cascaded_report"])
+        # Val Role Crs F1 = role_macro_f1 (12 labels — remplace l'ancienne role_coarse désactivée)
+        print(f"Val Role Crs F1={val_metrics.get('role_macro_f1', 0.0):.4f}")
+        if val_metrics.get("role_report") and val_metrics["role_report"] != "N/A":
+            print("[VAL role (12 labels — SUBJECT/OBJECT/OBLIQUE_*)]")
+            print(val_metrics["role_report"])
+        if val_metrics.get("verb_family_macro_f1", 0) > 0:
+            print(f"[VAL verbfam]  Family F1={val_metrics['verb_family_macro_f1']:.4f}  "
+                  f"FamilyFine F1={val_metrics['verb_family_fine_macro_f1']:.4f}  "
+                  f"Polarity F1={val_metrics['verb_polarity_macro_f1']:.4f}  "
+                  f"Aspect F1={val_metrics['verb_aspect_macro_f1']:.4f}  "
+                  f"Source F1={val_metrics['verb_source_macro_f1']:.4f}")
+            if val_metrics.get("verb_family_report") and val_metrics["verb_family_report"] != "N/A":
+                print("[VAL verb_family]")
+                print(val_metrics["verb_family_report"])
         if val_metrics.get("gender_macro_f1", 0) > 0:
             print(f"[VAL morpho]  Gender F1={val_metrics['gender_macro_f1']:.4f}  Number F1={val_metrics['number_macro_f1']:.4f}  Person F1={val_metrics['person_macro_f1']:.4f}")
 
@@ -2097,14 +2225,19 @@ def main():
     print(f"Coarse   F1={test_metrics['coarse_macro_f1']:.4f}")
     print(f"Fine     F1={test_metrics['fine_macro_f1']:.4f}")
     print(f"SVO Bnd  F1={test_metrics['svo_boundary_f1']:.4f}")
-    print(f"Role Crs F1={test_metrics['role_coarse_macro_f1']:.4f}  (SUBJ/OBJ/OBLIQ/APPOS)")
-    print(f"Role Obl F1={test_metrics['role_oblique_macro_f1']:.4f}  (sous-types OBLIQ)")
+    print(f"Role     F1={test_metrics['role_macro_f1']:.4f}  (12 labels)")
     print(f"Voice    F1={test_metrics['voice_macro_f1']:.4f}")
     print(f"Certainty F1={test_metrics['certainty_macro_f1']:.4f}")
     print(f"Gender   F1={test_metrics['gender_macro_f1']:.4f}")
     print(f"Number   F1={test_metrics['number_macro_f1']:.4f}")
     print(f"Person   F1={test_metrics['person_macro_f1']:.4f}")
     print(f"VerbPtr  Acc={test_metrics['verb_ptr_acc']:.4f} (n={test_metrics['verb_ptr_n']})")
+    if test_metrics.get("verb_family_macro_f1", 0) > 0:
+        print(f"VerbFam  F1={test_metrics['verb_family_macro_f1']:.4f}  "
+              f"FamFine={test_metrics['verb_family_fine_macro_f1']:.4f}  "
+              f"Polarity={test_metrics['verb_polarity_macro_f1']:.4f}  "
+              f"Aspect={test_metrics['verb_aspect_macro_f1']:.4f}  "
+              f"Source={test_metrics['verb_source_macro_f1']:.4f}")
 
     print("\n[TEST boundary]")
     print(test_metrics["boundary_report"])
@@ -2124,11 +2257,12 @@ def main():
         print(f"[TEST fine exports] csv={test_metrics['fine_confusion_csv']} json={test_metrics['fine_diagnostics_json']}")
     print("[TEST svo boundary (verb_trigger)]")
     print(test_metrics["svo_boundary_report"])
-    print("[TEST role coarse (SUBJ/OBJ/OBLIQ/APPOS)]")
-    print(test_metrics["role_coarse_report"])
-    if test_metrics.get("role_oblique_report") and test_metrics["role_oblique_report"] != "N/A":
-        print("[TEST role oblique (sous-types OBLIQ)]")
-        print(test_metrics["role_oblique_report"])
+    if test_metrics.get("role_report") and test_metrics["role_report"] != "N/A":
+        print("[TEST role (12 labels)]")
+        print(test_metrics["role_report"])
+    if test_metrics.get("verb_family_report") and test_metrics["verb_family_report"] != "N/A":
+        print("[TEST verb_family]")
+        print(test_metrics["verb_family_report"])
     if test_metrics.get("gender_macro_f1", 0) > 0:
         print(f"[TEST morpho]  Gender F1={test_metrics['gender_macro_f1']:.4f}  Number F1={test_metrics['number_macro_f1']:.4f}  Person F1={test_metrics['person_macro_f1']:.4f}")
 
@@ -2141,11 +2275,17 @@ def main():
             "test/fine_concrete_f1": test_metrics["fine_concrete_f1"],
             "test/fine_abstract_f1": test_metrics["fine_abstract_f1"],
             "test/svo_boundary_f1": test_metrics["svo_boundary_f1"],
+            "test/role_f1":      test_metrics["role_macro_f1"],
             "test/voice_f1":     test_metrics["voice_macro_f1"],
             "test/certainty_f1": test_metrics["certainty_macro_f1"],
             "test/gender_f1":    test_metrics["gender_macro_f1"],
             "test/number_f1":    test_metrics["number_macro_f1"],
             "test/loss":         test_metrics["loss"],
+            "test/verb_family_f1":      test_metrics.get("verb_family_macro_f1", 0.0),
+            "test/verb_family_fine_f1": test_metrics.get("verb_family_fine_macro_f1", 0.0),
+            "test/verb_polarity_f1":    test_metrics.get("verb_polarity_macro_f1", 0.0),
+            "test/verb_aspect_f1":      test_metrics.get("verb_aspect_macro_f1", 0.0),
+            "test/verb_source_f1":      test_metrics.get("verb_source_macro_f1", 0.0),
             **{
                 f"test/fine_confusion_count_{item['true_label']}__{item['pred_label']}": item["count"]
                 for item in test_metrics.get("fine_top_confusions", [])[:5]

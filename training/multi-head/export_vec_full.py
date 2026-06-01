@@ -80,7 +80,7 @@ def load_model_with_extended_tokenizer(checkpoint_path: str, model_name: str, to
     AVANT de charger les poids — évite le RuntimeError 'size mismatch'.
     """
     # ── 1. Charger le state_dict pour inférer les dimensions ──
-    print(f"📦 Chargement checkpoint : {checkpoint_path}")
+    print(f" Chargement checkpoint : {checkpoint_path}")
     ckpt  = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     state = ckpt.get("model_state", ckpt)
     dims = _infer_dims_from_state(state)
@@ -89,7 +89,7 @@ def load_model_with_extended_tokenizer(checkpoint_path: str, model_name: str, to
     print(f"   Dimensions inférées depuis checkpoint : {dims}")
 
     # ── 2. Créer le modèle avec les bonnes dimensions ──
-    print(f"📦 Chargement modèle de base : {model_name}")
+    print(f" Chargement modèle de base : {model_name}")
     model = SpanMultiTaskModel(model_name=model_name, num_coarse=num_coarse).float()
 
     # Si les dims des têtes dans le checkpoint diffèrent du labels.py actuel,

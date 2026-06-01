@@ -440,3 +440,124 @@ NUM_SVO      = NUM_SYN
 SVO_NONE_ID  = SYN_NONE_ID
 ALL_SVO_LABELS = ALL_SYN_LABELS
 
+# ─────────────────────────────────────────────────────────────
+# VERBFAM LABELS  (prédit sur verb_trigger uniquement)
+# ─────────────────────────────────────────────────────────────
+
+VERB_FAMILY_LABELS = [
+    "Causality",     # 0
+    "Cognition",     # 1
+    "Communication", # 2
+    "Conflict",      # 3
+    "Movement",      # 4
+    "OTHER",         # 5
+    "Perception",    # 6
+    "Possession",    # 7
+    "Relation",      # 8
+    "Social",        # 9
+    "State_Change",  # 10
+    "Temporal",      # 11
+]
+VERB_FAMILY2ID      = {x: i for i, x in enumerate(VERB_FAMILY_LABELS)}
+ID2VERB_FAMILY      = {i: x for x, i in VERB_FAMILY2ID.items()}
+NUM_VERB_FAMILY     = len(VERB_FAMILY_LABELS)
+VERB_FAMILY_NONE_ID = NUM_VERB_FAMILY   # sentinel = 12
+
+VERB_FAMILY_FINE_LABELS = [
+    "Achat",        # 0
+    "Annonce",      # 1
+    "Appartenance", # 2
+    "Cognitive",    # 3
+    "Combat",       # 4
+    "Concerne",     # 5
+    "Contenu",      # 6
+    "Creation",     # 7
+    "Croyance",     # 8
+    "Debut",        # 9
+    "Decision",     # 10
+    "Demande",      # 11
+    "Deplacement",  # 12
+    "Destruction",  # 13
+    "Don",          # 14
+    "Duree",        # 15
+    "Ecrit",        # 16
+    "Election",     # 17
+    "Fin",          # 18
+    "Intention",    # 19
+    "Jugement",     # 20
+    "Legislation",  # 21
+    "Lien",         # 22
+    "Negatif",      # 23
+    "Negociation",  # 24
+    "Nomination",   # 25
+    "OTHER",        # 26
+    "Opposition",   # 27
+    "Permission",   # 28
+    "Positif",      # 29
+    "Reponse",      # 30
+    "Savoir",       # 31
+    "Sensorielle",  # 32
+    "Transformation",# 33
+    "Transport",    # 34
+    "Vente",        # 35
+    "Visuelle",     # 36
+    "Voyage",       # 37
+]
+VERB_FAMILY_FINE2ID      = {x: i for i, x in enumerate(VERB_FAMILY_FINE_LABELS)}
+ID2VERB_FAMILY_FINE      = {i: x for x, i in VERB_FAMILY_FINE2ID.items()}
+NUM_VERB_FAMILY_FINE     = len(VERB_FAMILY_FINE_LABELS)
+VERB_FAMILY_FINE_NONE_ID = NUM_VERB_FAMILY_FINE   # sentinel = 38
+
+# Mapping family coarse → fine  (pour le soft mask)
+VERB_FAMILY_TO_FINE: dict[int, list[int]] = {
+    VERB_FAMILY2ID["Causality"]:     [VERB_FAMILY_FINE2ID[x] for x in ["Negatif", "Positif", "Transformation", "Destruction", "Creation"]],
+    VERB_FAMILY2ID["Cognition"]:     [VERB_FAMILY_FINE2ID[x] for x in ["Cognitive", "Croyance", "Decision", "Intention", "Savoir", "Jugement"]],
+    VERB_FAMILY2ID["Communication"]: [VERB_FAMILY_FINE2ID[x] for x in ["Annonce", "Demande", "Ecrit", "Reponse", "Contenu", "Negociation"]],
+    VERB_FAMILY2ID["Conflict"]:      [VERB_FAMILY_FINE2ID[x] for x in ["Combat", "Opposition", "Negatif"]],
+    VERB_FAMILY2ID["Movement"]:      [VERB_FAMILY_FINE2ID[x] for x in ["Deplacement", "Transport", "Voyage"]],
+    VERB_FAMILY2ID["OTHER"]:         [VERB_FAMILY_FINE2ID[x] for x in ["OTHER", "Concerne", "Lien"]],
+    VERB_FAMILY2ID["Perception"]:    [VERB_FAMILY_FINE2ID[x] for x in ["Sensorielle", "Visuelle", "Cognitive"]],
+    VERB_FAMILY2ID["Possession"]:    [VERB_FAMILY_FINE2ID[x] for x in ["Achat", "Appartenance", "Don", "Vente"]],
+    VERB_FAMILY2ID["Relation"]:      [VERB_FAMILY_FINE2ID[x] for x in ["Appartenance", "Lien", "Concerne"]],
+    VERB_FAMILY2ID["Social"]:        [VERB_FAMILY_FINE2ID[x] for x in ["Election", "Legislation", "Nomination", "Negociation", "Permission"]],
+    VERB_FAMILY2ID["State_Change"]:  [VERB_FAMILY_FINE2ID[x] for x in ["Debut", "Fin", "Transformation", "Nomination"]],
+    VERB_FAMILY2ID["Temporal"]:      [VERB_FAMILY_FINE2ID[x] for x in ["Debut", "Duree", "Fin"]],
+}
+
+def build_verb_family_fine_mask() -> "torch.Tensor":
+    import torch
+    mask = torch.zeros(NUM_VERB_FAMILY, NUM_VERB_FAMILY_FINE, dtype=torch.bool)
+    for fam_id, fine_ids in VERB_FAMILY_TO_FINE.items():
+        for f in fine_ids:
+            mask[fam_id, f] = True
+    return mask
+
+VERB_FAMILY_FINE_MASK = build_verb_family_fine_mask()
+
+# ─────────────────────────────────────────────────────────────
+# VERB POLARITY  (prédit sur verb_trigger)
+# ─────────────────────────────────────────────────────────────
+VERB_POLARITY_LABELS  = ["NEGATIVE", "NEUTRAL", "POSITIVE"]
+VERB_POLARITY2ID      = {x: i for i, x in enumerate(VERB_POLARITY_LABELS)}
+ID2VERB_POLARITY      = {i: x for x, i in VERB_POLARITY2ID.items()}
+NUM_VERB_POLARITY     = len(VERB_POLARITY_LABELS)
+VERB_POLARITY_NONE_ID = NUM_VERB_POLARITY   # sentinel = 3
+
+# ─────────────────────────────────────────────────────────────
+# VERB ASPECT  (prédit sur verb_trigger)
+# ─────────────────────────────────────────────────────────────
+VERB_ASPECT_LABELS  = ["DURATIF", "PONCTUEL"]
+VERB_ASPECT2ID      = {x: i for i, x in enumerate(VERB_ASPECT_LABELS)}
+ID2VERB_ASPECT      = {i: x for x, i in VERB_ASPECT2ID.items()}
+NUM_VERB_ASPECT     = len(VERB_ASPECT_LABELS)
+VERB_ASPECT_NONE_ID = NUM_VERB_ASPECT   # sentinel = 2
+
+# ─────────────────────────────────────────────────────────────
+# VERB SOURCE  (prédit sur verb_trigger)
+# ─────────────────────────────────────────────────────────────
+VERB_SOURCE_LABELS  = ["DIRECT", "HYPOTHETICAL", "REPORTED"]
+VERB_SOURCE2ID      = {x: i for i, x in enumerate(VERB_SOURCE_LABELS)}
+ID2VERB_SOURCE      = {i: x for x, i in VERB_SOURCE2ID.items()}
+NUM_VERB_SOURCE     = len(VERB_SOURCE_LABELS)
+VERB_SOURCE_NONE_ID = NUM_VERB_SOURCE   # sentinel = 3
+

@@ -241,4 +241,3 @@ def create_weighting(mode: str, initial_lambdas: Dict[str, float],
         raise ValueError(f"Unknown loss weighting mode: {mode}")
 
 
-

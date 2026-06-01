@@ -48,6 +48,8 @@ def main():
                         help="Version dataset (défaut : lu dans launch_training.py)")
     parser.add_argument("--n", type=int, default=100,
                         help="Nombre de phrases par split (défaut : 100)")
+    parser.add_argument("--config", default="configs/local-test.json",
+                        help="Config JSON à utiliser (défaut : configs/local-test.json)")
     args = parser.parse_args()
 
     # Lire GOLD_VERSION depuis launch_training.py si non fourni
@@ -73,10 +75,10 @@ def main():
     mini_version = make_mini(gold_version, args.n)
 
     # 2. Lancer le training local
-    print(f"\n🚀 Lancement training (2 epochs CPU, config local-test)...")
+    print(f"\n🚀 Lancement training (config: {args.config})...")
     cmd = [
         sys.executable, str(BASE / "run_training.py"),
-        "--config",       "configs/local-test.json",
+        "--config",       args.config,
         "--gold-version", mini_version,
         "--device",       "cpu",
     ]

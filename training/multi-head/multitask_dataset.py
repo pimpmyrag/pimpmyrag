@@ -7,7 +7,10 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset
 
-from labels import SVO_NONE_ID, SYN_NONE_ID, ROLE_NONE_ID, ROLE2ID, VOICE_NONE_ID, CERTAINTY_NONE_ID, GENDER_NONE_ID, NUMBER_NONE_ID, PERSON_NONE_ID, ROLE_COARSE_NONE_ID, ROLE_OBLIQUE_NONE_ID
+from labels import (SVO_NONE_ID, SYN_NONE_ID, ROLE_NONE_ID, ROLE2ID, VOICE_NONE_ID, CERTAINTY_NONE_ID,
+                    GENDER_NONE_ID, NUMBER_NONE_ID, PERSON_NONE_ID, ROLE_COARSE_NONE_ID, ROLE_OBLIQUE_NONE_ID,
+                    VERB_FAMILY_NONE_ID, VERB_FAMILY_FINE_NONE_ID, VERB_POLARITY_NONE_ID,
+                    VERB_ASPECT_NONE_ID, VERB_SOURCE_NONE_ID)
 
 
 class MultiTaskSpanDataset(Dataset):
@@ -97,6 +100,12 @@ class MultiTaskSpanDataset(Dataset):
                                          if c.get("gov_verb_tok_start", -1) >= 0 else -1,
                 "mod_of_tok_start":      min(c["mod_of_tok_start"] + 1, self.max_length - 1)
                                          if c.get("mod_of_tok_start", -1) >= 0 else -1,
+                # verbfam labels (verb_trigger uniquement ; NONE_ID pour les autres spans)
+                "verb_family_label_id":      c.get("verb_family_label_id", VERB_FAMILY_NONE_ID),
+                "verb_family_fine_label_id": c.get("verb_family_fine_label_id", VERB_FAMILY_FINE_NONE_ID),
+                "verb_polarity_label_id":    c.get("verb_polarity_label_id", VERB_POLARITY_NONE_ID),
+                "verb_aspect_label_id":      c.get("verb_aspect_label_id", VERB_ASPECT_NONE_ID),
+                "verb_source_label_id":      c.get("verb_source_label_id", VERB_SOURCE_NONE_ID),
                 "sample_weight":         c.get("sample_weight", 1.0),
                 "neg_type":              c.get("neg_type", "unknown"),
             })
@@ -142,6 +151,11 @@ class CollateFn:
         number_labels = []
         person_labels = []
         gov_verb_labels = []
+        verb_family_labels      = []
+        verb_family_fine_labels = []
+        verb_polarity_labels    = []
+        verb_aspect_labels      = []
+        verb_source_labels      = []
         sample_weights = []
 
         ids = []
@@ -188,6 +202,11 @@ class CollateFn:
                 number_labels.append(c.get("number_label_id", NUMBER_NONE_ID))
                 person_labels.append(c.get("person_label_id", PERSON_NONE_ID))
                 gov_verb_labels.append(c.get("gov_verb_tok_start", -1))
+                verb_family_labels.append(c.get("verb_family_label_id", VERB_FAMILY_NONE_ID))
+                verb_family_fine_labels.append(c.get("verb_family_fine_label_id", VERB_FAMILY_FINE_NONE_ID))
+                verb_polarity_labels.append(c.get("verb_polarity_label_id", VERB_POLARITY_NONE_ID))
+                verb_aspect_labels.append(c.get("verb_aspect_label_id", VERB_ASPECT_NONE_ID))
+                verb_source_labels.append(c.get("verb_source_label_id", VERB_SOURCE_NONE_ID))
                 sample_weights.append(c.get("sample_weight", 1.0))
 
             spans.append(sample_spans)
@@ -211,6 +230,11 @@ class CollateFn:
             "number_labels":        torch.tensor(number_labels,       dtype=torch.long),
             "person_labels":        torch.tensor(person_labels,       dtype=torch.long),
             "gov_verb_labels":      torch.tensor(gov_verb_labels,     dtype=torch.long),
+            "verb_family_labels":      torch.tensor(verb_family_labels,      dtype=torch.long),
+            "verb_family_fine_labels": torch.tensor(verb_family_fine_labels, dtype=torch.long),
+            "verb_polarity_labels":    torch.tensor(verb_polarity_labels,    dtype=torch.long),
+            "verb_aspect_labels":      torch.tensor(verb_aspect_labels,      dtype=torch.long),
+            "verb_source_labels":      torch.tensor(verb_source_labels,      dtype=torch.long),
             "sample_weights":       torch.tensor(sample_weights,      dtype=torch.float32),
             "invalid_candidate_count": invalid_candidate_count,
         }

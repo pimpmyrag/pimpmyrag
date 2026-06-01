@@ -56,28 +56,29 @@ def ner_pred_to_span(pred: dict) -> dict:
 
 
 def load_model_and_tokenizer_compat(model_name, checkpoint_path, tokenizer_path, device):
-    """Comme load_model_and_tokenizer mais avec strict=False pour compatibilité checkpoint ancien."""
-    try:
-        model, tokenizer = _load_model_and_tokenizer(model_name, checkpoint_path, tokenizer_path, device)
-        return model, tokenizer
-    except RuntimeError as e:
-        if "Missing key" not in str(e) and "Unexpected key" not in str(e):
-            raise
-        print(f"[INFER] ⚠️  Chargement strict échoué ({e})")
-        print("[INFER]    → Rechargement avec strict=False (heads manquantes initialisées aléatoirement)")
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path or model_name, use_fast=True)
-        if getattr(tokenizer, "model_max_length", None) is None or tokenizer.model_max_length > 100000:
-            tokenizer.model_max_length = 128
-        model = SpanMultiTaskModel(model_name=model_name).to(device).float()
-        ckpt = torch.load(checkpoint_path, map_location=device)
-        state = ckpt["model_state"] if isinstance(ckpt, dict) and "model_state" in ckpt else ckpt
-        missing, unexpected = model.load_state_dict(state, strict=False)
-        if missing:
-            print(f"[INFER]    Clés manquantes (ignorées) : {missing}")
-        if unexpected:
-            print(f"[INFER]    Clés inattendues (ignorées) : {unexpected}")
-        model.eval()
-        return model, tokenizer
+    """Chargement avec filtrage des shape mismatches (ex: gender_head 3->2 classes)."""
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path or model_name, use_fast=True)
+    if getattr(tokenizer, "model_max_length", None) is None or tokenizer.model_max_length > 100000:
+        tokenizer.model_max_length = 128
+
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    state = ckpt["model_state"] if isinstance(ckpt, dict) and "model_state" in ckpt else ckpt
+    num_coarse = state["coarse_head.weight"].shape[0]
+
+    model = SpanMultiTaskModel(model_name=model_name, num_coarse=num_coarse).to(device).float()
+
+    # Supprimer les clés avec shape mismatch (ex: gender_head 3->2)
+    model_shapes = {k: v.shape for k, v in model.state_dict().items()}
+    for key in list(state.keys()):
+        if key in model_shapes and state[key].shape != model_shapes[key]:
+            print(f"[INFER] Shape mismatch ignoré : {key} {state[key].shape} → {model_shapes[key]}")
+            del state[key]
+
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if missing:
+        print(f"[INFER] Clés manquantes (ignorées) : {len(missing)}")
+    model.eval()
+    return model, tokenizer
 
 
 # ─────────────────────────────────────────────────────────────────────────────

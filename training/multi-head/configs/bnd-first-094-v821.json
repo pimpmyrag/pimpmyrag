@@ -1,0 +1,135 @@
+{
+  "_comment": "boundary_first agressif — coarse/fine rampent uniquement quand boundary ≥ 0.94 — v8.21_verbfam — role simple 12 labels (role_coarse/role_oblique supprimés)",
+  "_version": "bnd-first-094-v821",
+  "_rationale": [
+    "Observation clé : svo-v819 (0527) ep2=0.897 ep3=0.927 ep5=0.941 = convergence rapide.",
+    "Observation clé : bnd-fine-balanced (0531) ep3=0.910 ep5=0.928 = même pattern.",
+    "Commun aux 2 runs : boundary_first=true + hard_negatives every_n_epochs=1.",
+    "Curriculum = pas le facteur (confirmé par l'utilisateur).",
+    "Ce run : unlock_threshold=0.94 (vs 0.88/0.92 avant) — coarse/fine attendent boundary≥0.94.",
+    "Warmup coarse/fine très faible (0.05/0.15) pendant la phase boundary seul.",
+    "Une fois boundary≥0.94 : fine rampe vers 1.8 en 5 epochs (focal γ=1.5 pour classes dures).",
+    "Hard negatives chaque epoch : boost FP boundary → precision monte vite.",
+    "role_coarse cassé (0.23 max) → restauré tête role simple 12 labels (SUBJECT/OBJECT/OBLIQUE*/APPOS/NONE).",
+    "deberta-v3-base BS=160 sur A100-80GB → ~2 min/epoch."
+  ],
+
+  "run": {
+    "name_suffix": "bnd-first-094-v821",
+    "max_epochs": 60,
+    "model": "microsoft/deberta-v3-base",
+    "loss_weighting": "fixed",
+    "ner_only_bench": false
+  },
+
+  "optimizer": {
+    "lr": 8e-6,
+    "head_lr_multiplier": 4.0,
+    "warmup_epochs": 0,
+    "max_grad_norm": 1.0,
+    "layer_lr_decay": 0.9,
+    "ema_decay": 0.999,
+    "class_weight_power": 0.5
+  },
+
+  "lambdas": {
+    "_comment": "boundary=5 seul actif phase 1. coarse/fine montent après unlock≥0.94. role=tête simple 12 labels (role_coarse/role_oblique désactivés).",
+    "boundary":          5.0,
+    "coarse":            0.75,
+    "fine":              1.8,
+    "svo_boundary":      0.35,
+    "svo":               0.70,
+    "role":              0.70,
+    "role_coarse":       0.0,
+    "role_oblique":      0.0,
+    "voice":             0.15,
+    "certainty":         0.30,
+    "morpho":            0.10,
+    "verb_ptr":          0.50,
+    "verb_family":       0.20,
+    "verb_family_fine":  0.10,
+    "compat":            0.20
+  },
+
+  "focal": {
+    "boundary_gamma":  0.5,
+    "fine_gamma":      1.5,
+    "coarse_gamma":    0.0
+  },
+
+  "boundary_first": {
+    "_comment": "unlock à 0.94 — plus haut que bnd-fine-balanced (0.88) et svo-v819 (0.92)",
+    "enabled": true,
+    "unlock_threshold":     0.94,
+    "unlock_ramp_epochs":   5,
+    "coarse_warmup_lambda": 0.05,
+    "fine_warmup_lambda":   0.15
+  },
+
+  "svo_cascade": {
+    "role_coarse_bnd_thr":       0.90,
+    "role_coarse_warmup_lambda": 0.40,
+    "role_ramp_epochs":          2,
+    "role_thr_svo_bnd":          0.88,
+    "phase2_ramp_epochs":        4,
+    "oblique_thr_role_crs":      0.45,
+    "oblique_ramp_epochs":       10
+  },
+
+  "boundary_rescue": {
+    "window":            5,
+    "target":            0.92,
+    "min_delta":         0.003,
+    "factor_vptr_voice": 0.65,
+    "factor_coarse":     0.75,
+    "bnd_boost":         1.20
+  },
+
+  "boundary_plateau": {
+    "window":            5,
+    "min_delta":         0.003,
+    "regression_window": 3,
+    "regression_delta":  0.008
+  },
+
+  "hard_negatives": {
+    "_comment": "Chaque epoch — clé de la convergence rapide (svo-v819 + bnd-fine-balanced)",
+    "every_n_epochs": 1,
+    "decay":          0.85,
+    "max_weight":     8.0,
+    "min_weight":     0.3,
+    "boost_fp":       5.0,
+    "boost_fn":       2.0,
+    "boost_coarse":   2.5,
+    "boost_fine":     3.0,
+    "boost_fp_svo":   3.0,
+    "boost_fn_svo":   2.0,
+    "boost_role_coarse": 2.5
+  },
+
+  "difficulty_levels": {
+    "_comment": "Full data dès ep1 — curriculum pas le facteur (confirmé)",
+    "names":         ["full"],
+    "hard_per_gold": [6],
+    "soft_factors":  [1.0],
+    "max_epochs_per_level":   999,
+    "min_delta_for_progress": 0.0,
+    "patience": 999
+  },
+
+  "early_stopping": {
+    "patience": 0,
+    "min_delta": 0.0
+  },
+
+  "hardware": {
+    "h100_80gb":  {"bs": 256, "accum": 1, "workers": 12},
+    "l40s_48gb":  {"bs": 192, "accum": 1, "workers": 12},
+    "a100_40gb":  {"bs": 160, "accum": 1, "workers": 10},
+    "a100_80gb":  {"bs": 192, "accum": 1, "workers": 12},
+    "rtx_4090":   {"bs": 128, "accum": 1, "workers": 10},
+    "rtx_3090":   {"bs":  96, "accum": 1, "workers": 4},
+    "default":    {"bs":  16, "accum": 2, "workers": 0}
+  }
+}
+

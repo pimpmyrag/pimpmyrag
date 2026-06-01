@@ -448,7 +448,7 @@ def main():
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn, pin_memory=pin_memory)
     test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn, pin_memory=pin_memory)
 
-    model = SpanMultiTaskModel(model_name=args.model_name).to(device).float()
+    model = SpanMultiTaskModel(model_name=args.model_name, num_coarse=len(COARSE_LABELS)).to(device).float()
     optimizer = AdamW(model.parameters(), lr=args.lr)
 
     boundary_w = coarse_w = fine_w = None

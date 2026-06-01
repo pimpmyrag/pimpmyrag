@@ -194,13 +194,13 @@ def load_model_and_tokenizer(model_name: str, checkpoint_path: str, tokenizer_pa
     if getattr(tokenizer, "model_max_length", None) is None or tokenizer.model_max_length > 100000:
         tokenizer.model_max_length = 128
 
-    model = SpanMultiTaskModel(model_name=model_name).to(device).float()
+    # ✅ Lire num_coarse depuis le checkpoint pour éviter mismatch
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    state = ckpt["model_state"] if isinstance(ckpt, dict) and "model_state" in ckpt else ckpt
+    num_coarse = state["coarse_head.weight"].shape[0]
 
-    ckpt = torch.load(checkpoint_path, map_location=device)
-    if isinstance(ckpt, dict) and "model_state" in ckpt:
-        model.load_state_dict(ckpt["model_state"])
-    else:
-        model.load_state_dict(ckpt)
+    model = SpanMultiTaskModel(model_name=model_name, num_coarse=num_coarse).to(device).float()
+    model.load_state_dict(state)
 
     model.eval()
     return model, tokenizer

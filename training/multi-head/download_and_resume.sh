@@ -26,10 +26,18 @@ print(f"  ✅ checkpoint_best_multitask.pt téléchargé ({sz:.1f}GB)")
 PYEOF
 
 echo "🚀 Reprise training ep61→80 avec START_LEVEL=5 (SVO 100%)"
+
+# DVC pull des datasets
+echo "📦 DVC pull des datasets..."
+pip install -q dvc dvc-s3 2>/dev/null || true
+dvc remote add -d -f r2 s3://pimpmyrag-data/dvc-storage
+dvc remote modify r2 endpointurl "$DVC_R2_ENDPOINT"
+dvc pull data/train_v8.1.jsonl.dvc data/val_v8.1.jsonl.dvc data/test_v8.1.jsonl.dvc
+
+# Lancer le training directement
 export START_LEVEL=5
 export START_EPOCH=61
 export KEEP_CHECKPOINT=1
 export MAX_EPOCHS=80
-export R2_CKPT="$R2_CKPT"
-./setup_runpod.sh
+./run_adaptive_training.sh
 

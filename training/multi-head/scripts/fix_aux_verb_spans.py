@@ -93,7 +93,9 @@ def extend_span_stanza(sentence_text: str, span_start: int, span_end: int) -> tu
     # Trouver le(s) token(s) qui se superposent au span
     aux_tokens = []
     for word in sent.words:
-        # Chevauchement avec le span
+        # Chevauchement avec le span (start_char peut être None sur certains tokens Stanza)
+        if word.start_char is None or word.end_char is None:
+            continue
         if word.start_char < span_end and word.end_char > span_start:
             aux_tokens.append(word)
 
@@ -118,7 +120,9 @@ def extend_span_stanza(sentence_text: str, span_start: int, span_end: int) -> tu
 
         head_word = sent.words[head_id - 1]
 
-        # Le head doit être un VERB ou AUX avec VerbForm=Part/Inf
+        # Vérifier que head a des offsets valides
+        if head_word.start_char is None or head_word.end_char is None:
+            continue
         if head_word.upos not in ("VERB", "AUX"):
             continue
 

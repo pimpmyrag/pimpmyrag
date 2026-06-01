@@ -23,6 +23,12 @@ from labels import (
     GENDER2ID, GENDER_NONE_ID,
     NUMBER2ID, NUMBER_NONE_ID,
     PERSON2ID, PERSON_NONE_ID,
+    # VerbFam
+    VERB_FAMILY2ID, VERB_FAMILY_NONE_ID,
+    VERB_FAMILY_FINE2ID, VERB_FAMILY_FINE_NONE_ID,
+    VERB_POLARITY2ID, VERB_POLARITY_NONE_ID,
+    VERB_ASPECT2ID, VERB_ASPECT_NONE_ID,
+    VERB_SOURCE2ID, VERB_SOURCE_NONE_ID,
     # compat aliases
     SVO2ID, SVO_NONE_ID, ALL_SVO_LABELS,
 )
@@ -107,11 +113,22 @@ def build_gold_candidates(row, tokenizer):
             # Voice + certainty sur verb_trigger
             voice_id     = VOICE_NONE_ID
             certainty_id = CERTAINTY_NONE_ID
+            # VerbFam (verb_trigger uniquement)
+            vfam_id      = VERB_FAMILY_NONE_ID
+            vfam_fine_id = VERB_FAMILY_FINE_NONE_ID
+            vpol_id      = VERB_POLARITY_NONE_ID
+            vasp_id      = VERB_ASPECT_NONE_ID
+            vsrc_id      = VERB_SOURCE_NONE_ID
             if label == "verb_trigger":
                 voice_str = sp.get("voice", "")
                 voice_id  = VOICE2ID.get(voice_str, VOICE_NONE_ID)
                 cert_str  = sp.get("certainty", "")
                 certainty_id = CERTAINTY2ID.get(cert_str, CERTAINTY_NONE_ID)
+                vfam_id      = VERB_FAMILY2ID.get(sp.get("verb_family", ""), VERB_FAMILY_NONE_ID)
+                vfam_fine_id = VERB_FAMILY_FINE2ID.get(sp.get("verb_family_fine", ""), VERB_FAMILY_FINE_NONE_ID)
+                vpol_id      = VERB_POLARITY2ID.get(sp.get("verb_polarity", ""), VERB_POLARITY_NONE_ID)
+                vasp_id      = VERB_ASPECT2ID.get(sp.get("verb_aspect", ""), VERB_ASPECT_NONE_ID)
+                vsrc_id      = VERB_SOURCE2ID.get(sp.get("verb_source", ""), VERB_SOURCE_NONE_ID)
 
             # Rôle SVO du pronom + gov_verb_tok_start
             role_id          = ROLE2ID.get(sp.get("svo_role", "NONE"), ROLE_NONE_ID)
@@ -140,13 +157,19 @@ def build_gold_candidates(row, tokenizer):
                 "role_label_id":       role_id,
                 "role_coarse_label_id": role_coarse_id,
                 "role_oblique_label_id": ROLE_OBLIQUE_NONE_ID,  # syn spans = non-oblique
-                "voice_label_id":      voice_id,     # FIX: était absent → VOICE_NONE_ID forcé
+                "voice_label_id":      voice_id,
                 "certainty_label_id":  certainty_id,
                 "gender_label_id":     GENDER2ID.get(sp.get("gender"), GENDER_NONE_ID),
                 "number_label_id":     NUMBER2ID.get(sp.get("number"), NUMBER_NONE_ID),
                 "person_label_id":     person_id,
                 "gov_verb_tok_start":  gov_verb_tok_start,
                 "mod_of_tok_start":    -1,
+                # VerbFam
+                "verb_family_label_id":      vfam_id,
+                "verb_family_fine_label_id": vfam_fine_id,
+                "verb_polarity_label_id":    vpol_id,
+                "verb_aspect_label_id":      vasp_id,
+                "verb_source_label_id":      vsrc_id,
                 "neg_type":            "syn_gold",
                 "sample_weight":       1.0,
                 "text":                sp.get("text", text[start:end]),
@@ -219,9 +242,15 @@ def build_gold_candidates(row, tokenizer):
             "certainty_label_id":  CERTAINTY_NONE_ID,
             "gender_label_id":     GENDER2ID.get(sp.get("gender"), GENDER_NONE_ID),
             "number_label_id":     NUMBER2ID.get(sp.get("number"), NUMBER_NONE_ID),
-            "person_label_id":     PERSON_NONE_ID,   # person sur pronoms seulement
+            "person_label_id":     PERSON_NONE_ID,
             "gov_verb_tok_start":  gov_verb_tok_start,
             "mod_of_tok_start":    mod_of_tok_start,
+            # VerbFam : toujours NONE pour les spans NER (ce sont des entités, pas des verbes)
+            "verb_family_label_id":      VERB_FAMILY_NONE_ID,
+            "verb_family_fine_label_id": VERB_FAMILY_FINE_NONE_ID,
+            "verb_polarity_label_id":    VERB_POLARITY_NONE_ID,
+            "verb_aspect_label_id":      VERB_ASPECT_NONE_ID,
+            "verb_source_label_id":      VERB_SOURCE_NONE_ID,
             "neg_type":            "gold",
             "sample_weight":       1.0,
             "text":                sp.get("text", text[start:end]),
@@ -285,6 +314,12 @@ def _make_negative(neg_type: str, char_start: int, char_end: int,
         "person_label_id":     PERSON_NONE_ID,
         "gov_verb_tok_start":  -1,
         "mod_of_tok_start":    -1,
+        # VerbFam : NONE pour les spans négatifs
+        "verb_family_label_id":      VERB_FAMILY_NONE_ID,
+        "verb_family_fine_label_id": VERB_FAMILY_FINE_NONE_ID,
+        "verb_polarity_label_id":    VERB_POLARITY_NONE_ID,
+        "verb_aspect_label_id":      VERB_ASPECT_NONE_ID,
+        "verb_source_label_id":      VERB_SOURCE_NONE_ID,
         "neg_type":            neg_type,
         "sample_weight":       weight,
         "text":                None,

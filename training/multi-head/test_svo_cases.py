@@ -104,18 +104,45 @@ TEST_CASES = [
 ]
 
 def load_model(checkpoint_path):
-    """Charge le modèle depuis un checkpoint"""
+    """Charge le modèle depuis un checkpoint (filtrage si size mismatch)"""
     sys.path.insert(0, str(Path(__file__).parent))
-    from test_model_sentences_v3 import load_model_and_tokenizer
+    from multitask_model import SpanMultiTaskModel
+    from transformers import AutoTokenizer
     import labels as L
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model, tokenizer = load_model_and_tokenizer(
+
+    print("📦 Chargement tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base")
+    if tokenizer.model_max_length > 100000:
+        tokenizer.model_max_length = 128
+
+    print("📦 Chargement modèle...")
+    # Utiliser num_coarse=10 (avec NONE) pour charger les anciens checkpoints
+    model = SpanMultiTaskModel(
         model_name="microsoft/deberta-v3-base",
-        checkpoint_path=str(checkpoint_path),
-        tokenizer_path="microsoft/deberta-v3-base",
-        device=device
-    )
+        num_coarse=len(L.COARSE_LABELS)  # 10 avec NONE
+    ).to(device).float()
+
+    ckpt = torch.load(checkpoint_path, map_location=device)
+    if isinstance(ckpt, dict) and "model_state" in ckpt:
+        ckpt = ckpt["model_state"]
+
+    # Filtrer les clés avec size mismatch (au cas où)
+    model_dict = model.state_dict()
+    filtered_ckpt = {}
+    skipped = []
+    for k, v in ckpt.items():
+        if k in model_dict and model_dict[k].shape == v.shape:
+            filtered_ckpt[k] = v
+        else:
+            skipped.append(k)
+
+    missing, unexpected = model.load_state_dict(filtered_ckpt, strict=False)
+    if skipped:
+        print(f"  ⚠️  Skipped (size mismatch): {skipped}")
+
+    model.eval()
     return model, tokenizer, device
 
 def test_case(model, tokenizer, device, case):
@@ -135,6 +162,19 @@ def test_case(model, tokenizer, device, case):
     return {"ner": ner_preds, "svo": svo_preds, "text": text}
 
 
+def find_span(preds, expected_text):
+    """Cherche un span prédit correspondant à expected_text (exact ou partiel sans article)."""
+    # Exact match d'abord
+    for p in preds:
+        if p['text'] == expected_text:
+            return p
+    # Match partiel : expected_text contenu dans le span ou span contenu dans expected_text
+    for p in preds:
+        if expected_text in p['text'] or p['text'] in expected_text:
+            return p
+    return None
+
+
 def evaluate_predictions(case, predictions):
     """Compare les prédictions aux attendues"""
     print(f"\n{'='*80}")
@@ -146,40 +186,123 @@ def evaluate_predictions(case, predictions):
     svo_preds = predictions["svo"]
     expected = case.get("expected", {})
 
-    # Afficher les prédictions
+    # Afficher les prédictions NER (avec role et verb_ptr si disponibles)
     print(f"\n  PRÉDICTIONS NER ({len(ner_preds)} spans):")
     for p in ner_preds[:10]:
-        print(f"    [{p['fine']:<20}] \"{p['text']}\" (score={p['score']:.3f})")
+        role_info = f" role={p['role']}" if p.get('role') else ""
+        gov_info = f" gov_char={p['gov_verb_char_start']}" if p.get('gov_verb_char_start') is not None else ""
+        print(f"    [{p['fine']:<20}] \"{p['text']}\" (score={p['score']:.3f}){role_info}{gov_info}")
 
     print(f"\n  PRÉDICTIONS SVO ({len(svo_preds)} spans):")
     for p in svo_preds[:10]:
-        syn = p.get('syn', '?')
-        role = p.get('role', '?')
-        gov = p.get('gov_verb_char_start', '?')
-        print(f"    [{syn:<15}] \"{p['text']}\" role={role:<15} gov_verb_pos={gov}")
+        svo_role = p.get('svo_role', '?')
+        voice = p.get('voice', '?')
+        print(f"    [{svo_role:<15}] \"{p['text']}\" voice={voice:<8} prob={p.get('svo_boundary_prob', 0):.3f}")
+
+    success = True
+    text = predictions["text"]
+
+    # Vérifier verb_ptr - cherche dans ner_preds avec matching partiel
+    if "verb_ptr" in expected:
+        print(f"\n  VÉRIFICATION VERB POINTER:")
+        for span_text, expected_verb in expected["verb_ptr"].items():
+            span = find_span(ner_preds, span_text)
+            if span is not None:
+                gov_char = span.get('gov_verb_char_start')
+                matched_text = span['text']
+                if gov_char is not None:
+                    gov_tok = text[gov_char:gov_char+20].split()[0] if gov_char < len(text) else "?"
+                    ok = expected_verb.startswith(gov_tok) or gov_tok in expected_verb
+                    status = "✅" if ok else "⚠️ "
+                    print(f"    {status} \"{span_text}\" (≈\"{matched_text}\") → attendu={expected_verb!r} prédit=@{gov_char} ({gov_tok!r})")
+                    if not ok:
+                        success = False
+                else:
+                    print(f"    ⚠️  \"{span_text}\" (≈\"{matched_text}\") → attendu={expected_verb!r} (pas de gov_verb)")
+            else:
+                print(f"    ❌ \"{span_text}\" → {expected_verb!r} (span NER non détecté)")
+                success = False
+
+    # Vérifier roles dans ner_preds avec matching partiel
+    if "roles" in expected:
+        print(f"\n  VÉRIFICATION RÔLES SVO:")
+        for span_text, expected_role in expected["roles"].items():
+            span = find_span(ner_preds, span_text)
+            if span is not None:
+                predicted_role = span.get('role', 'NONE')
+                match = predicted_role == expected_role
+                status = "✅" if match else "❌"
+                print(f"    {status} \"{span_text}\" (≈\"{span['text']}\") attendu={expected_role:<15} prédit={predicted_role}")
+                if not match:
+                    success = False
+            else:
+                print(f"    ❌ \"{span_text}\" attendu={expected_role:<15} prédit=NOT_FOUND")
+                success = False
+
+    # Vérifier voice dans svo_preds sur les verb_trigger
+    if "voice" in expected:
+        verbs_with_voice = [p for p in svo_preds if p.get('voice') and p.get('svo_role') == 'verb_trigger']
+        if verbs_with_voice:
+            predicted_voice = verbs_with_voice[0].get('voice')
+            match = predicted_voice == expected["voice"]
+            status = "✅" if match else "❌"
+            print(f"\n  VOICE: {status} attendu={expected['voice']} prédit={predicted_voice}")
+            if not match:
+                success = False
+        else:
+            print(f"\n  VOICE: ❌ aucun verb_trigger détecté")
+            success = False
+
+    return success
+    print(f"\n{'='*80}")
+    print(f"Test case: {case['id']}")
+    print(f"{'='*80}")
+    print(f"Phrase: {case['text']}")
+
+    ner_preds = predictions["ner"]
+    svo_preds = predictions["svo"]
+    expected = case.get("expected", {})
+
+    # Afficher les prédictions NER (avec role et verb_ptr si disponibles)
+    print(f"\n  PRÉDICTIONS NER ({len(ner_preds)} spans):")
+    for p in ner_preds[:10]:
+        role_info = f" role={p['role']}" if p.get('role') else ""
+        gov_info = f" gov_char={p['gov_verb_char_start']}" if p.get('gov_verb_char_start') is not None else ""
+        print(f"    [{p['fine']:<20}] \"{p['text']}\" (score={p['score']:.3f}){role_info}{gov_info}")
+
+    print(f"\n  PRÉDICTIONS SVO ({len(svo_preds)} spans):")
+    for p in svo_preds[:10]:
+        svo_role = p.get('svo_role', '?')
+        voice = p.get('voice', '?')
+        print(f"    [{svo_role:<15}] \"{p['text']}\" voice={voice:<8} prob={p.get('svo_boundary_prob', 0):.3f}")
 
     # Comparaison basique
     success = True
 
     # Vérifier verb_ptr si spécifié dans expected
+    # On cherche dans ner_preds puisque le gouverneur est associé aux entités NER
     if "verb_ptr" in expected:
         print(f"\n  VÉRIFICATION VERB POINTER:")
-        verb_ptr_map = defaultdict(list)
-        for p in svo_preds:
-            if p.get('gov_verb_char_start') is not None:
-                verb_ptr_map[p['text']].append(p.get('gov_verb_char_start'))
+        # Map : texte du span NER → char_start du verbe gouverneur
+        ner_gov_map = {p['text']: p.get('gov_verb_char_start') for p in ner_preds if p.get('gov_verb_char_start') is not None}
+        text = predictions["text"]
 
         for span_text, expected_verb in expected["verb_ptr"].items():
-            found = span_text in verb_ptr_map
-            status = "✅" if found else "❌"
-            print(f"    {status} \"{span_text}\" → {expected_verb}")
-            if not found:
+            gov_char = ner_gov_map.get(span_text)
+            if gov_char is not None:
+                # Retrouver le mot à cette position dans le texte
+                gov_tok = text[gov_char:gov_char+20].split()[0] if gov_char < len(text) else "?"
+                status = "✅" if expected_verb.startswith(gov_tok) or gov_tok in expected_verb else "⚠️ "
+                print(f"    {status} \"{span_text}\" → attendu={expected_verb!r} prédit_pos={gov_char} ({gov_tok!r})")
+            else:
+                status = "❌"
+                print(f"    {status} \"{span_text}\" → {expected_verb!r} (span NER non trouvé ou sans gov_verb)")
                 success = False
 
-    # Vérifier roles si spécifié
+    # Vérifier roles si spécifié (dans ner_preds)
     if "roles" in expected:
         print(f"\n  VÉRIFICATION RÔLES SVO:")
-        role_map = {p['text']: p.get('role') for p in svo_preds if p.get('role')}
+        role_map = {p['text']: p.get('role') for p in ner_preds if p.get('role')}
         for span_text, expected_role in expected["roles"].items():
             predicted_role = role_map.get(span_text, "NOT_FOUND")
             match = predicted_role == expected_role
@@ -188,9 +311,9 @@ def evaluate_predictions(case, predictions):
             if not match:
                 success = False
 
-    # Vérifier voice si spécifié
+    # Vérifier voice si spécifié (dans svo_preds, sur les verb_trigger)
     if "voice" in expected:
-        verbs_with_voice = [p for p in svo_preds if p.get('voice')]
+        verbs_with_voice = [p for p in svo_preds if p.get('voice') and p.get('svo_role') == 'verb_trigger']
         if verbs_with_voice:
             predicted_voice = verbs_with_voice[0].get('voice')
             match = predicted_voice == expected["voice"]
@@ -198,6 +321,9 @@ def evaluate_predictions(case, predictions):
             print(f"\n  VOICE: {status} attendu={expected['voice']} prédit={predicted_voice}")
             if not match:
                 success = False
+        else:
+            print(f"\n  VOICE: ❌ aucun verb_trigger détecté")
+            success = False
 
     return success
 

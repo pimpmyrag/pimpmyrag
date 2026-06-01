@@ -148,7 +148,7 @@ class OnnxSpanMultiTaskWrapper(nn.Module):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", required=True, help="Chemin vers best_model_multitask.pt")
-    ap.add_argument("--model-name", default="microsoft/mdeberta-v3-base")
+    ap.add_argument("--model-name", default="microsoft/deberta-v3-base")
     ap.add_argument("--output", default="best_model_multitask.onnx")
     ap.add_argument("--opset", type=int, default=17)
     ap.add_argument("--seq-len", type=int, default=128)
@@ -157,9 +157,11 @@ def main():
 
     device = "cpu"
     print(f"Chargement du checkpoint : {args.checkpoint}")
-    inner = SpanMultiTaskModel(model_name=args.model_name).to(device).float()
-    ckpt = torch.load(args.checkpoint, map_location=device)
+    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
     state = ckpt["model_state"] if isinstance(ckpt, dict) and "model_state" in ckpt else ckpt
+    num_coarse = state["coarse_head.weight"].shape[0]
+    print(f"   num_coarse={num_coarse} (détecté depuis checkpoint)")
+    inner = SpanMultiTaskModel(model_name=args.model_name, num_coarse=num_coarse).to(device).float()
     inner.load_state_dict(state)
     inner.eval()
 

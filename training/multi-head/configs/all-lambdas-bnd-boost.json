@@ -1,14 +1,14 @@
 {
-  "_comment": "Full direct — boundary boosté (10) + fine boosté (1.5) + focal fine + EMA → viser bnd>0.92 ET fine>0.84",
+  "_comment": "Full direct — boundary=5 (inchangé) + fine boosté (1.5) + focal fine γ=1.5 + EMA → viser bnd>0.91 ET fine>0.84",
   "_version": "all-lambdas-bnd-boost",
   "_rationale": [
-    "Constat : all-lambdas-1 (0527) → fine plateau à 0.797 dès ep5 car lambda_fine=0.5 trop faible (ratio 10:1 vs boundary).",
+    "Constat run 0601 : lambda_boundary=10 trop fort → fine=0.026 ep1 au lieu de 0.664 (même effet que boundary_first implicite).",
+    "Constat all-lambdas-1 (0527) : lambda=5 → boundary=0.908 ep8, fine=0.796 ep8 mais PLATEAU dès ep5.",
     "Classes dures bloquées : state=0.524, notion=0.625, field=0.652, object_name=0.645.",
-    "Fix plateau : lambda_fine 0.5→1.5 + focal fine_gamma=1.5 pour forcer les classes difficiles.",
-    "Fix boundary : lambda_boundary=10 + EMA=0.999 + lr=8e-6 (vs 5/0.0/1e-5 avant).",
-    "Ratio boundary/fine = 10/1.5 = 6.7:1 → boundary dominant mais fine a assez de gradient.",
-    "Full direct (boundary_first=false) — pas de deux phases, tout actif dès ep1.",
-    "Attendu : bnd>0.91 + fine>0.84 en 20-30 epochs."
+    "Fix UNIQUEMENT : lambda_fine 0.5→1.5 + focal fine_gamma=1.5 pour passer le plateau.",
+    "Boundary lambda=5 inchangé car il marchait déjà bien (0.908 ep8).",
+    "EMA=0.999 + lr=8e-6 pour stabiliser (vs 1e-5 avant).",
+    "Attendu : bnd~0.91 ep8 + fine>0.84 ep15-20 sans plateau."
   ],
 
   "run": {

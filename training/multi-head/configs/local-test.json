@@ -1,5 +1,5 @@
 {
-  "_comment": "Config de test local rapide — 2 epochs CPU/MPS, pas de RunPod. Usage : python3 test_local_launch.py",
+  "_comment": "Config de test local rapide — 2 epochs CPU/MPS, pas de RunPod. Usage : python3 test_local_launch.py. role simple 12 labels (role_coarse/role_oblique désactivés).",
   "_version": "local-test",
 
   "run": {
@@ -21,18 +21,21 @@
   },
 
   "lambdas": {
-    "boundary":     4.0,
-    "coarse":       0.75,
-    "fine":         1.8,
-    "svo_boundary": 0.55,
-    "svo":          0.70,
-    "role_coarse":  0.55,
-    "role_oblique": 0.20,
-    "voice":        0.15,
-    "certainty":    0.30,
-    "morpho":       0.10,
-    "verb_ptr":     0.60,
-    "compat":       0.2
+    "boundary":         4.0,
+    "coarse":           0.75,
+    "fine":             1.8,
+    "svo_boundary":     0.55,
+    "svo":              0.70,
+    "role":             0.70,
+    "role_coarse":      0.0,
+    "role_oblique":     0.0,
+    "voice":            0.15,
+    "certainty":        0.30,
+    "morpho":           0.10,
+    "verb_ptr":         0.60,
+    "verb_family":      0.20,
+    "verb_family_fine": 0.10,
+    "compat":           0.2
   },
 
   "focal": {

@@ -7,18 +7,23 @@ import torch.nn.functional as F
 from transformers import AutoModel
 from labels import (
     NUM_FINE, NUM_SYN, NUM_VOICE, NUM_CERTAINTY,
-    NUM_ROLE, ROLE_NONE_ID,                          # ← ancienne tête role (12 labels)
+    NUM_ROLE, ROLE_NONE_ID,
     NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID, ROLE_COARSE_OTHER_ID,
     NUM_ROLE_OBLIQUE, ROLE_OBLIQUE_NONE_ID,
     NUM_GENDER, NUM_NUMBER, NUM_PERSON,
     SYN_NONE_ID, VOICE_NONE_ID, CERTAINTY_NONE_ID,
     COARSE_NONE_ID,
     build_coarse_to_fine_mask,
-    # coarse dérivée depuis role_head
     ROLE_DERIVED_SUBJ_IDS, ROLE_DERIVED_OBJ_IDS,
     ROLE_DERIVED_OBLIQ_IDS, ROLE_DERIVED_APPOS_IDS,
-    # compat
     NUM_SVO,
+    # VerbFam
+    NUM_VERB_FAMILY, VERB_FAMILY_NONE_ID,
+    NUM_VERB_FAMILY_FINE, VERB_FAMILY_FINE_NONE_ID,
+    NUM_VERB_POLARITY, VERB_POLARITY_NONE_ID,
+    NUM_VERB_ASPECT, VERB_ASPECT_NONE_ID,
+    NUM_VERB_SOURCE, VERB_SOURCE_NONE_ID,
+    VERB_FAMILY_FINE_MASK,
 )
 
 
@@ -77,13 +82,24 @@ class SpanMultiTaskModel(nn.Module):
         # Timing OK : L_ROLE_OBLIQUE_NOW=0 jusqu'à ep26 (ramp role_progress) → bruit early epochs sans coût.
         self.ner_fine_to_oblique = nn.Linear(num_fine, span_hidden_dim, bias=False)
         self.role_oblique_head = nn.Linear(span_hidden_dim, NUM_ROLE_OBLIQUE)
-        self.voice_head        = nn.Linear(span_hidden_dim, NUM_VOICE)       # active/passive sur verb_trigger
-        self.certainty_head    = nn.Linear(span_hidden_dim, NUM_CERTAINTY)   # certain/modal/denied
+        self.voice_head        = nn.Linear(span_hidden_dim, NUM_VOICE)
+        self.certainty_head    = nn.Linear(span_hidden_dim, NUM_CERTAINTY)
 
         # Morpho
         self.gender_head  = nn.Linear(span_hidden_dim, NUM_GENDER)
         self.number_head  = nn.Linear(span_hidden_dim, NUM_NUMBER)
         self.person_head  = nn.Linear(span_hidden_dim, NUM_PERSON)
+
+        # ── VerbFam heads (verb_trigger uniquement) ───────────────────────────
+        # verb_family (12) → soft mask → verb_family_fine (38)
+        # verb_polarity (3), verb_aspect (2), verb_source (3) : indépendants
+        self.verb_family_head      = nn.Linear(span_hidden_dim, NUM_VERB_FAMILY)
+        self.verb_family_fine_head = nn.Linear(span_hidden_dim, NUM_VERB_FAMILY_FINE)
+        self.verb_polarity_head    = nn.Linear(span_hidden_dim, NUM_VERB_POLARITY)
+        self.verb_aspect_head      = nn.Linear(span_hidden_dim, NUM_VERB_ASPECT)
+        self.verb_source_head      = nn.Linear(span_hidden_dim, NUM_VERB_SOURCE)
+        # Masque coarse→fine verbfam (comme NER coarse→fine)
+        self.register_buffer("verb_family_fine_mask", VERB_FAMILY_FINE_MASK)
 
         # Verb pointer
         _ptr_dim = 64
@@ -283,6 +299,21 @@ class SpanMultiTaskModel(nn.Module):
             "number_logits":       self.number_head(span_h),
             "person_logits":       self.person_head(span_h),
             "verb_ptr_logits":     verb_ptr_logits,
+            # ── VerbFam (verb_trigger uniquement) ─────────────────────────────
+            "verb_family_logits":          self.verb_family_head(span_h),
+            "verb_family_fine_logits_raw": self.verb_family_fine_head(span_h),
+            # verb_family_fine masqué par verb_family (soft mask, même pattern que NER coarse→fine)
+            "verb_family_fine_logits": (
+                self.verb_family_fine_head(span_h) +
+                torch.log(
+                    (F.softmax(self.verb_family_head(span_h).detach(), dim=-1)
+                     @ self.verb_family_fine_mask.float()).clamp(min=1e-9)
+                )
+                if N > 0 else self.verb_family_fine_head(span_h)
+            ),
+            "verb_polarity_logits": self.verb_polarity_head(span_h),
+            "verb_aspect_logits":   self.verb_aspect_head(span_h),
+            "verb_source_logits":   self.verb_source_head(span_h),
             # compat alias
             "svo_logits":          self.syn_head(span_h),
         }
@@ -297,7 +328,7 @@ class SpanMultiTaskModel(nn.Module):
             syn_labels,
             role_coarse_labels,
             role_oblique_labels,
-            role_labels,                               # ← ancienne tête (12 labels)
+            role_labels,
             voice_labels,
             certainty_labels,
             gender_labels,
@@ -305,6 +336,12 @@ class SpanMultiTaskModel(nn.Module):
             person_labels,
             gov_verb_labels,
             sample_weights,
+            # verbfam labels (verb_trigger spans uniquement)
+            verb_family_labels=None,
+            verb_family_fine_labels=None,
+            verb_polarity_labels=None,
+            verb_aspect_labels=None,
+            verb_source_labels=None,
             boundary_class_weights=None,
             coarse_class_weights=None,
             fine_class_weights=None,
@@ -318,18 +355,24 @@ class SpanMultiTaskModel(nn.Module):
             lambda_svo=0.5,
             lambda_role_coarse=0.1,
             lambda_role_oblique=0.15,
-            lambda_role=0.0,                           # ← ancienne tête (défaut 0 = désactivée)
+            lambda_role=0.0,
             lambda_voice=0.5,
             lambda_certainty=0.4,
             lambda_morpho=0.3,
             lambda_verb_ptr=0.5,
             lambda_compat=0.0,
+            # verbfam lambdas (désactivés par défaut — activés via config)
+            lambda_verb_family=0.0,
+            lambda_verb_family_fine=0.0,
+            lambda_verb_polarity=0.0,
+            lambda_verb_aspect=0.0,
+            lambda_verb_source=0.0,
             focal_gamma=0.0,
-            focal_coarse_gamma=0.0, # Focal loss sur tête coarse — positifs seulement (≠NONE)
-            focal_fine_gamma=0.0,   # Focal loss sur tête fine (séparé de boundary)
-            focal_role_gamma=0.0,   # kept for API compat, unused
-            ignore_coarse_none=False,  # Si True, exclut spans NONE de la loss coarse (positifs only)
-            weighting=None,  # Dynamic loss weighting module (UncertaintyWeighting / GradNormWeighting)
+            focal_coarse_gamma=0.0,
+            focal_fine_gamma=0.0,
+            focal_role_gamma=0.0,
+            ignore_coarse_none=False,
+            weighting=None,
     ):
         device = outputs["boundary_logits"].device
 
@@ -554,56 +597,95 @@ class SpanMultiTaskModel(nn.Module):
 
         loss_compat = loss_compat_rb + loss_compat_bc
 
+        # ── VerbFam losses (verb_trigger spans uniquement) ────────────────────
+        # Masque : spans dont SVO boundary = 1 (verb_trigger détecté)
+        vt_mask = (svo_boundary_labels == 1)  # [N] bool
+
+        def _verbfam_ce(logits, labels, none_id):
+            """CE loss sur les spans verb_trigger avec label valide (≠ none_id)."""
+            if not vt_mask.any() or labels is None:
+                return torch.tensor(0.0, device=device)
+            m = vt_mask & (labels != none_id)
+            if not m.any():
+                return torch.tensor(0.0, device=device)
+            return F.cross_entropy(logits[m], labels[m], reduction="mean")
+
+        loss_verb_family      = _verbfam_ce(
+            outputs["verb_family_logits"], verb_family_labels, VERB_FAMILY_NONE_ID)
+        loss_verb_family_fine = _verbfam_ce(
+            outputs["verb_family_fine_logits_raw"], verb_family_fine_labels, VERB_FAMILY_FINE_NONE_ID)
+        loss_verb_polarity    = _verbfam_ce(
+            outputs["verb_polarity_logits"], verb_polarity_labels, VERB_POLARITY_NONE_ID)
+        loss_verb_aspect      = _verbfam_ce(
+            outputs["verb_aspect_logits"], verb_aspect_labels, VERB_ASPECT_NONE_ID)
+        loss_verb_source      = _verbfam_ce(
+            outputs["verb_source_logits"], verb_source_labels, VERB_SOURCE_NONE_ID)
+
         # ── Raw losses per task (for dynamic weighting) ─────────────────
         raw_losses = {
-            "boundary":     loss_b,
-            "coarse":       loss_c,
-            "fine":         loss_f,
-            "svo_boundary": loss_svo_b,
-            "svo":          loss_syn,
-            "role_coarse":  loss_role_coarse,
-            "role_oblique": loss_role_oblique,
-            "role":         loss_role,                 # ancienne tête
-            "voice":        loss_voice,
-            "certainty":    loss_cert,
-            "morpho":       loss_gender + loss_number + loss_person,
-            "verb_ptr":     loss_verb_ptr,
-            "compat":       loss_compat,
+            "boundary":          loss_b,
+            "coarse":            loss_c,
+            "fine":              loss_f,
+            "svo_boundary":      loss_svo_b,
+            "svo":               loss_syn,
+            "role_coarse":       loss_role_coarse,
+            "role_oblique":      loss_role_oblique,
+            "role":              loss_role,
+            "voice":             loss_voice,
+            "certainty":         loss_cert,
+            "morpho":            loss_gender + loss_number + loss_person,
+            "verb_ptr":          loss_verb_ptr,
+            "compat":            loss_compat,
+            "verb_family":       loss_verb_family,
+            "verb_family_fine":  loss_verb_family_fine,
+            "verb_polarity":     loss_verb_polarity,
+            "verb_aspect":       loss_verb_aspect,
+            "verb_source":       loss_verb_source,
         }
 
         # ── Total (dynamic or fixed weighting) ────────────────────────────
         if weighting is not None:
             ramp_lambdas = {
-                "boundary":     lambda_boundary,
-                "coarse":       lambda_coarse,
-                "fine":         lambda_fine,
-                "svo_boundary": lambda_svo_boundary,
-                "svo":          lambda_svo,
-                "role_coarse":  lambda_role_coarse,
-                "role_oblique": lambda_role_oblique,
-                "role":         lambda_role,
-                "voice":        lambda_voice,
-                "certainty":    lambda_certainty,
-                "morpho":       lambda_morpho,
-                "verb_ptr":     lambda_verb_ptr,
-                "compat":       lambda_compat,
+                "boundary":         lambda_boundary,
+                "coarse":           lambda_coarse,
+                "fine":             lambda_fine,
+                "svo_boundary":     lambda_svo_boundary,
+                "svo":              lambda_svo,
+                "role_coarse":      lambda_role_coarse,
+                "role_oblique":     lambda_role_oblique,
+                "role":             lambda_role,
+                "voice":            lambda_voice,
+                "certainty":        lambda_certainty,
+                "morpho":           lambda_morpho,
+                "verb_ptr":         lambda_verb_ptr,
+                "compat":           lambda_compat,
+                "verb_family":      lambda_verb_family,
+                "verb_family_fine": lambda_verb_family_fine,
+                "verb_polarity":    lambda_verb_polarity,
+                "verb_aspect":      lambda_verb_aspect,
+                "verb_source":      lambda_verb_source,
             }
             total_loss = weighting.combine(raw_losses, ramp_lambdas)
         else:
             total_loss = (
-                lambda_boundary       * loss_b
-                + lambda_coarse       * loss_c
-                + lambda_fine         * loss_f
-                + lambda_svo_boundary * loss_svo_b
-                + lambda_svo          * loss_syn
-                + lambda_role_coarse  * loss_role_coarse
-                + lambda_role_oblique * loss_role_oblique
-                + lambda_role         * loss_role       # ancienne tête
-                + lambda_voice        * loss_voice
-                + lambda_certainty    * loss_cert
-                + lambda_morpho       * (loss_gender + loss_number + loss_person)
-                + lambda_verb_ptr     * loss_verb_ptr
-                + lambda_compat       * loss_compat
+                lambda_boundary           * loss_b
+                + lambda_coarse           * loss_c
+                + lambda_fine             * loss_f
+                + lambda_svo_boundary     * loss_svo_b
+                + lambda_svo              * loss_syn
+                + lambda_role_coarse      * loss_role_coarse
+                + lambda_role_oblique     * loss_role_oblique
+                + lambda_role             * loss_role
+                + lambda_voice            * loss_voice
+                + lambda_certainty        * loss_cert
+                + lambda_morpho           * (loss_gender + loss_number + loss_person)
+                + lambda_verb_ptr         * loss_verb_ptr
+                + lambda_compat           * loss_compat
+                + lambda_verb_family      * loss_verb_family
+                + lambda_verb_family_fine * loss_verb_family_fine
+                + lambda_verb_polarity    * loss_verb_polarity
+                + lambda_verb_aspect      * loss_verb_aspect
+                + lambda_verb_source      * loss_verb_source
             )
 
         return {
@@ -618,6 +700,7 @@ class SpanMultiTaskModel(nn.Module):
             "num_positive_spans":   int(pos_mask.sum().item()),
             "num_syn_spans":        int(syn_mask.sum().item()),
             "num_oblique_spans":    int(ro_mask.sum().item()),
+            "num_vt_spans":         int(vt_mask.sum().item()),
         }
 
 

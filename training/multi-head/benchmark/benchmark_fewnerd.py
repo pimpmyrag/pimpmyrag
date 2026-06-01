@@ -106,6 +106,16 @@ OUR_FINE_TO_COARSE = {
     "hint_percentage":"VALUE","hint_rate":"VALUE",
 }
 
+def nms_longest(preds):
+    """NMS qui préfère le span le plus long parmi les overlaps."""
+    candidates = sorted(preds, key=lambda x: (-(x[1]-x[0]), -x[4]))
+    kept = []
+    for ps, pe, pt, ptext, score in candidates:
+        overlapping = any(min(pe,ke)-max(ps,ks) > 0 for ks,ke,_,__,___ in kept)
+        if not overlapping:
+            kept.append((ps,pe,pt,ptext,score))
+    return kept
+
 def text_overlap(ps,pe,gs,ge):
     return max(0, min(pe,ge)-max(ps,gs))
 
@@ -196,9 +206,9 @@ def main():
                                       tau_boundary=a.tau_boundary, tau_coarse=a.tau_coarse,
                                       tau_fine=0.0, topk_coarse=2)
         for res in results:
-            preds = [(ent["char_start"], ent["char_end"], ent["fine"], ent["text"])
+            preds = [(ent["char_start"], ent["char_end"], ent["fine"], ent["text"], ent.get("score", 1.0))
                      for ent in res["ner"]]
-            pred_all.append(preds)
+            pred_all.append(nms_longest(preds))
         if (i//a.batch_size) % 50 == 0:
             el = max(.01, time.time()-t0)
             print(f"   {i+len(batch):6d}/{len(texts)} ({(i+len(batch))/el:.0f} s/s)")
@@ -213,7 +223,7 @@ def main():
     for golds, preds in zip(gold_all, pred_all):
         for gs,ge,gt,gtext in golds:
             best = None
-            for ps,pe,pt,ptext in preds:
+            for ps,pe,pt,ptext,_ in preds:
                 m = match_quality(ps,pe,ptext,gs,ge,gtext)
                 if m is not None and pt == gt:
                     best = m

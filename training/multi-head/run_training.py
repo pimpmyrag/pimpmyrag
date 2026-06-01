@@ -177,6 +177,8 @@ def compute_lambdas(cfg: dict, state: dict) -> dict:
             "role_coarse":  0.0, "role_oblique": 0.0,
             "voice": 0.0, "certainty": 0.0, "morpho": 0.0,
             "verb_ptr": 0.0, "compat": 0.0,
+            "verb_family": 0.0, "verb_family_fine": 0.0,
+            "verb_polarity": 0.0, "verb_aspect": 0.0, "verb_source": 0.0,
         }
 
     # ── PHASE 1 : Fondations (toujours actives) ─────────────────────────────
@@ -193,7 +195,7 @@ def compute_lambdas(cfg: dict, state: dict) -> dict:
     if rc_trigger_ep is not None:
         rc_ramp_ep    = epoch - rc_trigger_ep
         rc_ramp_total = sc.get("role_ramp_epochs", 2)
-        rc_prog       = min(1.0, max(0.0, rc_ramp_ep / rc_ramp_total))
+        rc_prog       = min(1.0, max(0.0, rc_ramp_ep / max(1, rc_ramp_total)))
     else:
         rc_prog = 0.0
     l_role_coarse = round(rc_warmup + (L["role_coarse"] - rc_warmup) * rc_prog, 4)
@@ -204,7 +206,7 @@ def compute_lambdas(cfg: dict, state: dict) -> dict:
     if phase2_trigger_ep is not None:
         ramp_ep = epoch - phase2_trigger_ep
         ramp_total = sc.get("phase2_ramp_epochs", sc.get("role_ramp_epochs", 4))
-        phase2_prog = min(1.0, max(0.0, ramp_ep / ramp_total))
+        phase2_prog = min(1.0, max(0.0, ramp_ep / max(1, ramp_total)))
     else:
         phase2_prog = 0.0
 
@@ -217,19 +219,19 @@ def compute_lambdas(cfg: dict, state: dict) -> dict:
     if not bf["enabled"] or state.get("coarse_fine_unlocked"):
         unlock_ep = state.get("coarse_fine_unlock_epoch", 0)
         cf_ramp   = epoch - unlock_ep
-        cf_prog   = min(1.0, max(0.0, cf_ramp / bf["unlock_ramp_epochs"])) if bf["enabled"] else 1.0
-        l_coarse  = bf["coarse_warmup_lambda"] + (L["coarse"] - bf["coarse_warmup_lambda"]) * cf_prog
-        l_fine    = bf["fine_warmup_lambda"]   + (L["fine"]   - bf["fine_warmup_lambda"])   * cf_prog
+        cf_prog   = min(1.0, max(0.0, cf_ramp / bf.get("unlock_ramp_epochs", 1))) if bf["enabled"] else 1.0
+        l_coarse  = bf.get("coarse_warmup_lambda", L["coarse"]) + (L["coarse"] - bf.get("coarse_warmup_lambda", L["coarse"])) * cf_prog
+        l_fine    = bf.get("fine_warmup_lambda", L["fine"])     + (L["fine"]   - bf.get("fine_warmup_lambda", L["fine"]))     * cf_prog
     else:
-        l_coarse = bf["coarse_warmup_lambda"]
-        l_fine   = bf["fine_warmup_lambda"]
+        l_coarse = bf.get("coarse_warmup_lambda", L["coarse"] * 0.05)
+        l_fine   = bf.get("fine_warmup_lambda",   L["fine"]   * 0.10)
 
     # ── PHASE 4 : SVO fine (triggered par role_coarse_f1) ────────────────────
     phase4_trigger_ep = state.get("phase4_trigger_epoch")
     if phase4_trigger_ep is not None:
         ramp_ep = epoch - phase4_trigger_ep
         ramp_total = sc.get("oblique_ramp_epochs", 10)
-        phase4_prog = min(1.0, max(0.0, ramp_ep / ramp_total))
+        phase4_prog = min(1.0, max(0.0, ramp_ep / max(1, ramp_total)))
     else:
         phase4_prog = 0.0
 
@@ -250,6 +252,11 @@ def compute_lambdas(cfg: dict, state: dict) -> dict:
         "morpho":       l_morpho,
         "verb_ptr":     l_verb_ptr,
         "compat":       L.get("compat", 0.0),
+        "verb_family":       L.get("verb_family", 0.0),
+        "verb_family_fine":  L.get("verb_family_fine", 0.0),
+        "verb_polarity":     L.get("verb_polarity", 0.0),
+        "verb_aspect":       L.get("verb_aspect", 0.0),
+        "verb_source":       L.get("verb_source", 0.0),
     }
 
 
@@ -437,6 +444,13 @@ def main():
     hw = detect_hw(cfg)
     if args.device:
         hw["device"] = args.device
+        if args.device == "cpu":
+            # Utiliser le profil default (bs petit) au lieu du profil GPU/MPS
+            default_hw = cfg.get("hardware", {}).get("default", {"bs": 8, "accum": 4, "workers": 0})
+            hw.update(default_hw)
+            hw["device"] = "cpu"
+            hw["gpu_name"] = "CPU"
+            print(f"💻 Device forcé CPU — bs={hw['bs']} accum={hw['accum']}")
 
     # ID GPU court pour le nom de run
     gpu_short = hw["gpu_name"].replace("NVIDIA GeForce ", "").replace("NVIDIA ", "").replace(" ", "_")
@@ -537,7 +551,7 @@ def main():
         log(f"🏗️  Architecture : CASCADE SVO-FIRST")
         log(f"   Phase 1 : NER bnd + SVO bnd à plein régime + role_coarse warmup λ={rc_warmup}")
         log(f"   Phase 2 : role_coarse → λ plein + voice + verb_ptr → quand svo_bnd_f1 > {sc.get('role_thr_svo_bnd', '?')}")
-        log(f"   Phase 3 : NER coarse + fine → quand ner_bnd > {bf['unlock_threshold']}")
+        log(f"   Phase 3 : NER coarse + fine → quand ner_bnd > {bf.get('unlock_threshold', 'N/A (disabled)')}")
         log(f"   Phase 4 : role_oblique + morpho → quand role_coarse_f1 > {sc.get('oblique_thr_role_crs', '?')}")
 
     # ─── BOUCLE PRINCIPALE ───────────────────────────────────────────
@@ -602,11 +616,11 @@ def main():
 
             # ── PHASE 3 : NER coarse/fine unlock (boundary-first) ───────────
             if cfg["boundary_first"]["enabled"] and not state["coarse_fine_unlocked"]:
-                if boundary_f1 >= bf["unlock_threshold"]:
+                if boundary_f1 >= bf.get("unlock_threshold", 1.0):
                     state["coarse_fine_unlocked"] = True
                     state["coarse_fine_unlock_epoch"] = epoch
-                    log(f"🔓 PHASE 3 — NER Bnd {boundary_f1:.4f} ≥ {bf['unlock_threshold']} "
-                        f"→ UNLOCK coarse+fine (ramp {bf['unlock_ramp_epochs']}ep)")
+                    log(f"🔓 PHASE 3 — NER Bnd {boundary_f1:.4f} ≥ {bf.get('unlock_threshold', 1.0)} "
+                        f"→ UNLOCK coarse+fine (ramp {bf.get('unlock_ramp_epochs', 1)}ep)")
 
             # ── Rescue regression boundary ──────────────────────────────────
             if not state["rescue_applied"]:

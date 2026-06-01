@@ -126,7 +126,7 @@ def main():
     ds=load_dataset("Babelscape/multinerd",split="test",verification_mode="no_checks")
     fr=ds.filter(lambda x: x["lang"]=="fr")
     if a.limit>0: fr=fr.select(range(min(a.limit,len(fr))))
-    print(f"\n📦 {len(fr)} phrases FR")
+    print(f"\n {len(fr)} phrases FR")
 
     model,tokenizer=load_model_and_tokenizer(a.model_name,a.checkpoint,None,a.device)
     print("   ✅ Modèle chargé")
@@ -138,10 +138,10 @@ def main():
         texts.append(text)
         gold_all.append(bio_to_char_spans(ex["tokens"], ex["ner_tags"]))
     total_gold = sum(len(g) for g in gold_all)
-    print(f"📝 {len(texts)} textes, {total_gold} entités gold\n")
+    print(f" {len(texts)} textes, {total_gold} entités gold\n")
 
     # ── Inférence ──────────────────────────────────────────────────────────
-    print(f"🔮 Inférence (batch={a.batch_size}, τ_bnd={a.tau_boundary})...")
+    print(f" Inférence (batch={a.batch_size}, τ_bnd={a.tau_boundary})...")
     pred_all = []; t0 = time.time()
     for i in range(0, len(texts), a.batch_size):
         batch = texts[i:i+a.batch_size]
