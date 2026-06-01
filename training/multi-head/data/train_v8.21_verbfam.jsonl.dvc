@@ -1,0 +1,5 @@
+outs:
+- md5: 2cfb14fcc38d37421340d2d752ca293d
+  size: 37006535
+  hash: md5
+  path: train_v8.21_verbfam.jsonl

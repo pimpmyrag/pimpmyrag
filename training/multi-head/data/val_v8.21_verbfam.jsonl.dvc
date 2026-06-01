@@ -1,0 +1,5 @@
+outs:
+- md5: 7d8f91dc6042bf4b1c0aafc1cffbcce1
+  size: 4871603
+  hash: md5
+  path: val_v8.21_verbfam.jsonl

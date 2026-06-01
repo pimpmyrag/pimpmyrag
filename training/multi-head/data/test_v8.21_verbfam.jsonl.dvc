@@ -1,0 +1,5 @@
+outs:
+- md5: b72e2cf534f32aa5d4bef6dc937e6759
+  size: 4746533
+  hash: md5
+  path: test_v8.21_verbfam.jsonl

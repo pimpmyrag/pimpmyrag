@@ -95,3 +95,9 @@
 /train_v8.20.jsonl
 /val_v8.20.jsonl
 /test_v8.20.jsonl
+/train_v8.21.jsonl
+/val_v8.21.jsonl
+/test_v8.21.jsonl
+/train_v8.21_verbfam.jsonl
+/val_v8.21_verbfam.jsonl
+/test_v8.21_verbfam.jsonl
