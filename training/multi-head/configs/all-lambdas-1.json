@@ -28,7 +28,7 @@
 
   "lambdas": {
     "_comment": "Toutes les lambdas à 1 — role_head ET role_coarse actifs simultanément.",
-    "boundary":     2.5,
+    "boundary":     5.0,
     "coarse":       0.5,
     "fine":         0.5,
     "svo_boundary": 0.5,
