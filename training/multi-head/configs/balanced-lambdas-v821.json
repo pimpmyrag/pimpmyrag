@@ -1,0 +1,125 @@
+{
+  "_comment": "Full direct — boundary=coarse=fine=1.0 équilibrés + focal fine γ=1.5 + EMA + v8.21_verbfam",
+  "_version": "balanced-lambdas-v821",
+  "_rationale": [
+    "Leçon run bnd-boost (0601) : boundary=10 → fine=0.243 ep5, trop dominant (même effet que boundary_first).",
+    "Leçon all-lambdas-1 (0527) : boundary=5 → fine=0.796 ep8 MAIS plateau dès ep5.",
+    "  classes bloquées : state=0.524, notion=0.625, field=0.652, object_name=0.645.",
+    "Leçon run 8-epoch : boundary=1 seul → boundary=0.908 ✅ ET fine progressait sainement.",
+    "Solution : ratio équilibré 1:1:1, aucune tête n'écrase le gradient de l'autre.",
+    "focal fine_gamma=1.5 pour débloquer les classes dures sans bouger le lambda.",
+    "focal boundary_gamma=0.5 pour réduire les faux positifs boundary.",
+    "EMA=0.999 + lr=8e-6 + class_weight_power=0.5 déjà validés.",
+    "Dataset v8.21_verbfam : 31K phrases + 5 champs verbfam annotés.",
+    "Attendu : bnd>0.91 ep10 + fine>0.84 ep20 sans plateau."
+  ],
+
+  "run": {
+    "name_suffix": "balanced-lambdas-v821",
+    "max_epochs": 60,
+    "model": "microsoft/mdeberta-v3-base",
+    "loss_weighting": "fixed",
+    "ner_only_bench": false
+  },
+
+  "optimizer": {
+    "lr": 8e-6,
+    "head_lr_multiplier": 6.0,
+    "warmup_epochs": 0,
+    "max_grad_norm": 1.0,
+    "layer_lr_decay": 0.9,
+    "ema_decay": 0.999,
+    "class_weight_power": 0.5
+  },
+
+  "lambdas": {
+    "_comment": "Ratio 1:1:1 — aucune tête ne domine le gradient",
+    "boundary":     1.0,
+    "coarse":       1.0,
+    "fine":         1.0,
+    "svo_boundary": 0.5,
+    "svo":          0.7,
+    "role_coarse":  0.0,
+    "role_oblique": 0.5,
+    "role":         0.7,
+    "voice":        0.3,
+    "certainty":    0.3,
+    "morpho":       0.3,
+    "verb_ptr":     0.5,
+    "compat":       0.5
+  },
+
+  "focal": {
+    "boundary_gamma":  0.5,
+    "fine_gamma":      1.5,
+    "coarse_gamma":    0.0
+  },
+
+  "boundary_first": {
+    "enabled": false,
+    "unlock_threshold":    0.0,
+    "unlock_ramp_epochs":  1,
+    "coarse_warmup_lambda": 0.0,
+    "fine_warmup_lambda":   0.0
+  },
+
+  "svo_cascade": {
+    "_comment": "Aucune condition — tout actif dès ep1",
+    "role_coarse_bnd_thr":       0.0,
+    "role_coarse_warmup_lambda": 0.0,
+    "role_ramp_epochs":          1,
+    "role_thr_svo_bnd":          0.0,
+    "phase2_ramp_epochs":        1,
+    "oblique_thr_role_crs":      0.0,
+    "oblique_ramp_epochs":       1
+  },
+
+  "boundary_rescue": {
+    "window": 999, "target": 0.0, "min_delta": 0.0,
+    "factor_vptr_voice": 1.0, "factor_coarse": 1.0, "bnd_boost": 1.0
+  },
+
+  "boundary_plateau": {
+    "window": 999, "min_delta": 0.0,
+    "regression_window": 999, "regression_delta": 0.0
+  },
+
+  "hard_negatives": {
+    "every_n_epochs": 999,
+    "decay":          1.0,
+    "max_weight":     1.0,
+    "min_weight":     1.0,
+    "boost_fp":       1.0,
+    "boost_fn":       1.0,
+    "boost_coarse":   1.0,
+    "boost_fine":     1.0,
+    "boost_fp_svo":   1.0,
+    "boost_fn_svo":   1.0,
+    "boost_role_coarse": 1.0
+  },
+
+  "difficulty_levels": {
+    "_comment": "Full data dès ep1 — pas de curriculum",
+    "names":         ["full"],
+    "hard_per_gold": [6],
+    "soft_factors":  [1.0],
+    "max_epochs_per_level":   999,
+    "min_delta_for_progress": 0.0,
+    "patience": 999
+  },
+
+  "early_stopping": {
+    "patience": 0,
+    "min_delta": 0.0
+  },
+
+  "hardware": {
+    "h100_80gb":  {"bs": 160, "accum": 1, "workers": 12},
+    "l40s_48gb":  {"bs": 128, "accum": 1, "workers": 12},
+    "a100_40gb":  {"bs":  96, "accum": 1, "workers": 10},
+    "rtx_4090":   {"bs":  80, "accum": 1, "workers": 10},
+    "rtx_3090":   {"bs":  64, "accum": 1, "workers": 4},
+    "default":    {"bs":  16, "accum": 2, "workers": 0}
+  }
+}
+

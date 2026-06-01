@@ -6,7 +6,7 @@ set -e
 cd /workspace/pimpmyrag/training/multi-head
 
 CONFIG="${CONFIG:-configs/bnd-fine-balanced.json}"
-GOLD_VERSION="${GOLD_VERSION:-v8.20}"
+GOLD_VERSION="${GOLD_VERSION:-v8.21_verbfam}"
 export TOKENIZERS_PARALLELISM="false"
 export AUTO_BS=0  # BS statique via config hardware — auto-BS désactivé (fake batch instable)
 
