@@ -236,6 +236,9 @@ class SpanMultiTaskModel(nn.Module):
             span_h_role = span_h
 
         role_logits = self.role_head(span_h_role)
+        # Pré-calcul rc_logits pour la cascade role_coarse → role_oblique
+        # Même pattern que verbfam_fine : softmax(role_coarse.detach())[:, OBLIQ] comme gate
+        rc_logits   = self.role_coarse_head(span_h_role)
 
         # ── NER heads : boundary / coarse / fine sur span_h_ner complet ─────────
         # Pas de boundary gate — les 3 têtes partagent span_h_ner directement.
@@ -283,15 +286,23 @@ class SpanMultiTaskModel(nn.Module):
             "svo_boundary_logits":  svo_boundary_logits,  # déjà calculé plus haut, pas de double appel
             "syn_logits":           self.syn_head(span_h),
             # role_coarse conditionné sur le verbe (soft-attention verb_ptr)
-            "role_coarse_logits":   self.role_coarse_head(span_h_role),
+            "role_coarse_logits":   rc_logits,
             "role_logits":          role_logits,                        # ancienne tête (12 labels)
-            "role_coarse_from_role_logits": role_coarse_from_role_logits,  # coarse dérivée (diagnostic)
+            "role_coarse_from_role_logits": role_coarse_from_role_logits,  # coarse drive (diagnostic)
             # Tête oblique fine : span_h_role enrichi du signal NER fine détaché (38 labels)
-            # Cohérent avec dataset builder : OBLIQUE_TIME/LOC inférés depuis labels NER fine
-            "role_oblique_logits": self.role_oblique_head(
-                span_h_role + self.ner_fine_to_oblique(
-                    torch.softmax(self.fine_head(span_h_ner).detach(), dim=-1)
+            # + cascade role_coarse → role_oblique (même pattern que verbfam_fine)
+            # softmax(rc_logits)[:, 2] = P(OBLIQ) ; OBLIQ_ID=2 (0=SUBJ,1=OBJ,2=OBLIQ,3=APPOS)
+            # Quand role_coarse prédit OBLIQ fortement → subtypes boostés
+            # Quand role_coarse prédit SUBJ/OBJ/APPOS → subtypes pénalisés (log→-∞)
+            "role_oblique_logits": (
+                self.role_oblique_head(
+                    span_h_role + self.ner_fine_to_oblique(
+                        torch.softmax(self.fine_head(span_h_ner).detach(), dim=-1)
+                    )
+                ) + torch.log(
+                    F.softmax(rc_logits.detach(), dim=-1)[:, 2:3].clamp(min=1e-9)
                 )
+                if N > 0 else self.role_oblique_head(span_h_role)
             ),
             "voice_logits":        self.voice_head(span_h),
             "certainty_logits":    self.certainty_head(span_h),

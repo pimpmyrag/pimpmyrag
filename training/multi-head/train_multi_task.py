@@ -200,22 +200,11 @@ def get_layerwise_param_groups(model, base_lr: float, head_lr: float, decay: flo
 
     decay=1.0 → pas de decay (comportement original).
     """
-    head_params = (
-        list(model.span_mlp.parameters())
-        + list(model.boundary_head.parameters())
-        + list(model.coarse_head.parameters())
-        + list(model.fine_head.parameters())
-        + list(model.width_emb.parameters())
-        + list(model.syn_head.parameters())
-        + list(model.svo_boundary_head.parameters())
-        + list(model.voice_head.parameters())
-        + list(model.certainty_head.parameters())
-        + list(model.gender_head.parameters())
-        + list(model.number_head.parameters())
-        + list(model.person_head.parameters())
-        + list(model.verb_ptr_query.parameters())
-        + list(model.verb_ptr_key.parameters())
-    )
+    # Tous les paramètres hors-encodeur (heads, span_mlp, width_emb, etc.) → head_lr
+    # On utilise model.parameters() - model.encoder.parameters() pour ne rien oublier
+    # (les listes manuelles oublient facilement les nouvelles têtes comme verbfam/role)
+    enc_ids = {id(p) for p in model.encoder.parameters()}
+    head_params = [p for p in model.parameters() if id(p) not in enc_ids]
     seen = {id(p) for p in head_params}
     param_groups = [{"params": head_params, "lr": head_lr, "name": "heads"}]
 
