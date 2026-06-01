@@ -5,7 +5,9 @@
     "all-lambdas-1 (LR=1e-5) : ep1=0.852 ! — démarrage ultra-rapide, peak=0.876 mais plateau dès ep5.",
     "Problème all-lambdas-1 : fine=0.5 trop faible → classes dures bloquées; ema_decay=0.0; class_weight_power=1.0.",
     "Fix : fine 0.5→1.8 + focal fine_gamma=1.5 → casser le plateau fine.",
-    "Fix : EMA=0.999 (validé sur bnd-fine-balanced, peak=0.936) → stabiliser boundary.",
+    "EMA=0.0 (pas 0.999!) : EMA=0.999 en full-mode dilue le modèle à 78% init à ep1 → coarse/fine restent à <0.2 toute la phase initiale.",
+    "Référence : tous les runs ema=0 avaient crs_ep1~0.8, fine_ep1~0.5 ; avec ema=0.999 → crs_ep1=0.19, fine_ep1=0.06.",
+    "EMA=0.999 n'est adapté qu'au mode boundary_first (boundary déjà bon, on stabilise ensuite).",
     "Fix : class_weight_power=0.5 (comme bnd-fine-balanced) → ne pas trop surpondérer les rares.",
     "Fix : head_lr_multiplier 6.0→4.0 (deberta-v3-base vs mdeberta).",
     "Modèle : deberta-v3-base (meilleur résultat de toute la série v8.20).",
@@ -28,7 +30,7 @@
     "warmup_epochs": 0,
     "max_grad_norm": 1.0,
     "layer_lr_decay": 0.9,
-    "ema_decay": 0.999,
+    "ema_decay": 0.0,
     "class_weight_power": 0.5
   },
 
