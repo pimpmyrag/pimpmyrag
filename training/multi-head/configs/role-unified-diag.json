@@ -1,0 +1,104 @@
+{
+  "_comment": "Config diagnostic — restauration ancienne tête role (12 labels), pas de cascade",
+  "_version": "role-unified-diag",
+
+  "run": {
+    "name_suffix": "role-unified",
+    "max_epochs": 25,
+    "model": "microsoft/deberta-v3-base",
+    "loss_weighting": "fixed",
+    "ner_only_bench": false
+  },
+
+  "optimizer": {
+    "lr": 8e-6,
+    "head_lr_multiplier": 4.0,
+    "warmup_epochs": 0,
+    "max_grad_norm": 1.0,
+    "layer_lr_decay": 0.9,
+    "ema_decay": 0.0,
+    "class_weight_power": 0.5
+  },
+
+  "lambdas": {
+    "boundary":     1.0,
+    "coarse":       0.0,
+    "fine":         0.0,
+    "svo_boundary": 0.0,
+    "svo":          0.0,
+    "role_coarse":  0.0,
+    "role_oblique": 0.0,
+    "role":         0.6,
+    "voice":        0.0,
+    "certainty":    0.0,
+    "morpho":       0.0,
+    "verb_ptr":     0.0,
+    "compat":       0.0
+  },
+
+  "focal": {
+    "boundary_gamma":  0.0,
+    "fine_gamma":      0.0,
+    "coarse_gamma":    0.0
+  },
+
+  "boundary_first": {
+    "enabled": false,
+    "unlock_threshold":    0.0,
+    "unlock_ramp_epochs":  1,
+    "coarse_warmup_lambda": 0.0,
+    "fine_warmup_lambda":   0.0
+  },
+
+  "svo_cascade": {
+    "role_coarse_bnd_thr":       0.0,
+    "role_coarse_warmup_lambda": 0.0,
+    "role_ramp_epochs":          1,
+    "role_thr_svo_bnd":          0.0,
+    "phase2_ramp_epochs":        1,
+    "oblique_thr_role_crs":      0.0,
+    "oblique_ramp_epochs":       1
+  },
+
+  "boundary_rescue": {
+    "window": 999, "target": 0.0, "min_delta": 0.0,
+    "factor_vptr_voice": 1.0, "factor_coarse": 1.0, "bnd_boost": 1.0
+  },
+
+  "boundary_plateau": {
+    "window": 999, "min_delta": 0.0,
+    "regression_window": 999, "regression_delta": 0.0
+  },
+
+  "hard_negatives": {
+    "every_n_epochs": 999,
+    "decay": 0.85, "max_weight": 1.0, "min_weight": 1.0,
+    "boost_fp": 1.0, "boost_fn": 1.0, "boost_coarse": 1.0,
+    "boost_fine": 1.0, "boost_fp_svo": 0.0, "boost_fn_svo": 0.0,
+    "boost_role_coarse": 1.0
+  },
+
+  "difficulty_levels": {
+    "names":         ["easy"],
+    "hard_per_gold": [2],
+    "soft_factors":  [1.0],
+    "max_epochs_per_level":   999,
+    "min_delta_for_progress": 0.0,
+    "patience": 999
+  },
+
+  "early_stopping": {
+    "patience": 0,
+    "min_delta": 0.0
+  },
+
+  "hardware": {
+    "h100_80gb":  {"bs": 16, "accum": 2, "workers": 0},
+    "l40s_48gb":  {"bs": 16, "accum": 2, "workers": 0},
+    "a100_40gb":  {"bs": 16, "accum": 2, "workers": 0},
+    "rtx_4090":   {"bs": 16, "accum": 2, "workers": 0},
+    "rtx_3090":   {"bs": 16, "accum": 2, "workers": 0},
+    "default":    {"bs": 16, "accum": 2, "workers": 0}
+  }
+}
+

@@ -272,6 +272,10 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
     certainty_counts = Counter()
     oblique_counts = Counter()
     role_coarse_counts = Counter()
+    verb_family_counts = Counter()
+    verb_polarity_counts = Counter()
+    verb_aspect_counts = Counter()
+    verb_source_counts = Counter()
 
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -291,6 +295,19 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
                 rc_id = c.get("role_coarse_label_id", ROLE_COARSE_NONE_ID)
                 if rc_id < ROLE_COARSE_OTHER_ID:  # 0..3 seulement
                     role_coarse_counts[rc_id] += 1
+                # verbfam : compter seulement les spans avec label valide (≠ NONE_ID)
+                vf = c.get("verb_family_label_id", VERB_FAMILY_NONE_ID)
+                if vf < VERB_FAMILY_NONE_ID:
+                    verb_family_counts[vf] += 1
+                vp = c.get("verb_polarity_label_id", VERB_POLARITY_NONE_ID)
+                if vp < VERB_POLARITY_NONE_ID:
+                    verb_polarity_counts[vp] += 1
+                va = c.get("verb_aspect_label_id", VERB_ASPECT_NONE_ID)
+                if va < VERB_ASPECT_NONE_ID:
+                    verb_aspect_counts[va] += 1
+                vs = c.get("verb_source_label_id", VERB_SOURCE_NONE_ID)
+                if vs < VERB_SOURCE_NONE_ID:
+                    verb_source_counts[vs] += 1
 
     def make_weights(counts, num_classes, power=0.5, max_weight=None):
         total = sum(counts.values())
@@ -331,6 +348,12 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
         # obtiennent weight_final < 0.1 (quasi éliminés) car la moyenne est gonflée par les rares.
         make_weights(oblique_counts, NUM_ROLE_OBLIQUE, power=power, max_weight=3.0),
         rc_w_full,
+        # verbfam class weights — power plus modéré pour ne pas écraser State_Change (25.9%)
+        # power=min(power, 0.5) au lieu de power*1.5 : Conflict 2x boost, State_Change ~0.57 (pas 0.31)
+        make_weights(verb_family_counts, NUM_VERB_FAMILY, power=min(power, 0.5)),
+        make_weights(verb_polarity_counts, NUM_VERB_POLARITY, power=power),
+        make_weights(verb_aspect_counts, NUM_VERB_ASPECT, power=min(power * 1.2, 0.7)),
+        make_weights(verb_source_counts, NUM_VERB_SOURCE, power=power),
         boundary_counts,
         coarse_counts,
         fine_counts,
@@ -370,15 +393,19 @@ def run_epoch(
         fine_class_weights=None,
         certainty_class_weights=None,
         role_coarse_class_weights=None,
-        lambda_boundary=2.5,
-        lambda_coarse=1.0,
-        lambda_fine=1.8,
-        lambda_svo_boundary=0.7,
-        lambda_svo=0.6,
-        lambda_role_coarse=0.1,
-        lambda_role_oblique=0.15,
-        lambda_role=0.0,                # ancienne tête unifiée (12 labels) — défaut 0 = off
         oblique_class_weights=None,
+        verb_family_class_weights=None,
+        verb_polarity_class_weights=None,
+        verb_aspect_class_weights=None,
+        verb_source_class_weights=None,
+        lambda_boundary=2.5,
+        lambda_coarse=0.5,
+        lambda_fine=1.0,
+        lambda_svo_boundary=0.5,
+        lambda_svo=0.5,
+        lambda_role_coarse=0.0,
+        lambda_role_oblique=0.3,
+        lambda_role=0.5,
         lambda_voice=0.15,
         lambda_certainty=0.4,
         lambda_morpho=0.3,
@@ -717,6 +744,10 @@ def run_epoch(
                     certainty_class_weights=certainty_class_weights,
                     oblique_class_weights=oblique_class_weights,
                     role_coarse_class_weights=role_coarse_class_weights,
+                    verb_family_class_weights=verb_family_class_weights,
+                    verb_polarity_class_weights=verb_polarity_class_weights,
+                    verb_aspect_class_weights=verb_aspect_class_weights,
+                    verb_source_class_weights=verb_source_class_weights,
                     lambda_boundary=lambda_boundary,
                     lambda_coarse=lambda_coarse,
                     lambda_fine=lambda_fine,
@@ -1333,7 +1364,7 @@ def main():
     parser.add_argument("--lambda-certainty", type=float, default=0.4,
                         help="Pondération de la loss certainty (défaut=0.4)")
     parser.add_argument("--lambda-svo-boundary", type=float, default=0.7,
-                        help="Pondération de la loss svo_boundary (détection verbes/pronoms, défaut=0.9)")
+                        help="Pondération de la loss svo_boundary (détection verbes/pronom, défaut=0.9)")
     parser.add_argument("--lambda-morpho", type=float, default=0.3,
                         help="Pondération de la loss morpho gender+number+person (défaut=0.3)")
     parser.add_argument("--lambda-verb-ptr", type=float, default=0.5,
@@ -1678,6 +1709,7 @@ def main():
     print(f"📐 Focal gamma: {args.focal_gamma}")
 
     boundary_w = coarse_w = fine_w = certainty_w = oblique_w = None
+    verb_family_w = verb_polarity_w = verb_aspect_w = verb_source_w = None
     if args.class_weights == "auto":
         (
             boundary_w,
@@ -1686,6 +1718,10 @@ def main():
             certainty_w,
             oblique_w,
             role_coarse_w,
+            verb_family_w,
+            verb_polarity_w,
+            verb_aspect_w,
+            verb_source_w,
             boundary_counts,
             coarse_counts,
             fine_counts,
@@ -1853,6 +1889,12 @@ def main():
             coarse_class_weights=coarse_w,
             fine_class_weights=fine_w,
             certainty_class_weights=certainty_w,
+            oblique_class_weights=oblique_w,
+            role_coarse_class_weights=role_coarse_w,
+            verb_family_class_weights=verb_family_w,
+            verb_polarity_class_weights=verb_polarity_w,
+            verb_aspect_class_weights=verb_aspect_w,
+            verb_source_class_weights=verb_source_w,
             lambda_boundary=args.lambda_boundary,
             lambda_coarse=args.lambda_coarse,
             lambda_fine=args.lambda_fine,
@@ -1860,9 +1902,7 @@ def main():
             lambda_svo=args.lambda_svo,
             lambda_role_coarse=args.lambda_role_coarse,
             lambda_role_oblique=args.lambda_role_oblique,
-                lambda_role=args.lambda_role,
-            oblique_class_weights=oblique_w,
-            role_coarse_class_weights=role_coarse_w,
+            lambda_role=args.lambda_role,
             lambda_voice=args.lambda_voice,
             lambda_certainty=args.lambda_certainty,
             lambda_morpho=args.lambda_morpho,
@@ -1916,6 +1956,12 @@ def main():
             coarse_class_weights=coarse_w,
             fine_class_weights=fine_w,
             certainty_class_weights=certainty_w,
+            oblique_class_weights=oblique_w,
+            role_coarse_class_weights=role_coarse_w,
+            verb_family_class_weights=verb_family_w,
+            verb_polarity_class_weights=verb_polarity_w,
+            verb_aspect_class_weights=verb_aspect_w,
+            verb_source_class_weights=verb_source_w,
             lambda_boundary=args.lambda_boundary,
             lambda_coarse=args.lambda_coarse,
             lambda_fine=args.lambda_fine,
@@ -1923,9 +1969,7 @@ def main():
             lambda_svo=args.lambda_svo,
             lambda_role_coarse=args.lambda_role_coarse,
             lambda_role_oblique=args.lambda_role_oblique,
-                lambda_role=args.lambda_role,
-            oblique_class_weights=oblique_w,
-            role_coarse_class_weights=role_coarse_w,
+            lambda_role=args.lambda_role,
             lambda_voice=args.lambda_voice,
             lambda_certainty=args.lambda_certainty,
             lambda_morpho=args.lambda_morpho,
@@ -2111,7 +2155,7 @@ def main():
         if val_metrics.get("fine_hard_labels"):
             print("[VAL fine labels fragiles]")
             for item in val_metrics["fine_hard_labels"][:8]:
-                print(f"  {item['label']}  recall={item['recall']:.3f} support={item['support']} top_confusion={item['top_confused_with']} ({item['top_confused_count']})")
+                print(f"  {item['label']}  recall={item['recall']:.3f} support={item['support']} top_confused={item['top_confused_with']} ({item['top_confused_count']})")
         if val_metrics.get("fine_confusion_csv"):
             print(f"[VAL fine exports] csv={val_metrics['fine_confusion_csv']} json={val_metrics['fine_diagnostics_json']}")
         print("[VAL svo boundary (verb_trigger)]")
@@ -2198,6 +2242,12 @@ def main():
         coarse_class_weights=coarse_w,
         fine_class_weights=fine_w,
         certainty_class_weights=certainty_w,
+        oblique_class_weights=oblique_w,
+        role_coarse_class_weights=role_coarse_w,
+        verb_family_class_weights=verb_family_w,
+        verb_polarity_class_weights=verb_polarity_w,
+        verb_aspect_class_weights=verb_aspect_w,
+        verb_source_class_weights=verb_source_w,
         lambda_boundary=args.lambda_boundary,
         lambda_coarse=args.lambda_coarse,
         lambda_fine=args.lambda_fine,
@@ -2205,14 +2255,17 @@ def main():
         lambda_svo=args.lambda_svo,
         lambda_role_coarse=args.lambda_role_coarse,
         lambda_role_oblique=args.lambda_role_oblique,
-                lambda_role=args.lambda_role,
-        oblique_class_weights=oblique_w,
-        role_coarse_class_weights=role_coarse_w,
+        lambda_role=args.lambda_role,
         lambda_voice=args.lambda_voice,
         lambda_certainty=args.lambda_certainty,
         lambda_morpho=args.lambda_morpho,
         lambda_verb_ptr=args.lambda_verb_ptr,
         lambda_compat=args.lambda_compat,
+        lambda_verb_family=args.lambda_verb_family,
+        lambda_verb_family_fine=args.lambda_verb_family_fine,
+        lambda_verb_polarity=args.lambda_verb_polarity,
+        lambda_verb_aspect=args.lambda_verb_aspect,
+        lambda_verb_source=args.lambda_verb_source,
         accum_steps=args.accum_steps,
         log_every=args.log_every,
         focal_gamma=args.focal_gamma,
@@ -2257,7 +2310,7 @@ def main():
     if test_metrics.get("fine_hard_labels"):
         print("[TEST fine labels fragiles]")
         for item in test_metrics["fine_hard_labels"][:8]:
-            print(f"  {item['label']}  recall={item['recall']:.3f} support={item['support']} top_confusion={item['top_confused_with']} ({item['top_confused_count']})")
+            print(f"  {item['label']}  recall={item['recall']:.3f} support={item['support']} top_confused={item['top_confused_with']} ({item['top_confused_count']})")
     if test_metrics.get("fine_confusion_csv"):
         print(f"[TEST fine exports] csv={test_metrics['fine_confusion_csv']} json={test_metrics['fine_diagnostics_json']}")
     print("[TEST svo boundary (verb_trigger)]")

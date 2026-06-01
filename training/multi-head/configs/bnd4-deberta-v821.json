@@ -45,7 +45,12 @@
     "certainty":    0.3,
     "morpho":       0.3,
     "verb_ptr":     0.5,
-    "compat":       0.5
+    "compat":       0.5,
+    "verb_family":      0.8,
+    "verb_family_fine": 0.4,
+    "verb_polarity":    0.4,
+    "verb_aspect":      0.4,
+    "verb_source":      0.3
   },
 
   "focal": {

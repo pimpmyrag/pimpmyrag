@@ -10,7 +10,6 @@
     "EMA=0.999 + lr=8e-6 → stabilité boundary.",
     "Attendu : bnd~0.92+ ep5, fine~0.84+ ep15-20."
   ],
-
   "run": {
     "name_suffix": "bnd-fine-balanced",
     "max_epochs": 60,
@@ -18,9 +17,8 @@
     "loss_weighting": "fixed",
     "ner_only_bench": false
   },
-
   "optimizer": {
-    "lr": 8e-6,
+    "lr": 8e-06,
     "head_lr_multiplier": 4.0,
     "warmup_epochs": 0,
     "max_grad_norm": 1.0,
@@ -28,98 +26,137 @@
     "ema_decay": 0.999,
     "class_weight_power": 0.5
   },
-
   "lambdas": {
-    "boundary":     5.0,
-    "coarse":       0.75,
-    "fine":         1.8,
+    "boundary": 5.0,
+    "coarse": 0.75,
+    "fine": 1.8,
     "svo_boundary": 0.35,
-    "svo":          0.70,
-    "role_coarse":  0.55,
+    "svo": 0.7,
+    "role_coarse": 0.55,
     "role_oblique": 0.25,
-    "voice":        0.15,
-    "certainty":    0.30,
-    "morpho":       0.10,
-    "verb_ptr":     0.50,
-    "compat":       0.20
+    "voice": 0.15,
+    "certainty": 0.3,
+    "morpho": 0.1,
+    "verb_ptr": 0.5,
+    "compat": 0.2,
+    "verb_family": 0.8,
+    "verb_family_fine": 0.4,
+    "verb_polarity": 0.4,
+    "verb_aspect": 0.4,
+    "verb_source": 0.3
   },
-
   "focal": {
-    "boundary_gamma":  0.5,
-    "fine_gamma":      1.5,
-    "coarse_gamma":    0.0
+    "boundary_gamma": 0.5,
+    "fine_gamma": 1.5,
+    "coarse_gamma": 0.0
   },
-
   "boundary_first": {
     "_comment": "unlock à 0.88 au lieu de 0.92 → fine démarre ep4-5 au lieu de ep8-10",
     "enabled": true,
-    "unlock_threshold":    0.88,
-    "unlock_ramp_epochs":  5,
+    "unlock_threshold": 0.88,
+    "unlock_ramp_epochs": 5,
     "coarse_warmup_lambda": 0.05,
-    "fine_warmup_lambda":   0.50
+    "fine_warmup_lambda": 0.5
   },
-
   "svo_cascade": {
-    "role_coarse_bnd_thr":       0.90,
-    "role_coarse_warmup_lambda": 0.40,
-    "role_ramp_epochs":          2,
-    "role_thr_svo_bnd":          0.88,
-    "phase2_ramp_epochs":        4,
-    "oblique_thr_role_crs":      0.45,
-    "oblique_ramp_epochs":       10
+    "role_coarse_bnd_thr": 0.9,
+    "role_coarse_warmup_lambda": 0.4,
+    "role_ramp_epochs": 2,
+    "role_thr_svo_bnd": 0.88,
+    "phase2_ramp_epochs": 4,
+    "oblique_thr_role_crs": 0.45,
+    "oblique_ramp_epochs": 10
   },
-
   "boundary_rescue": {
-    "window":          5,
-    "target":          0.90,
-    "min_delta":       0.003,
+    "window": 5,
+    "target": 0.9,
+    "min_delta": 0.003,
     "factor_vptr_voice": 0.65,
-    "factor_coarse":     0.75,
-    "bnd_boost":         1.20
+    "factor_coarse": 0.75,
+    "bnd_boost": 1.2
   },
-
   "boundary_plateau": {
-    "window":       5,
-    "min_delta":    0.003,
+    "window": 5,
+    "min_delta": 0.003,
     "regression_window": 3,
-    "regression_delta":  0.008
+    "regression_delta": 0.008
   },
-
   "hard_negatives": {
     "every_n_epochs": 1,
-    "decay":          0.85,
-    "max_weight":     8.0,
-    "min_weight":     0.3,
-    "boost_fp":       5.0,
-    "boost_fn":       2.0,
-    "boost_coarse":   2.5,
-    "boost_fine":     3.0,
-    "boost_fp_svo":   3.0,
-    "boost_fn_svo":   2.0,
+    "decay": 0.85,
+    "max_weight": 8.0,
+    "min_weight": 0.3,
+    "boost_fp": 5.0,
+    "boost_fn": 2.0,
+    "boost_coarse": 2.5,
+    "boost_fine": 3.0,
+    "boost_fp_svo": 3.0,
+    "boost_fn_svo": 2.0,
     "boost_role_coarse": 2.5
   },
-
   "difficulty_levels": {
-    "names":         ["easy", "easy+", "medium", "medium+", "hard", "full"],
-    "hard_per_gold": [2,      2,       3,        4,         5,      6],
-    "soft_factors":  [1.0,    1.25,    1.5,      2.0,       2.0,    2.0],
-    "max_epochs_per_level":   6,
+    "names": [
+      "easy",
+      "easy+",
+      "medium",
+      "medium+",
+      "hard",
+      "full"
+    ],
+    "hard_per_gold": [
+      2,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "soft_factors": [
+      1.0,
+      1.25,
+      1.5,
+      2.0,
+      2.0,
+      2.0
+    ],
+    "max_epochs_per_level": 6,
     "min_delta_for_progress": 0.0003,
     "patience": 5
   },
-
   "early_stopping": {
-    "patience":   5,
-    "min_delta":  0.0003
+    "patience": 5,
+    "min_delta": 0.0003
   },
-
   "hardware": {
-    "h100_80gb":  {"bs": 160, "accum": 1, "workers": 8},
-    "l40s_48gb":  {"bs": 128, "accum": 1, "workers": 6},
-    "a100_40gb":  {"bs":  96, "accum": 1, "workers": 6},
-    "rtx_4090":   {"bs":  80, "accum": 1, "workers": 8},
-    "rtx_3090":   {"bs":  64, "accum": 1, "workers": 4},
-    "default":    {"bs":  16, "accum": 2, "workers": 0}
+    "h100_80gb": {
+      "bs": 160,
+      "accum": 1,
+      "workers": 8
+    },
+    "l40s_48gb": {
+      "bs": 128,
+      "accum": 1,
+      "workers": 6
+    },
+    "a100_40gb": {
+      "bs": 96,
+      "accum": 1,
+      "workers": 6
+    },
+    "rtx_4090": {
+      "bs": 80,
+      "accum": 1,
+      "workers": 8
+    },
+    "rtx_3090": {
+      "bs": 64,
+      "accum": 1,
+      "workers": 4
+    },
+    "default": {
+      "bs": 16,
+      "accum": 2,
+      "workers": 0
+    }
   }
 }
-

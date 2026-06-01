@@ -1,0 +1,120 @@
+{
+  "_comment": "Config mini local — 5% dataset, 3 epochs, MPS/CPU friendly. role simple 12 labels (role_coarse/role_oblique désactivés).",
+  "_version": "mini-local-5pct",
+
+  "run": {
+    "name_suffix": "mini-local",
+    "max_epochs": 3,
+    "model": "microsoft/deberta-v3-base",
+    "loss_weighting": "fixed",
+    "ner_only_bench": false
+  },
+
+  "optimizer": {
+    "lr": 8e-6,
+    "head_lr_multiplier": 4.0,
+    "warmup_epochs": 0,
+    "max_grad_norm": 1.0,
+    "layer_lr_decay": 0.9,
+    "ema_decay": 0.999,
+    "class_weight_power": 0.5
+  },
+
+  "lambdas": {
+    "_comment": "Tous les lambdas à plein régime dès ep1.",
+    "boundary":         5.0,
+    "coarse":           0.75,
+    "fine":             1.8,
+    "svo_boundary":     0.35,
+    "svo":              0.70,
+    "role":             0.70,
+    "role_coarse":      0.0,
+    "role_oblique":     0.0,
+    "voice":            0.15,
+    "certainty":        0.30,
+    "morpho":           0.10,
+    "verb_ptr":         0.60,
+    "verb_family":      0.20,
+    "verb_family_fine": 0.10,
+    "verb_polarity":    0.10,
+    "verb_aspect":      0.10,
+    "verb_source":      0.10,
+    "compat":           0.2
+  },
+
+  "focal": {
+    "boundary_gamma":  0.5,
+    "fine_gamma":      1.5,
+    "coarse_gamma":    0.0
+  },
+
+  "boundary_first": {
+    "enabled": false
+  },
+
+  "svo_cascade": {
+    "role_coarse_bnd_thr":       0.0,
+    "role_coarse_warmup_lambda": 1.0,
+    "role_ramp_epochs":          0,
+    "role_thr_svo_bnd":          0.0,
+    "phase2_ramp_epochs":        0,
+    "oblique_thr_role_crs":      0.0,
+    "oblique_ramp_epochs":       0
+  },
+
+  "boundary_rescue": {
+    "window":          3,
+    "target":          0.90,
+    "min_delta":       0.003,
+    "factor_vptr_voice": 0.65,
+    "factor_coarse":     0.75,
+    "bnd_boost":         1.20
+  },
+
+  "boundary_plateau": {
+    "window":            3,
+    "min_delta":         0.003,
+    "regression_window": 2,
+    "regression_delta":  0.008
+  },
+
+  "hard_negatives": {
+    "every_n_epochs": 1,
+    "decay":          0.85,
+    "max_weight":     8.0,
+    "min_weight":     0.3,
+    "boost_fp":       5.0,
+    "boost_fn":       2.0,
+    "boost_coarse":   2.5,
+    "boost_fine":     3.0,
+    "boost_fp_svo":   3.0,
+    "boost_fn_svo":   2.0,
+    "boost_role_coarse": 2.5
+  },
+
+  "difficulty_levels": {
+    "_comment": "Pas de curriculum — full difficulty dès le départ",
+    "names":         ["full"],
+    "hard_per_gold": [6],
+    "soft_factors":  [2.0],
+    "max_epochs_per_level":   99,
+    "min_delta_for_progress": 0.0003,
+    "patience": 2
+  },
+
+  "early_stopping": {
+    "patience":   3,
+    "min_delta":  0.0003
+  },
+
+  "hardware": {
+    "_comment": "Local Mac : MPS ou CPU. BS petit pour tenir en mémoire.",
+    "h100_80gb":  {"bs": 160, "accum": 1, "workers": 8},
+    "l40s_48gb":  {"bs": 128, "accum": 1, "workers": 6},
+    "a100_40gb":  {"bs":  96, "accum": 1, "workers": 6},
+    "rtx_4090":   {"bs":  80, "accum": 1, "workers": 8},
+    "rtx_3090":   {"bs":  64, "accum": 1, "workers": 4},
+    "default":    {"bs":   8, "accum": 4, "workers": 0}
+  }
+}
+

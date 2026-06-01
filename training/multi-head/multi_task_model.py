@@ -348,6 +348,11 @@ class SpanMultiTaskModel(nn.Module):
             certainty_class_weights=None,
             oblique_class_weights=None,
             role_coarse_class_weights=None,
+            # class weights verbfam (None = pas de pondération)
+            verb_family_class_weights=None,
+            verb_polarity_class_weights=None,
+            verb_aspect_class_weights=None,
+            verb_source_class_weights=None,
             lambda_boundary=1.0,
             lambda_coarse=1.0,
             lambda_fine=1.2,
@@ -601,25 +606,30 @@ class SpanMultiTaskModel(nn.Module):
         # Masque : spans dont SVO boundary = 1 (verb_trigger détecté)
         vt_mask = (svo_boundary_labels == 1)  # [N] bool
 
-        def _verbfam_ce(logits, labels, none_id):
+        def _verbfam_ce(logits, labels, none_id, weight=None):
             """CE loss sur les spans verb_trigger avec label valide (≠ none_id)."""
             if not vt_mask.any() or labels is None:
                 return torch.tensor(0.0, device=device)
             m = vt_mask & (labels != none_id)
             if not m.any():
                 return torch.tensor(0.0, device=device)
-            return F.cross_entropy(logits[m], labels[m], reduction="mean")
+            w = weight.to(device) if weight is not None else None
+            return F.cross_entropy(logits[m], labels[m], weight=w, reduction="mean")
 
         loss_verb_family      = _verbfam_ce(
-            outputs["verb_family_logits"], verb_family_labels, VERB_FAMILY_NONE_ID)
+            outputs["verb_family_logits"], verb_family_labels, VERB_FAMILY_NONE_ID,
+            weight=verb_family_class_weights)
         loss_verb_family_fine = _verbfam_ce(
             outputs["verb_family_fine_logits_raw"], verb_family_fine_labels, VERB_FAMILY_FINE_NONE_ID)
         loss_verb_polarity    = _verbfam_ce(
-            outputs["verb_polarity_logits"], verb_polarity_labels, VERB_POLARITY_NONE_ID)
+            outputs["verb_polarity_logits"], verb_polarity_labels, VERB_POLARITY_NONE_ID,
+            weight=verb_polarity_class_weights)
         loss_verb_aspect      = _verbfam_ce(
-            outputs["verb_aspect_logits"], verb_aspect_labels, VERB_ASPECT_NONE_ID)
+            outputs["verb_aspect_logits"], verb_aspect_labels, VERB_ASPECT_NONE_ID,
+            weight=verb_aspect_class_weights)
         loss_verb_source      = _verbfam_ce(
-            outputs["verb_source_logits"], verb_source_labels, VERB_SOURCE_NONE_ID)
+            outputs["verb_source_logits"], verb_source_labels, VERB_SOURCE_NONE_ID,
+            weight=verb_source_class_weights)
 
         # ── Raw losses per task (for dynamic weighting) ─────────────────
         raw_losses = {
