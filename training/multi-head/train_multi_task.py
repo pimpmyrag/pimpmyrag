@@ -26,7 +26,7 @@ from multitask_dataset import MultiTaskSpanDataset, make_collate_fn
 from multitask_model import SpanMultiTaskModel
 from loss_weighting import create_weighting, FixedWeighting, TASK_KEYS
 from labels import (
-    COARSE_LABELS, FINE_LABELS,
+    COARSE_LABELS, FINE_LABELS, COARSE_NONE_ID,
     SYN_LABELS, NUM_SYN,
     NUM_VOICE, NUM_CERTAINTY, CERTAINTY_LABELS, NUM_GENDER, NUM_NUMBER, NUM_PERSON,
     ROLE_COARSE_LABELS, NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID, ROLE_COARSE_OTHER_ID,
@@ -761,7 +761,8 @@ def run_epoch(
         # Predictions
         b_pred = outputs["boundary_logits"].argmax(dim=-1).detach().cpu().tolist()
         c_pred = outputs["coarse_logits"].argmax(dim=-1).detach().cpu().tolist()
-        f_pred = masked_fine_predictions(outputs["fine_logits"], c_pred, coarse_fine_mask)
+        # fine_logits_masked : déjà soft-masqué par coarse dans forward() → même chemin qu'à l'inférence
+        f_pred = fine_pred_from_masked(outputs["fine_logits_masked"], c_pred)
         svob_pred    = outputs["svo_boundary_logits"].argmax(dim=-1).detach().cpu().tolist()
         role_coarse_pred_raw = outputs["role_coarse_logits"].argmax(dim=-1).detach().cpu().tolist()
         role_coarse_from_role_pred_raw = outputs["role_coarse_from_role_logits"].argmax(dim=-1).detach().cpu().tolist()

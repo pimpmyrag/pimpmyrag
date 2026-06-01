@@ -2,6 +2,12 @@
 """
 Export vectorisé du SpanMultiTaskModel vers ONNX.
 Remplace la boucle Python (qui force le constant folding) par des ops tensorielles pures.
+
+Sorties ONNX :
+  - boundary_logits  [N, 2]       : entité / non-entité
+  - coarse_logits    [N, num_coarse] : famille d'entité
+  - fine_logits      [N, NUM_FINE]   : type fin — DÉJÀ MASQUÉ par coarse (même cascade que le training)
+    → le consommateur peut directement faire argmax sans recalculer le masque
 """
 import argparse, warnings
 from pathlib import Path
@@ -9,22 +15,34 @@ warnings.filterwarnings("ignore")
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from multitask_model import SpanMultiTaskModel
 
 
 class OnnxSpanWrapperVec(nn.Module):
-    """Wrapper 100% tensoriel — pas de boucle Python ni de .item() — pour ONNX."""
+    """Wrapper 100% tensoriel — pas de boucle Python ni de .item() — pour ONNX.
+
+    Implémente la même cascade NER que SpanMultiTaskModel.forward() :
+      1. boundary_logits  depuis span_h
+      2. span_h_coarse = span_h * sigmoid(boundary_logits[:,1:2])   [boundary gate]
+      3. coarse_logits  depuis span_h_coarse
+      4. fine_logits    depuis span_h_coarse, biaisé par log(softmax(coarse) @ coarse_fine_mask)
+
+    Garantit zéro mismatch entre le training et la production ONNX.
+    """
 
     def __init__(self, inner: SpanMultiTaskModel):
         super().__init__()
-        self.encoder        = inner.encoder
-        self.width_emb      = inner.width_emb
-        self.span_mlp       = inner.span_mlp
-        self.boundary_head  = inner.boundary_head
-        self.coarse_head    = inner.coarse_head
-        self.fine_head      = inner.fine_head
+        self.encoder          = inner.encoder
+        self.width_emb        = inner.width_emb
+        self.span_mlp         = inner.span_mlp
+        self.boundary_head    = inner.boundary_head
+        self.coarse_head      = inner.coarse_head
+        self.fine_head        = inner.fine_head
         self.max_width_bucket = inner.max_width_bucket
+        # Masque coarse→fine : [num_coarse, NUM_FINE] bool
+        self.register_buffer("coarse_fine_mask", inner.coarse_fine_mask.float())
 
     def forward(
         self,
@@ -40,37 +58,54 @@ class OnnxSpanWrapperVec(nn.Module):
         ).last_hidden_state  # [B, L, H]
 
         # ── start / end vectors ──────────────────────────────────────
-        # hidden[span_batch_ids, span_starts] → [N, H]
         start_vecs = hidden[span_batch_ids, span_starts]   # [N, H]
         end_vecs   = hidden[span_batch_ids, span_ends]     # [N, H]
 
         # ── mean vector (masque tensoriel) ───────────────────────────
         L = hidden.size(1)
         positions = torch.arange(L, device=hidden.device)   # [L]
-        # mask[n, l] = 1 si span_starts[n] <= l <= span_ends[n]
         mask = (
             (positions.unsqueeze(0) >= span_starts.unsqueeze(1)) &
             (positions.unsqueeze(0) <= span_ends.unsqueeze(1))
         ).float()  # [N, L]
 
-        # hidden des exemples correspondants : [N, L, H]
         span_hidden = hidden[span_batch_ids]
-        # somme pondérée / longueur
-        lengths = (span_ends - span_starts + 1).float().clamp(min=1).unsqueeze(1)  # [N, 1]
-        mean_vecs = (span_hidden * mask.unsqueeze(-1)).sum(dim=1) / lengths          # [N, H]
+        lengths = (span_ends - span_starts + 1).float().clamp(min=1).unsqueeze(1)
+        mean_vecs = (span_hidden * mask.unsqueeze(-1)).sum(dim=1) / lengths  # [N, H]
 
         # ── width embedding ──────────────────────────────────────────
         widths = (span_ends - span_starts + 1).clamp(min=1, max=self.max_width_bucket - 1)
         w_embs = self.width_emb(widths)   # [N, W]
 
-        # ── MLP + têtes ──────────────────────────────────────────────
+        # ── MLP ──────────────────────────────────────────────────────
         span_reps = torch.cat([start_vecs, end_vecs, mean_vecs, w_embs], dim=-1)  # [N, D]
         span_h    = self.span_mlp(span_reps)                                        # [N, H']
 
+        # ── Cascade NER : boundary → coarse (gated) → fine (soft-masked) ────
+        #
+        # Strictement identique à SpanMultiTaskModel.forward() :
+        #   1. boundary sur span_h complet
+        #   2. span_h_coarse = span_h * sigmoid(boundary[:,1:2])
+        #      → gradient coarse/fine atténué sur spans négatifs (cohérence train)
+        #   3. fine = fine_raw + log(softmax(coarse) @ coarse_fine_mask)
+        #      → sortie ONNX directement argmax-able, pas besoin de post-traitement
+
+        boundary_logits = self.boundary_head(span_h)                        # [N, 2]
+
+        bnd_gate      = torch.sigmoid(boundary_logits[:, 1:2])              # [N, 1]
+        span_h_coarse = span_h * bnd_gate                                   # [N, H']
+
+        coarse_logits  = self.coarse_head(span_h_coarse)                    # [N, C]
+        fine_logits_raw = self.fine_head(span_h_coarse)                     # [N, F]
+
+        coarse_probs   = F.softmax(coarse_logits, dim=-1)                   # [N, C]
+        coarse_gate_f  = coarse_probs @ self.coarse_fine_mask               # [N, F]
+        fine_logits    = fine_logits_raw + torch.log(coarse_gate_f.clamp(min=1e-9))
+
         return (
-            self.boundary_head(span_h),   # [N, 2]
-            self.coarse_head(span_h),     # [N, 9]
-            self.fine_head(span_h),       # [N, 32]
+            boundary_logits,   # [N, 2]
+            coarse_logits,     # [N, num_coarse]
+            fine_logits,       # [N, NUM_FINE]  ← déjà masqué par coarse
         )
 
 

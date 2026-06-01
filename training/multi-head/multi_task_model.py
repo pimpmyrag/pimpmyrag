@@ -221,6 +221,47 @@ class SpanMultiTaskModel(nn.Module):
 
         role_logits = self.role_head(span_h_role)
 
+        # ── NER cascade : boundary → coarse (gated) → fine (soft-masked) ─────
+        #
+        # Problème à résoudre : boundary, coarse et fine partagent span_h_ner.
+        # Les gradients coarse/fine sur les spans négatifs entrent en compétition
+        # avec le gradient boundary → le modèle peine à bien séparer entités/non-entités.
+        #
+        # Solution :
+        #   1. boundary    → span_h_ner complet (inchangé)
+        #   2. coarse/fine → span_h_ner * sigmoid(boundary.detach()[:,1:2])
+        #      → gradient coarse/fine atténué sur spans négatifs (gate ≈ 0)
+        #      → gradient coarse/fine plein sur spans positifs (gate ≈ 1)
+        #      → boundary isolé (detach : coarse/fine ne "tirent" pas boundary)
+        #   3. fine_logits_masked = fine_logits_raw + log(softmax(coarse.detach()) @ coarse_fine_mask)
+        #      → formule identique train ET inférence → zéro mismatch
+        #      → fine toujours cohérent avec coarse en production
+        #
+        # Pour la LOSS : fine_logits_raw (sans masque) → gradient stable même
+        #   quand coarse est encore incertain en début de training.
+        # Pour les MÉTRIQUES et l'INFÉRENCE : fine_logits_masked.
+
+        boundary_logits = self.boundary_head(span_h_ner)  # [N, 2]
+
+        if N > 0:
+            # Gate : prob d'entité, detaché pour isoler boundary des gradients coarse/fine
+            bnd_gate      = torch.sigmoid(boundary_logits.detach()[:, 1:2])  # [N, 1]
+            span_h_coarse = span_h_ner * bnd_gate                             # [N, H]
+        else:
+            span_h_coarse = span_h_ner
+
+        coarse_logits   = self.coarse_head(span_h_coarse)  # [N, num_coarse]
+        fine_logits_raw = self.fine_head(span_h_coarse)    # [N, NUM_FINE]
+
+        if N > 0:
+            # Soft coarse→fine mask : log-bias vers les labels compatibles avec coarse.
+            # detach() → fine ne pollue pas le gradient coarse.
+            coarse_probs_det = F.softmax(coarse_logits.detach(), dim=-1)          # [N, C]
+            coarse_gate_f    = coarse_probs_det @ self.coarse_fine_mask.float()   # [N, F]
+            fine_logits_masked = fine_logits_raw + torch.log(coarse_gate_f.clamp(min=1e-9))
+        else:
+            fine_logits_masked = fine_logits_raw
+
         # ── Coarse dérivée depuis role_head (logsumexp par groupe) ───────────
         # Comparaison directe avec role_coarse_head native pour diagnostic.
         # Ordre : 0=SUBJ, 1=OBJ, 2=OBLIQ, 3=APPOS (aligné sur ROLE_COARSE_LABELS[:4])
@@ -236,12 +277,15 @@ class SpanMultiTaskModel(nn.Module):
         return {
             "span_reps":           span_h,
             "span_indices":        span_indices,
-            # NER heads : span_h_ner (enrichi du contexte SVO des spans conteneurs)
-            "boundary_logits":     self.boundary_head(span_h_ner),
-            "coarse_logits":       self.coarse_head(span_h_ner),
-            "fine_logits":         self.fine_head(span_h_ner),
-            # SVO heads : span_h brut (pas de dépendance circulaire)
-            "svo_boundary_logits":  self.svo_boundary_head(span_h),
+            # ── NER heads ─────────────────────────────────────────────────────
+            # boundary : span_h_ner complet
+            "boundary_logits":     boundary_logits,
+            # coarse/fine : span_h_ner * bnd_gate (gradient isolé de boundary)
+            "coarse_logits":       coarse_logits,
+            "fine_logits":         fine_logits_raw,       # pour la LOSS (gradient libre, stable)
+            "fine_logits_masked":  fine_logits_masked,    # pour les MÉTRIQUES et l'INFÉRENCE
+            # ── SVO heads : span_h brut ────────────────────────────────────────
+            "svo_boundary_logits":  svo_boundary_logits,  # déjà calculé plus haut, pas de double appel
             "syn_logits":           self.syn_head(span_h),
             # role_coarse conditionné sur le verbe (soft-attention verb_ptr)
             "role_coarse_logits":   self.role_coarse_head(span_h_role),
