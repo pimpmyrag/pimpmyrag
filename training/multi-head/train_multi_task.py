@@ -1198,7 +1198,13 @@ def run_epoch(
             labels=[0, 1], target_names=["non_verb", "verb_trigger"],
             digits=3, zero_division=0
         ) if all_svob_true else "N/A",
-        # role_coarse/oblique reports supprimés (têtes désactivées, lambda=0)
+        # role_coarse : SUBJ/OBJ/OBLIQ/APPOS
+        "role_coarse_report": classification_report(
+            all_rc_true, all_rc_pred,
+            labels=[l for l in range(NUM_ROLE_COARSE) if l != ROLE_COARSE_NONE_ID and l in set(all_rc_true)],
+            target_names=[ROLE_COARSE_LABELS[l] for l in range(NUM_ROLE_COARSE) if l != ROLE_COARSE_NONE_ID and l in set(all_rc_true)],
+            digits=3, zero_division=0
+        ) if all_rc_true else "N/A",
         # role fin (12 labels) : SUBJECT/OBJECT/OBLIQUE_* (NONE exclu)
         "role_report": classification_report(
             all_role_true, all_role_pred,
@@ -1543,6 +1549,7 @@ def main():
                     "lambda_role_oblique": args.lambda_role_oblique,
                     "lambda_role":       args.lambda_role,
                     "lambda_voice":      args.lambda_voice,
+                    "lambda_certainty":  args.lambda_certainty,
                     "lambda_morpho":     args.lambda_morpho,
                     "lambda_verb_ptr":          args.lambda_verb_ptr,
                     "lambda_compat":            args.lambda_compat,
@@ -2064,6 +2071,7 @@ def main():
                 "val/fine_abstract_f1": val_metrics["fine_abstract_f1"],
                 "val/svo_boundary_f1":  val_metrics["svo_boundary_f1"],
                 "val/role_f1":          val_metrics["role_macro_f1"],
+                "val/role_coarse_f1":   val_metrics.get("role_coarse_macro_f1", 0.0),
                 "val/voice_f1":         val_metrics["voice_macro_f1"],
                 "val/certainty_f1":     val_metrics["certainty_macro_f1"],
                 "val/gender_f1":        val_metrics["gender_macro_f1"],
@@ -2085,6 +2093,7 @@ def main():
                 ("fine_report",          "val/fine"),
                 ("coarse_report",        "val/coarse"),
                 ("role_report",          "val/role"),
+                ("role_coarse_report",   "val/role_coarse"),
                 ("svo_boundary_report",  "val/svo_bnd"),
                 ("verb_family_report",   "val/verb_family"),
                 ("verb_polarity_report", "val/verb_polarity"),
