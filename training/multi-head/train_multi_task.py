@@ -347,6 +347,12 @@ def safe_macro_f1(y_true, y_pred, labels=None):
     return f1_score(y_true, y_pred, average="macro", labels=labels, zero_division=0)
 
 
+def fine_pred_from_masked(fine_logits_masked, c_pred):
+    """Prédit les labels fine à partir des logits déjà soft-masqués par coarse (forward).
+    c_pred non utilisé car le masquage est déjà appliqué dans forward() — argmax suffit."""
+    return fine_logits_masked.argmax(dim=-1).detach().cpu().tolist()
+
+
 def run_epoch(
         loader,
         model,
