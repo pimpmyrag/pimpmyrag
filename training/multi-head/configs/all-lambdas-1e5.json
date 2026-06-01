@@ -1,0 +1,130 @@
+{
+  "_comment": "Full direct inspiré du meilleur run all-lambdas-1 (LR=1e-5, ep1=0.852) + corrections bnd-boost/bnd-fine-balanced",
+  "_version": "all-lambdas-1e5",
+  "_rationale": [
+    "all-lambdas-1 (LR=1e-5) : ep1=0.852 ! — démarrage ultra-rapide, peak=0.876 mais plateau dès ep5.",
+    "Problème all-lambdas-1 : fine=0.5 trop faible → classes dures bloquées; ema_decay=0.0; class_weight_power=1.0.",
+    "Fix : fine 0.5→1.8 + focal fine_gamma=1.5 → casser le plateau fine.",
+    "Fix : EMA=0.999 (validé sur bnd-fine-balanced, peak=0.936) → stabiliser boundary.",
+    "Fix : class_weight_power=0.5 (comme bnd-fine-balanced) → ne pas trop surpondérer les rares.",
+    "Fix : head_lr_multiplier 6.0→4.0 (deberta-v3-base vs mdeberta).",
+    "Modèle : deberta-v3-base (meilleur résultat de toute la série v8.20).",
+    "Dataset : v8.21_verbfam (31K phrases, 5 champs verbfam annotés).",
+    "Attendu : ep1~0.85+, peak bnd>0.92, fine>0.84 ep15-20 sans plateau.",
+    "Hypothèse : LR=1e-5 + EMA + fine boosté = meilleur des deux mondes"
+  ],
+
+  "run": {
+    "name_suffix": "all-lambdas-1e5",
+    "max_epochs": 90,
+    "model": "microsoft/deberta-v3-base",
+    "loss_weighting": "fixed",
+    "ner_only_bench": false
+  },
+
+  "optimizer": {
+    "lr": 1e-5,
+    "head_lr_multiplier": 4.0,
+    "warmup_epochs": 0,
+    "max_grad_norm": 1.0,
+    "layer_lr_decay": 0.9,
+    "ema_decay": 0.999,
+    "class_weight_power": 0.5
+  },
+
+  "lambdas": {
+    "_comment": "boundary=5 prouvé; fine=1.8+focal pour briser plateau; coarse/svo/morpho équilibrés",
+    "boundary":     5.0,
+    "coarse":       0.75,
+    "fine":         1.8,
+    "svo_boundary": 0.5,
+    "svo":          0.7,
+    "role_coarse":  0.0,
+    "role_oblique": 0.5,
+    "role":         0.7,
+    "voice":        0.3,
+    "certainty":    0.3,
+    "morpho":       0.3,
+    "verb_ptr":     0.5,
+    "compat":       0.5
+  },
+
+  "focal": {
+    "boundary_gamma":  0.5,
+    "fine_gamma":      1.5,
+    "coarse_gamma":    0.0
+  },
+
+  "boundary_first": {
+    "_comment": "Désactivé — full data dès ep1 comme all-lambdas-1 (ep1=0.852 sans boundary_first)",
+    "enabled": false,
+    "unlock_threshold":    0.0,
+    "unlock_ramp_epochs":  1,
+    "coarse_warmup_lambda": 0.0,
+    "fine_warmup_lambda":   0.0
+  },
+
+  "svo_cascade": {
+    "_comment": "Aucune condition — tout actif dès ep1 (full mode)",
+    "role_coarse_bnd_thr":       0.0,
+    "role_coarse_warmup_lambda": 0.0,
+    "role_ramp_epochs":          1,
+    "role_thr_svo_bnd":          0.0,
+    "phase2_ramp_epochs":        1,
+    "oblique_thr_role_crs":      0.0,
+    "oblique_ramp_epochs":       1
+  },
+
+  "boundary_rescue": {
+    "_comment": "Désactivé en mode full — pas de sauvetage artificiel",
+    "window": 999, "target": 0.0, "min_delta": 0.0,
+    "factor_vptr_voice": 1.0, "factor_coarse": 1.0, "bnd_boost": 1.0
+  },
+
+  "boundary_plateau": {
+    "_comment": "Désactivé — pas de détection plateau en mode full",
+    "window": 999, "min_delta": 0.0,
+    "regression_window": 999, "regression_delta": 0.0
+  },
+
+  "hard_negatives": {
+    "_comment": "Désactivé — full mode sans curriculum (comme all-lambdas-1)",
+    "every_n_epochs": 999,
+    "decay":          1.0,
+    "max_weight":     1.0,
+    "min_weight":     1.0,
+    "boost_fp":       1.0,
+    "boost_fn":       1.0,
+    "boost_coarse":   1.0,
+    "boost_fine":     1.0,
+    "boost_fp_svo":   1.0,
+    "boost_fn_svo":   1.0,
+    "boost_role_coarse": 1.0
+  },
+
+  "difficulty_levels": {
+    "_comment": "Full data dès ep1 — pas de curriculum (comme all-lambdas-1)",
+    "names":         ["full"],
+    "hard_per_gold": [6],
+    "soft_factors":  [1.0],
+    "max_epochs_per_level":   999,
+    "min_delta_for_progress": 0.0,
+    "patience": 999
+  },
+
+  "early_stopping": {
+    "_comment": "Désactivé — laisser tourner 90 epochs pour voir la courbe complète",
+    "patience": 0,
+    "min_delta": 0.0
+  },
+
+  "hardware": {
+    "h100_80gb":  {"bs": 192, "accum": 1, "workers": 12},
+    "l40s_48gb":  {"bs": 128, "accum": 1, "workers": 12},
+    "a100_40gb":  {"bs":  96, "accum": 1, "workers": 10},
+    "rtx_4090":   {"bs":  80, "accum": 1, "workers": 10},
+    "rtx_3090":   {"bs":  64, "accum": 1, "workers": 4},
+    "default":    {"bs":  16, "accum": 2, "workers": 0}
+  }
+}
+
