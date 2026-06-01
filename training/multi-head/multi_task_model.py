@@ -221,41 +221,21 @@ class SpanMultiTaskModel(nn.Module):
 
         role_logits = self.role_head(span_h_role)
 
-        # ── NER cascade : boundary → coarse (gated) → fine (soft-masked) ─────
-        #
-        # Problème à résoudre : boundary, coarse et fine partagent span_h_ner.
-        # Les gradients coarse/fine sur les spans négatifs entrent en compétition
-        # avec le gradient boundary → le modèle peine à bien séparer entités/non-entités.
-        #
-        # Solution :
-        #   1. boundary    → span_h_ner complet (inchangé)
-        #   2. coarse/fine → span_h_ner * sigmoid(boundary.detach()[:,1:2])
-        #      → gradient coarse/fine atténué sur spans négatifs (gate ≈ 0)
-        #      → gradient coarse/fine plein sur spans positifs (gate ≈ 1)
-        #      → boundary isolé (detach : coarse/fine ne "tirent" pas boundary)
-        #   3. fine_logits_masked = fine_logits_raw + log(softmax(coarse.detach()) @ coarse_fine_mask)
-        #      → formule identique train ET inférence → zéro mismatch
-        #      → fine toujours cohérent avec coarse en production
-        #
-        # Pour la LOSS : fine_logits_raw (sans masque) → gradient stable même
-        #   quand coarse est encore incertain en début de training.
-        # Pour les MÉTRIQUES et l'INFÉRENCE : fine_logits_masked.
+        # ── NER heads : boundary / coarse / fine sur span_h_ner complet ─────────
+        # Pas de boundary gate — les 3 têtes partagent span_h_ner directement.
+        # Le gate (bnd_gate * span_h_ner) créait un équilibre pathologique :
+        #   boundary prédit "entité partout" → gate≈1 → coarse/fine apprennent bien
+        #   → mais aucun signal ne corrige boundary (detach) → precision boundary ≈ 0.47 ep8.
+        # Compétition directe sur span_h_ner = comportement sain observé sur tous les runs 0531.
 
         boundary_logits = self.boundary_head(span_h_ner)  # [N, 2]
+        coarse_logits   = self.coarse_head(span_h_ner)    # [N, num_coarse]
+        fine_logits_raw = self.fine_head(span_h_ner)      # [N, NUM_FINE]
 
+        # Soft coarse→fine mask pour les MÉTRIQUES et l'INFÉRENCE uniquement.
+        # detach() → fine ne pollue pas le gradient coarse.
+        # fine_logits_raw utilisé pour la LOSS → gradient stable.
         if N > 0:
-            # Gate : prob d'entité, detaché pour isoler boundary des gradients coarse/fine
-            bnd_gate      = torch.sigmoid(boundary_logits.detach()[:, 1:2])  # [N, 1]
-            span_h_coarse = span_h_ner * bnd_gate                             # [N, H]
-        else:
-            span_h_coarse = span_h_ner
-
-        coarse_logits   = self.coarse_head(span_h_coarse)  # [N, num_coarse]
-        fine_logits_raw = self.fine_head(span_h_coarse)    # [N, NUM_FINE]
-
-        if N > 0:
-            # Soft coarse→fine mask : log-bias vers les labels compatibles avec coarse.
-            # detach() → fine ne pollue pas le gradient coarse.
             coarse_probs_det = F.softmax(coarse_logits.detach(), dim=-1)          # [N, C]
             coarse_gate_f    = coarse_probs_det @ self.coarse_fine_mask.float()   # [N, F]
             fine_logits_masked = fine_logits_raw + torch.log(coarse_gate_f.clamp(min=1e-9))
@@ -278,11 +258,10 @@ class SpanMultiTaskModel(nn.Module):
             "span_reps":           span_h,
             "span_indices":        span_indices,
             # ── NER heads ─────────────────────────────────────────────────────
-            # boundary : span_h_ner complet
+            # boundary/coarse/fine : span_h_ner complet (pas de gate)
             "boundary_logits":     boundary_logits,
-            # coarse/fine : span_h_ner * bnd_gate (gradient isolé de boundary)
             "coarse_logits":       coarse_logits,
-            "fine_logits":         fine_logits_raw,       # pour la LOSS (gradient libre, stable)
+            "fine_logits":         fine_logits_raw,       # pour la LOSS
             "fine_logits_masked":  fine_logits_masked,    # pour les MÉTRIQUES et l'INFÉRENCE
             # ── SVO heads : span_h brut ────────────────────────────────────────
             "svo_boundary_logits":  svo_boundary_logits,  # déjà calculé plus haut, pas de double appel
