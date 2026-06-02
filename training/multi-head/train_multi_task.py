@@ -1205,6 +1205,13 @@ def run_epoch(
             target_names=[ROLE_COARSE_LABELS[l] for l in range(NUM_ROLE_COARSE) if l != ROLE_COARSE_NONE_ID and l in set(all_rc_true)],
             digits=3, zero_division=0
         ) if all_rc_true else "N/A",
+        # role_oblique : sous-types OBLIQUE (NONE exclu)
+        "role_oblique_report": classification_report(
+            all_ro_true, all_ro_pred,
+            labels=[l for l in range(NUM_ROLE_OBLIQUE) if l != ROLE_OBLIQUE_NONE_ID and l in set(all_ro_true)],
+            target_names=[ROLE_OBLIQUE_LABELS[l] for l in range(NUM_ROLE_OBLIQUE) if l != ROLE_OBLIQUE_NONE_ID and l in set(all_ro_true)],
+            digits=3, zero_division=0
+        ) if all_ro_true else "N/A",
         # role fin (12 labels) : SUBJECT/OBJECT/OBLIQUE_* (NONE exclu)
         "role_report": classification_report(
             all_role_true, all_role_pred,
@@ -2072,6 +2079,7 @@ def main():
                 "val/svo_boundary_f1":  val_metrics["svo_boundary_f1"],
                 "val/role_f1":          val_metrics["role_macro_f1"],
                 "val/role_coarse_f1":   val_metrics.get("role_coarse_macro_f1", 0.0),
+                "val/role_oblique_f1":  val_metrics.get("role_oblique_macro_f1", 0.0),
                 "val/voice_f1":         val_metrics["voice_macro_f1"],
                 "val/certainty_f1":     val_metrics["certainty_macro_f1"],
                 "val/gender_f1":        val_metrics["gender_macro_f1"],
@@ -2094,6 +2102,7 @@ def main():
                 ("coarse_report",        "val/coarse"),
                 ("role_report",          "val/role"),
                 ("role_coarse_report",   "val/role_coarse"),
+                ("role_oblique_report",  "val/role_oblique"),
                 ("svo_boundary_report",  "val/svo_bnd"),
                 ("verb_family_report",   "val/verb_family"),
                 ("verb_polarity_report", "val/verb_polarity"),

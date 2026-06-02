@@ -1,5 +1,5 @@
 {
-  "_comment": "Full direct inspiré du meilleur run all-lambdas-1 (LR=1e-5, ep1=0.852) + corrections bnd-boost/bnd-fine-balanced",
+    "_comment": "Full direct inspiré du meilleur run all-lambdas-1 (LR=1e-5, ep1=0.852) + corrections bnd-boost/bnd-fine-balanced",
   "_version": "all-lambdas-1e5",
   "_rationale": [
     "all-lambdas-1 (LR=1e-5) : ep1=0.852 ! — démarrage ultra-rapide, peak=0.876 mais plateau dès ep5.",
@@ -9,6 +9,12 @@
     "  → verb_family=0.5, verb_family_fine=0.3, verb_polarity=0.3, verb_aspect=0.3, verb_source=0.2",
     "Fix : class_weight_power=0.5 (comme bnd-fine-balanced) → ne pas trop surpondérer les rares.",
     "Fix : head_lr_multiplier 6.0→4.0 (deberta-v3-base vs mdeberta).",
+    "Fix (v2) : role_coarse 0.0→0.3 — était 0.0 donc jamais entraîné → cascade gate role_oblique = bruit.",
+    "  → role_coarse_warmup_lambda 0.0→0.3 aligné pour garder full-mode dès ep1.",
+    "Fix (v3) : verb_family 0.5→2.0, verb_polarity 0.3→1.0 — collapse à Perception/NEUTRAL confirmé.",
+    "  Cause : gradient verbfam (~1% de boundary) trop faible pour sortir de l'init aléatoire en 5 epochs.",
+    "  → 4x plus de signal pour verb_family (12 classes sémantiques vs 2 pour voice).",
+    "  → verb_polarity aussi collapse NEUTRAL (56.8%) → boost 0.3→1.0 pour NEGATIVE/POSITIVE.",
     "Modèle : deberta-v3-base (meilleur résultat de toute la série v8.20).",
     "Dataset : v8.21_verbfam (31K phrases, 5 champs verbfam annotés).",
     "Attendu : ep1~0.85+, peak bnd>0.92, fine>0.84 ep15-20 sans plateau.",
@@ -34,13 +40,13 @@
   },
 
   "lambdas": {
-    "_comment": "boundary=5 prouvé; fine=1.8+focal pour briser plateau; verb_family/polarity/aspect/source REQUIS (défaut 0.0 → collapse)",
+    "_comment": "boundary=5 prouvé; fine=1.8+focal pour briser plateau; verbfam BOOSTÉ v3: 12 classes sémantiques → 4x lambda vs voice",
     "boundary":          5.0,
     "coarse":            0.75,
     "fine":              1.8,
     "svo_boundary":      0.5,
     "svo":               0.7,
-    "role_coarse":       0.0,
+    "role_coarse":       0.3,
     "role_oblique":      0.5,
     "role":              0.7,
     "voice":             0.3,
@@ -48,11 +54,11 @@
     "morpho":            0.3,
     "verb_ptr":          0.5,
     "compat":            0.5,
-    "verb_family":       0.5,
-    "verb_family_fine":  0.3,
-    "verb_polarity":     0.3,
-    "verb_aspect":       0.3,
-    "verb_source":       0.2
+    "verb_family":       2.0,
+    "verb_family_fine":  0.5,
+    "verb_polarity":     1.0,
+    "verb_aspect":       0.5,
+    "verb_source":       0.3
   },
 
   "focal": {
@@ -73,7 +79,7 @@
   "svo_cascade": {
     "_comment": "Aucune condition — tout actif dès ep1 (full mode)",
     "role_coarse_bnd_thr":       0.0,
-    "role_coarse_warmup_lambda": 0.0,
+    "role_coarse_warmup_lambda": 0.3,
     "role_ramp_epochs":          1,
     "role_thr_svo_bnd":          0.0,
     "phase2_ramp_epochs":        1,
