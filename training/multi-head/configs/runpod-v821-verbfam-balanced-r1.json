@@ -14,7 +14,9 @@
     "max_epochs": 20,
     "model": "microsoft/deberta-v3-base",
     "loss_weighting": "fixed",
-    "ner_only_bench": false
+    "ner_only_bench": false,
+    "ignore_coarse_none": true,
+    "detach_ner_classifier_backbone": false
   },
 
   "optimizer": {
@@ -34,8 +36,8 @@
     "svo_boundary": 0.35,
     "svo": 0.7,
     "role": 0.7,
-    "role_coarse": 0.0,
-    "role_oblique": 0.0,
+    "role_coarse": 0.3,
+    "role_oblique": 0.3,
     "voice": 0.2,
     "certainty": 0.3,
     "morpho": 0.1,
@@ -56,7 +58,7 @@
 
   "boundary_first": {
     "enabled": true,
-    "unlock_threshold": 0.87,
+    "unlock_threshold": 0.90,
     "unlock_ramp_epochs": 3,
     "coarse_warmup_lambda": 0.25,
     "fine_warmup_lambda": 0.9
