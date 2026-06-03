@@ -18,7 +18,7 @@
     "ner_only_bench": false
   },
   "optimizer": {
-    "lr": 8e-06,
+    "lr": 1e-5,
     "head_lr_multiplier": 4.0,
     "warmup_epochs": 0,
     "max_grad_norm": 1.0,
@@ -31,19 +31,20 @@
     "coarse": 0.75,
     "fine": 1.8,
     "svo_boundary": 0.35,
-    "svo": 0.7,
-    "role_coarse": 0.55,
-    "role_oblique": 0.25,
-    "voice": 0.15,
-    "certainty": 0.3,
-    "morpho": 0.1,
-    "verb_ptr": 0.5,
-    "compat": 0.2,
-    "verb_family": 0.8,
-    "verb_family_fine": 0.4,
-    "verb_polarity": 0.4,
-    "verb_aspect": 0.4,
-    "verb_source": 0.3
+    "svo": 0.70,
+    "role": 0.70,
+    "role_coarse": 0.7,
+    "role_oblique": 0.5,
+    "voice": 0.20,
+    "certainty": 0.30,
+    "morpho": 0.10,
+    "verb_ptr": 0.60,
+    "verb_family": 1.5,
+    "verb_family_fine": 1.5,
+    "verb_polarity": 1.0,
+    "verb_aspect": 0.5,
+    "verb_source": 0.4,
+    "compat": 0.2
   },
   "focal": {
     "boundary_gamma": 0.5,
@@ -59,21 +60,21 @@
     "fine_warmup_lambda": 0.5
   },
   "svo_cascade": {
-    "role_coarse_bnd_thr": 0.9,
-    "role_coarse_warmup_lambda": 0.4,
-    "role_ramp_epochs": 2,
-    "role_thr_svo_bnd": 0.88,
-    "phase2_ramp_epochs": 4,
-    "oblique_thr_role_crs": 0.45,
-    "oblique_ramp_epochs": 10
+    "role_coarse_bnd_thr": 0.0,
+    "role_coarse_warmup_lambda": 0.3,
+    "role_ramp_epochs": 1,
+    "role_thr_svo_bnd": 0.0,
+    "phase2_ramp_epochs": 1,
+    "oblique_thr_role_crs": 0.0,
+    "oblique_ramp_epochs": 1
   },
   "boundary_rescue": {
-    "window": 5,
-    "target": 0.9,
-    "min_delta": 0.003,
-    "factor_vptr_voice": 0.65,
-    "factor_coarse": 0.75,
-    "bnd_boost": 1.2
+    "window": 999,
+    "target": 0.0,
+    "min_delta": 0.0,
+    "factor_vptr_voice": 1.0,
+    "factor_coarse": 1.0,
+    "bnd_boost": 1.0
   },
   "boundary_plateau": {
     "window": 5,
