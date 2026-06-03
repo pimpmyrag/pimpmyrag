@@ -1,0 +1,120 @@
+{
+  "_comment": "Config de validation verbfam locale — 15 epochs, 5% data (1500 phrases), CPU. Fix collapse Perception : class_weights=uniform (power=0.0) + lambda_verb_family=5.0.",
+  "_version": "verbfam-local-v2",
+
+  "run": {
+    "name_suffix": "verbfam-local",
+    "max_epochs": 15,
+    "model": "microsoft/deberta-v3-base",
+    "loss_weighting": "fixed",
+    "ner_only_bench": false
+  },
+
+  "optimizer": {
+    "lr": 1e-5,
+    "head_lr_multiplier": 4.0,
+    "warmup_epochs": 0,
+    "max_grad_norm": 1.0,
+    "layer_lr_decay": 0.9,
+    "ema_decay": 0.0,
+    "class_weight_power": 0.5
+  },
+
+  "lambdas": {
+    "_comment": "Fix collapse Perception : verb_family=5.0 (vs 2.0) + class_weights=uniform dans train_multi_task.py",
+    "boundary":          5.0,
+    "coarse":            0.75,
+    "fine":              1.8,
+    "svo_boundary":      0.5,
+    "svo":               0.7,
+    "role_coarse":       0.3,
+    "role_oblique":      0.5,
+    "role":              0.7,
+    "voice":             0.3,
+    "certainty":         0.3,
+    "morpho":            0.3,
+    "verb_ptr":          0.5,
+    "compat":            0.5,
+    "verb_family":       5.0,
+    "verb_family_fine":  0.5,
+    "verb_polarity":     1.0,
+    "verb_aspect":       0.5,
+    "verb_source":       0.3
+  },
+
+  "focal": {
+    "boundary_gamma":  0.5,
+    "fine_gamma":      1.5,
+    "coarse_gamma":    0.0
+  },
+
+  "boundary_first": {
+    "enabled": false,
+    "unlock_threshold":    0.0,
+    "unlock_ramp_epochs":  1,
+    "coarse_warmup_lambda": 0.0,
+    "fine_warmup_lambda":   0.0
+  },
+
+  "svo_cascade": {
+    "_comment": "Tout actif dès ep1 — identique à all-lambdas-1e5",
+    "role_coarse_bnd_thr":       0.0,
+    "role_coarse_warmup_lambda": 0.3,
+    "role_ramp_epochs":          1,
+    "role_thr_svo_bnd":          0.0,
+    "phase2_ramp_epochs":        1,
+    "oblique_thr_role_crs":      0.0,
+    "oblique_ramp_epochs":       1
+  },
+
+  "boundary_rescue": {
+    "window": 999, "target": 0.0, "min_delta": 0.0,
+    "factor_vptr_voice": 1.0, "factor_coarse": 1.0, "bnd_boost": 1.0
+  },
+
+  "boundary_plateau": {
+    "window": 999, "min_delta": 0.0,
+    "regression_window": 999, "regression_delta": 0.0
+  },
+
+  "hard_negatives": {
+    "_comment": "Désactivé pour ce test",
+    "every_n_epochs": 999,
+    "decay":          1.0,
+    "max_weight":     1.0,
+    "min_weight":     1.0,
+    "boost_fp":       1.0,
+    "boost_fn":       1.0,
+    "boost_coarse":   1.0,
+    "boost_fine":     1.0,
+    "boost_fp_svo":   1.0,
+    "boost_fn_svo":   1.0,
+    "boost_role_coarse": 1.0
+  },
+
+  "difficulty_levels": {
+    "_comment": "Un seul niveau full — pas de curriculum",
+    "names":         ["full"],
+    "hard_per_gold": [6],
+    "soft_factors":  [1.0],
+    "max_epochs_per_level":   999,
+    "min_delta_for_progress": 0.0,
+    "patience": 999
+  },
+
+  "early_stopping": {
+    "_comment": "Désactivé — on veut voir les 15 epochs complètes",
+    "patience": 0,
+    "min_delta": 0.0
+  },
+
+  "hardware": {
+    "_comment": "workers=0 obligatoire CPU/MPS. bs=24 pour MPS (auto-détecté).",
+    "h100_80gb":  {"bs": 24, "accum": 2, "workers": 0},
+    "l40s_48gb":  {"bs": 24, "accum": 2, "workers": 0},
+    "a100_40gb":  {"bs": 24, "accum": 2, "workers": 0},
+    "rtx_4090":   {"bs": 24, "accum": 2, "workers": 0},
+    "rtx_3090":   {"bs": 24, "accum": 2, "workers": 0},
+    "default":    {"bs": 24, "accum": 2, "workers": 0}
+  }
+}

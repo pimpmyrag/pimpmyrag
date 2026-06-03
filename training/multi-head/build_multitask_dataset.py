@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import re
 from pathlib import Path
 from typing import List, Dict, Tuple, Set
 
@@ -53,6 +54,62 @@ def tokenize_with_offsets(tokenizer, text: str):
         truncation=False,
     )
     return enc["input_ids"], enc["offset_mapping"]
+
+
+def _canon_label(s: str) -> str:
+    """Normalise un label pour matching robuste (casse, tirets, espaces, préfixes)."""
+    s = (s or "").strip()
+    if not s:
+        return ""
+    s = s.strip("[]")
+    s = re.sub(r"^verb[_\-\s]*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"[^a-zA-Z0-9]+", "", s)
+    return s.lower()
+
+
+def _build_canon_map(d: dict[str, int]) -> dict[str, int]:
+    return {_canon_label(k): v for k, v in d.items()}
+
+
+_VFAM_CANON_MAP = _build_canon_map(VERB_FAMILY2ID)
+_VFINE_CANON_MAP = _build_canon_map(VERB_FAMILY_FINE2ID)
+_VPOL_CANON_MAP = _build_canon_map(VERB_POLARITY2ID)
+_VASP_CANON_MAP = _build_canon_map(VERB_ASPECT2ID)
+_VSRC_CANON_MAP = _build_canon_map(VERB_SOURCE2ID)
+
+
+def _parse_verb_labels(sp: dict) -> tuple[int, int, int, int, int]:
+    """Parse les labels verbaux en supportant les formats legacy + actuels.
+
+    Legacy support:
+    - verb_family = "Communication_Demande" (coarse+fine combinés)
+    - verb_family = "Verb_Communication_Annonce"
+    """
+    vfam_raw = sp.get("verb_family")
+    vfine_raw = sp.get("verb_family_fine")
+    vpol_raw = sp.get("verb_polarity")
+    vasp_raw = sp.get("verb_aspect")
+    vsrc_raw = sp.get("verb_source")
+
+    vfam_id = _VFAM_CANON_MAP.get(_canon_label(vfam_raw), VERB_FAMILY_NONE_ID)
+    vfine_id = _VFINE_CANON_MAP.get(_canon_label(vfine_raw), VERB_FAMILY_FINE_NONE_ID)
+
+    # Compat legacy: champ unique "Family_Fine" dans verb_family.
+    if vfam_id == VERB_FAMILY_NONE_ID and isinstance(vfam_raw, str) and vfam_raw.strip():
+        parts = [p for p in re.split(r"[_\-/\s]+", vfam_raw.strip("[]")) if p]
+        if parts and parts[0].lower() == "verb":
+            parts = parts[1:]
+        if len(parts) >= 2:
+            fam_part = parts[0]
+            fine_part = "".join(parts[1:])
+            vfam_id = _VFAM_CANON_MAP.get(_canon_label(fam_part), vfam_id)
+            if vfine_id == VERB_FAMILY_FINE_NONE_ID:
+                vfine_id = _VFINE_CANON_MAP.get(_canon_label(fine_part), vfine_id)
+
+    vpol_id = _VPOL_CANON_MAP.get(_canon_label(vpol_raw), VERB_POLARITY_NONE_ID)
+    vasp_id = _VASP_CANON_MAP.get(_canon_label(vasp_raw), VERB_ASPECT_NONE_ID)
+    vsrc_id = _VSRC_CANON_MAP.get(_canon_label(vsrc_raw), VERB_SOURCE_NONE_ID)
+    return vfam_id, vfine_id, vpol_id, vasp_id, vsrc_id
 
 def char_span_to_token_span(offsets: List[Tuple[int, int]], start: int, end: int):
     """
@@ -124,11 +181,7 @@ def build_gold_candidates(row, tokenizer):
                 voice_id  = VOICE2ID.get(voice_str, VOICE_NONE_ID)
                 cert_str  = sp.get("certainty", "")
                 certainty_id = CERTAINTY2ID.get(cert_str, CERTAINTY_NONE_ID)
-                vfam_id      = VERB_FAMILY2ID.get(sp.get("verb_family", ""), VERB_FAMILY_NONE_ID)
-                vfam_fine_id = VERB_FAMILY_FINE2ID.get(sp.get("verb_family_fine", ""), VERB_FAMILY_FINE_NONE_ID)
-                vpol_id      = VERB_POLARITY2ID.get(sp.get("verb_polarity", ""), VERB_POLARITY_NONE_ID)
-                vasp_id      = VERB_ASPECT2ID.get(sp.get("verb_aspect", ""), VERB_ASPECT_NONE_ID)
-                vsrc_id      = VERB_SOURCE2ID.get(sp.get("verb_source", ""), VERB_SOURCE_NONE_ID)
+                vfam_id, vfam_fine_id, vpol_id, vasp_id, vsrc_id = _parse_verb_labels(sp)
 
             # Rôle SVO du pronom + gov_verb_tok_start
             role_id          = ROLE2ID.get(sp.get("svo_role", "NONE"), ROLE_NONE_ID)

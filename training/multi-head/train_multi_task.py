@@ -318,11 +318,15 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
         weights = weights / weights.mean()
         return weights
 
-    # role_coarse : poids ÉGAUX (power=0) pour SUBJ/OBJ/OBLIQ/APPOS.
-    # OBLIQ est la plus fréquente → avec power>0 elle reçoit le poids le plus bas → collapse SUBJ.
-    # Equal weights → gradient neutre entre les 4 classes, le modèle apprend toutes simultanément.
+    # role_coarse : inverse-frequency weights (power=0.5) pour SUBJ/OBJ/OBLIQ/APPOS.
+    # Raisonnement précédent (power=0.0 "égaux") était INCORRECT :
+    #   → OBLIQ est majoritaire (~60%), SUBJ minoritaire (~15%)
+    #   → avec power=0 : même poids mais beaucoup plus d'exemples OBLIQ → gradients OBLIQ dominent
+    #   → SUBJ s'effondre à F1=0.000 dès ep2 (observé sur run lq2bhpko)
+    # Avec power=0.5 : SUBJ reçoit un poids plus élevé → signal équilibré → SUBJ apprend.
+    # max_weight=5.0 : plus permissif que verbfam car 4 classes seulement (moins de risque de déséquilibre)
     # OTHER(4) reçoit poids=1.0 (neutre, présent dans softmax mais exclu du gradient)
-    rc_w = make_weights(role_coarse_counts, ROLE_COARSE_OTHER_ID, power=0.0)
+    rc_w = make_weights(role_coarse_counts, ROLE_COARSE_OTHER_ID, power=min(power, 0.5), max_weight=5.0)
     rc_w_full = torch.ones(NUM_ROLE_COARSE, dtype=torch.float32)
     rc_w_full[:ROLE_COARSE_OTHER_ID] = rc_w  # indices 0-3 = SUBJ/OBJ/OBLIQ/APPOS
     # index 4 (OTHER) = 1.0 neutre (exclu du gradient de toute façon)
@@ -337,9 +341,11 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
         # obtiennent weight_final < 0.1 (quasi éliminés) car la moyenne est gonflée par les rares.
         make_weights(oblique_counts, NUM_ROLE_OBLIQUE, power=power, max_weight=3.0),
         rc_w_full,
-        # verbfam class weights — power plus modéré pour ne pas écraser State_Change (25.9%)
-        # power=min(power, 0.5) au lieu de power*1.5 : Conflict 2x boost, State_Change ~0.57 (pas 0.31)
-        make_weights(verb_family_counts, NUM_VERB_FAMILY, power=min(power, 0.5)),
+        # verbfam class weights — power=0.5 + max_weight=5.0
+        # span_h SANS detach() désormais → DeBERTa s'adapte → class weights plus critiques.
+        # max_weight=5.0 (vs 3.0 avant) pour mieux compenser classes ultra-rares (Conflict ~2%)
+        # sans écraser les classes fréquentes (State_Change ~26%).
+        make_weights(verb_family_counts, NUM_VERB_FAMILY, power=min(power, 0.5), max_weight=5.0),
         make_weights(verb_polarity_counts, NUM_VERB_POLARITY, power=power),
         make_weights(verb_aspect_counts, NUM_VERB_ASPECT, power=min(power * 1.2, 0.7)),
         make_weights(verb_source_counts, NUM_VERB_SOURCE, power=power),
@@ -349,6 +355,10 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
         certainty_counts,
         oblique_counts,
         role_coarse_counts,
+        verb_family_counts,
+        verb_polarity_counts,
+        verb_aspect_counts,
+        verb_source_counts,
     )
 
 
@@ -779,9 +789,17 @@ def run_epoch(
                             "boundary": lambda_boundary, "coarse": lambda_coarse,
                             "fine": lambda_fine, "svo_boundary": lambda_svo_boundary,
                             "svo": lambda_svo,
+                            "role_coarse": lambda_role_coarse,
+                            "role_oblique": lambda_role_oblique,
+                            "role": lambda_role,
                             "voice": lambda_voice, "certainty": lambda_certainty,
                             "morpho": lambda_morpho, "verb_ptr": lambda_verb_ptr,
                             "compat": lambda_compat,
+                            "verb_family": lambda_verb_family,
+                            "verb_family_fine": lambda_verb_family_fine,
+                            "verb_polarity": lambda_verb_polarity,
+                            "verb_aspect": lambda_verb_aspect,
+                            "verb_source": lambda_verb_source,
                         }
                         raw = loss_dict.get("raw_losses")
                         if raw:
@@ -1685,9 +1703,17 @@ def main():
         "boundary": args.lambda_boundary, "coarse": args.lambda_coarse,
         "fine": args.lambda_fine, "svo_boundary": args.lambda_svo_boundary,
         "svo": args.lambda_svo,
+        "role_coarse": args.lambda_role_coarse,
+        "role_oblique": args.lambda_role_oblique,
+        "role": args.lambda_role,
         "voice": args.lambda_voice, "certainty": args.lambda_certainty,
         "morpho": args.lambda_morpho, "verb_ptr": args.lambda_verb_ptr,
         "compat": args.lambda_compat,
+        "verb_family": args.lambda_verb_family,
+        "verb_family_fine": args.lambda_verb_family_fine,
+        "verb_polarity": args.lambda_verb_polarity,
+        "verb_aspect": args.lambda_verb_aspect,
+        "verb_source": args.lambda_verb_source,
     }
     weighting = create_weighting(args.loss_weighting, initial_lambdas,
                                  alpha=args.gradnorm_alpha)
@@ -1731,6 +1757,10 @@ def main():
             certainty_counts,
             oblique_counts,
             role_coarse_counts,
+            verb_family_counts,
+            verb_polarity_counts,
+            verb_aspect_counts,
+            verb_source_counts,
         ) = compute_class_weights_from_multitask_jsonl(
             args.train,
             power=args.class_weight_power,
@@ -1775,6 +1805,25 @@ def main():
         print("\n[oblique fine counts / weights]  (CWP compense rareté ADVERSARY/SOURCE...)")
         for i, name in enumerate(ROLE_OBLIQUE_LABELS):
             print(f"  {name:<25} count={oblique_counts.get(i, 0):>6} weight={oblique_w[i].item():.6f}")
+
+        print("\n[verb family counts / weights]")
+        for i, name in enumerate(VERB_FAMILY_LABELS):
+            print(f"  {name:<15} count={verb_family_counts.get(i, 0):>6} weight={verb_family_w[i].item():.6f}")
+
+        print("\n[verb polarity counts / weights]")
+        for i, name in enumerate(VERB_POLARITY_LABELS):
+            print(f"  {name:<15} count={verb_polarity_counts.get(i, 0):>6} weight={verb_polarity_w[i].item():.6f}")
+
+        print("\n[verb aspect counts / weights]")
+        for i, name in enumerate(VERB_ASPECT_LABELS):
+            print(f"  {name:<15} count={verb_aspect_counts.get(i, 0):>6} weight={verb_aspect_w[i].item():.6f}")
+
+        print("\n[verb source counts / weights]")
+        for i, name in enumerate(VERB_SOURCE_LABELS):
+            print(f"  {name:<15} count={verb_source_counts.get(i, 0):>6} weight={verb_source_w[i].item():.6f}")
+
+        if sum(verb_family_counts.values()) == 0:
+            print("⚠️  WARNING: aucun label verb_family supervisé dans train — la tête verbale ne peut pas apprendre.")
 
 
     else:

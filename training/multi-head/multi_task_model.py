@@ -73,6 +73,12 @@ class SpanMultiTaskModel(nn.Module):
         self.svo_boundary_head = nn.Linear(span_hidden_dim, 2)        # détecte verb_trigger/pron
         self.syn_head          = nn.Linear(span_hidden_dim, NUM_SYN)  # verb_trigger/pron_subj/pron_obj
         self.role_coarse_head  = nn.Linear(span_hidden_dim, NUM_ROLE_COARSE) # rôle SVO coarse SUBJ/OBJ/OBLIQ/APPOS
+        # Biais positionnel pour role_coarse : SUBJ ← avant le verbe, OBJ ← après.
+        # span_h (features NER) ne contient pas l'info relative span/verbe → SUBJ collapse.
+        # rel_pos = (span_tok_start - verb_tok_start) / 50 ∈ [-1,1] → projeté en [N, hidden].
+        # Training : position GOLD (gov_verb_labels du batch). Inférence : verb_ptr prédit.
+        # bias=False : le signal positionnel est déjà directionnel, pas besoin de biais.
+        self.role_pos_proj = nn.Linear(1, span_hidden_dim, bias=False)
         self.role_head         = nn.Linear(span_hidden_dim, NUM_ROLE)        # ancienne tête rôle (12 labels)
         # Tête oblique fine : classifie les sous-types d'oblique (uniquement si role_coarse=OBLIQ)
         # Reçoit span_h + projection du FINE NER (38 labels) — plus discriminant que coarse (7 familles)
@@ -91,13 +97,29 @@ class SpanMultiTaskModel(nn.Module):
         self.person_head  = nn.Linear(span_hidden_dim, NUM_PERSON)
 
         # ── VerbFam heads (verb_trigger uniquement) ───────────────────────────
+        # ARCHITECTURE : MLP dédié sur span_h.detach() (features post-NER MLP, 512d).
+        # Même source que voice_head / certainty_head → cohérent.
+        # .detach() : pas de compétition gradient avec NER.
+        # Avant (v8.18) : span_reps.detach() (features brutes pre-MLP, ~1060d)
+        # → DeBERTa ne pouvait pas adapter ses représentations au signal verbfam
+        # → collapse vers 2-3 classes dominant toujours.
+        _vf_dim = 256
+        self.verb_family_mlp = nn.Sequential(
+            nn.Linear(span_hidden_dim, _vf_dim),
+            nn.LayerNorm(_vf_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(_vf_dim, _vf_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+        )
         # verb_family (12) → soft mask → verb_family_fine (38)
         # verb_polarity (3), verb_aspect (2), verb_source (3) : indépendants
-        self.verb_family_head      = nn.Linear(span_hidden_dim, NUM_VERB_FAMILY)
-        self.verb_family_fine_head = nn.Linear(span_hidden_dim, NUM_VERB_FAMILY_FINE)
-        self.verb_polarity_head    = nn.Linear(span_hidden_dim, NUM_VERB_POLARITY)
-        self.verb_aspect_head      = nn.Linear(span_hidden_dim, NUM_VERB_ASPECT)
-        self.verb_source_head      = nn.Linear(span_hidden_dim, NUM_VERB_SOURCE)
+        self.verb_family_head      = nn.Linear(_vf_dim, NUM_VERB_FAMILY)
+        self.verb_family_fine_head = nn.Linear(_vf_dim, NUM_VERB_FAMILY_FINE)
+        self.verb_polarity_head    = nn.Linear(_vf_dim, NUM_VERB_POLARITY)
+        self.verb_aspect_head      = nn.Linear(_vf_dim, NUM_VERB_ASPECT)
+        self.verb_source_head      = nn.Linear(_vf_dim, NUM_VERB_SOURCE)
         # Masque coarse→fine verbfam (comme NER coarse→fine)
         self.register_buffer("verb_family_fine_mask", VERB_FAMILY_FINE_MASK)
 
@@ -273,6 +295,15 @@ class SpanMultiTaskModel(nn.Module):
         else:
             role_coarse_from_role_logits = torch.zeros((0, 4), device=span_h.device)
 
+        # ── VerbFam projection dédiée (span_h post-NER MLP, avec gradient) ───────────
+        # span_h SANS detach() : même pattern que voice/certainty_head(span_h).
+        # Le gradient verbfam remonte à travers verb_family_mlp → span_mlp → DeBERTa,
+        # permettant à l'encodeur de s'adapter aux propriétés sémantiques du verbe.
+        # Avant : span_h.detach() → DeBERTa figé → verbfam F1 stagnant (observé run lq2bhpko).
+        # Voice/certainty marchent sans detach car signal morphologique fort dès les poids DeBERTa
+        # pré-entraînés ; verbfam nécessite une adaptation active (12 classes sémantiques).
+        _span_h_vf = self.verb_family_mlp(span_h)  # [N, 256]
+
         return {
             "span_reps":           span_h,
             "span_indices":        span_indices,
@@ -311,20 +342,23 @@ class SpanMultiTaskModel(nn.Module):
             "person_logits":       self.person_head(span_h),
             "verb_ptr_logits":     verb_ptr_logits,
             # ── VerbFam (verb_trigger uniquement) ─────────────────────────────
-            "verb_family_logits":          self.verb_family_head(span_h),
-            "verb_family_fine_logits_raw": self.verb_family_fine_head(span_h),
-            # verb_family_fine masqué par verb_family (soft mask, même pattern que NER coarse→fine)
+            # span_reps.detach() → verb_family_mlp dédié (256 dims, 2 GELU)
+            # Features DeBERTa BRUTES (avant span_mlp NER) + projection non-linéaire propre.
+            # Aucune compétition gradient avec NER.
+            "verb_family_logits":          self.verb_family_head(_span_h_vf),
+            "verb_family_fine_logits_raw": self.verb_family_fine_head(_span_h_vf),
+            # verb_family_fine masqué par verb_family (soft mask)
             "verb_family_fine_logits": (
-                self.verb_family_fine_head(span_h) +
+                self.verb_family_fine_head(_span_h_vf) +
                 torch.log(
-                    (F.softmax(self.verb_family_head(span_h).detach(), dim=-1)
+                    (F.softmax(self.verb_family_head(_span_h_vf).detach(), dim=-1)
                      @ self.verb_family_fine_mask.float()).clamp(min=1e-9)
                 )
-                if N > 0 else self.verb_family_fine_head(span_h)
+                if N > 0 else self.verb_family_fine_head(_span_h_vf)
             ),
-            "verb_polarity_logits": self.verb_polarity_head(span_h),
-            "verb_aspect_logits":   self.verb_aspect_head(span_h),
-            "verb_source_logits":   self.verb_source_head(span_h),
+            "verb_polarity_logits": self.verb_polarity_head(_span_h_vf),
+            "verb_aspect_logits":   self.verb_aspect_head(_span_h_vf),
+            "verb_source_logits":   self.verb_source_head(_span_h_vf),
             # compat alias
             "svo_logits":          self.syn_head(span_h),
         }

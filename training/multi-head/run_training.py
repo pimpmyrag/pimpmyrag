@@ -403,10 +403,26 @@ def rebuild_dataset(level: int, cfg: dict, gold_version: str, state: dict):
     model_name = cfg.get("run", {}).get("model", "microsoft/deberta-v3-base")
     print(f"\n📦 Rebuild dataset niveau {name} (hard={hard}, soft={soft})")
 
+    def _resolve_split_input(split: str) -> str:
+        # Priorité aux versions annotées verbfam si présentes
+        # (évite un training silencieux avec verb_* = NONE partout).
+        base = Path("data") / f"{split}_{gold_version}.jsonl"
+        if gold_version.endswith("_verbfam"):
+            return str(base)
+        with_vf = Path("data") / f"{split}_{gold_version}_verbfam.jsonl"
+        return str(with_vf if with_vf.exists() else base)
+
+    train_input = _resolve_split_input("train")
+    val_input = _resolve_split_input("val")
+    test_input = _resolve_split_input("test")
+    print(f"   ↳ train source: {train_input}")
+    print(f"   ↳ val source:   {val_input}")
+    print(f"   ↳ test source:  {test_input}")
+
     # Build train adaptatif (hard negatives selon niveau)
     subprocess.run([
         "python3", "build_multitask_dataset.py",
-        "--input",         f"data/train_{gold_version}.jsonl",
+        "--input",         train_input,
         "--output",        f"data/train.{suffix}.multitask.jsonl",
         "--model-name",    model_name,
         "--hard-per-gold", str(hard),
@@ -414,10 +430,10 @@ def rebuild_dataset(level: int, cfg: dict, gold_version: str, state: dict):
     ], check=True)
 
     # Build val + test (niveau fixe : hard=2, soft=1.0 — évaluation stable)
-    for split in ["val", "test"]:
+    for split, split_input in [("val", val_input), ("test", test_input)]:
         subprocess.run([
             "python3", "build_multitask_dataset.py",
-            "--input",  f"data/{split}_{gold_version}.jsonl",
+            "--input",  split_input,
             "--output", f"data/{split}.multitask.jsonl",
             "--model-name", model_name,
             "--hard-per-gold", "2",

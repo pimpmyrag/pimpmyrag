@@ -17,9 +17,11 @@ from typing import Dict, Optional
 
 TASK_KEYS = [
     "boundary", "coarse", "fine",
-    "svo_boundary", "svo", "role",
+    "svo_boundary", "svo", "role_coarse", "role_oblique", "role",
     "voice", "certainty", "morpho",
     "verb_ptr", "compat",
+    "verb_family", "verb_family_fine",
+    "verb_polarity", "verb_aspect", "verb_source",
 ]
 
 
