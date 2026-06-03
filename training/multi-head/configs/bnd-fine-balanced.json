@@ -145,9 +145,9 @@
       "workers": 6
     },
     "rtx_4090": {
-      "bs": 80,
+      "bs": 96,
       "accum": 1,
-      "workers": 8
+      "workers": 12
     },
     "rtx_3090": {
       "bs": 64,
