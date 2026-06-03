@@ -23,8 +23,8 @@
     "warmup_epochs": 0,
     "max_grad_norm": 1.0,
     "layer_lr_decay": 0.9,
-    "ema_decay": 0.999,
-    "class_weight_power": 0.5
+    "ema_decay": 0.0,
+    "class_weight_power": 0.25
   },
   "lambdas": {
     "boundary": 2.0,
@@ -83,7 +83,7 @@
     "regression_delta": 0.008
   },
   "hard_negatives": {
-    "every_n_epochs": 1,
+    "every_n_epochs": 3,
     "decay": 0.85,
     "max_weight": 8.0,
     "min_weight": 0.3,
