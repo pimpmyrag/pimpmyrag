@@ -1564,6 +1564,24 @@ def main():
              "La tête boundary gère déjà entité/non-entité → signal redondant supprimé."
     )
     parser.add_argument(
+        "--detach-ner-classifier-backbone",
+        action="store_true",
+        default=False,
+        help="Entraîne coarse/fine sur des features détachées pour éviter qu'elles concurrencent boundary dans encoder/span_mlp."
+    )
+    parser.add_argument(
+        "--boundary-aux-from-ner",
+        action="store_true",
+        default=False,
+        help="Ajoute à boundary une correction apprise depuis softmax(coarse/fine) détachés."
+    )
+    parser.add_argument(
+        "--boundary-aux-scale",
+        type=float,
+        default=1.0,
+        help="Échelle de la correction NER→boundary si --boundary-aux-from-ner est actif."
+    )
+    parser.add_argument(
         "--min-fine-none-weight",
         type=float,
         default=0.05,
@@ -1700,6 +1718,10 @@ def main():
                     "lambda_verb_polarity":     args.lambda_verb_polarity,
                     "lambda_verb_aspect":       args.lambda_verb_aspect,
                     "lambda_verb_source":       args.lambda_verb_source,
+                    "detach_ner_classifier_backbone": args.detach_ner_classifier_backbone,
+                    "boundary_aux_from_ner": args.boundary_aux_from_ner,
+                    "boundary_aux_scale": args.boundary_aux_scale,
+                    "ignore_coarse_none": args.ignore_coarse_none,
                     # Schema
                     "num_fine":          len(FINE_LABELS),
                     "num_coarse":        len(COARSE_LABELS),
@@ -1768,7 +1790,19 @@ def main():
     )
     print(f"📦 DataLoaders: num_workers={num_workers}, pin_memory={pin_memory}, persistent={persistent}")
 
-    model = SpanMultiTaskModel(model_name=args.model_name, num_coarse=len(COARSE_LABELS)).to(device).float()
+    model = SpanMultiTaskModel(
+        model_name=args.model_name,
+        num_coarse=len(COARSE_LABELS),
+        detach_ner_classifier_backbone=args.detach_ner_classifier_backbone,
+        boundary_aux_from_ner=args.boundary_aux_from_ner,
+        boundary_aux_scale=args.boundary_aux_scale,
+    ).to(device).float()
+    print(
+        "🧭 NER coupling: "
+        f"detach_cls_backbone={args.detach_ner_classifier_backbone} "
+        f"boundary_aux_from_ner={args.boundary_aux_from_ner} "
+        f"boundary_aux_scale={args.boundary_aux_scale}"
+    )
 
     # Gradient checkpointing — réduit VRAM activations encodeur ~30% (recompute pendant backward)
     # Permet d'aller BS=192→320 sur H100 sans OOM. Overhead backward ~+15% acceptable.

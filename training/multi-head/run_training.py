@@ -397,7 +397,6 @@ def run_epoch(cfg: dict, hw: dict, state: dict, lambdas: dict,
         "--hn-boost-fn-svo", "0.0" if in_warmup or state.get("ner_only_bench") else str(hn["boost_fn_svo"]),
         "--hn-boost-role-coarse", str(hn["boost_role_coarse"]),
         "--loss-weighting", run_cfg.get("loss_weighting", "fixed"),
-        "--ignore-coarse-none",
         "--amp",
         "--wandb-run-name",  state["wandb_run_name"],
         "--wandb-tags",      state["wandb_tags"],
@@ -406,6 +405,13 @@ def run_epoch(cfg: dict, hw: dict, state: dict, lambdas: dict,
         "--metrics-latest-json", state["metrics_latest_json"],
         "--skip-test-eval",
     ]
+    if run_cfg.get("ignore_coarse_none", True):
+        cmd.append("--ignore-coarse-none")
+    if run_cfg.get("detach_ner_classifier_backbone", False):
+        cmd.append("--detach-ner-classifier-backbone")
+    if run_cfg.get("boundary_aux_from_ner", False):
+        cmd.append("--boundary-aux-from-ner")
+        cmd += ["--boundary-aux-scale", str(run_cfg.get("boundary_aux_scale", 1.0))]
     if state.get("ner_only_bench"):
         cmd.append("--ner-only-score")
     if state.get("resume_arg"):

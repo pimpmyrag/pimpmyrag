@@ -1,0 +1,132 @@
+{
+  "_comment": "RunPod v8.21 boundary-primary r1 — boundary propriétaire de la détection; coarse/fine sur backbone détaché + évidence NER détachée vers boundary; role_coarse/role_oblique restaurés; verbfam abaissé.",
+  "_version": "runpod-v821-boundary-primary-r1",
+  "_rationale": [
+    "Le run runpod-v821-verbfam-balanced-r1 plafonne boundary ~0.89 et coupe role_coarse/role_oblique.",
+    "Les logs locaux anciens montrent coarse/fine/SVO meilleurs, mais boundary reste surtout limité par la précision positive.",
+    "Objectif: éviter que coarse/fine concurrencent encoder/span_mlp tout en permettant à leur évidence de corriger boundary.",
+    "ignore_coarse_none=false réactive un signal NONE coarse léger (min_coarse_none_weight=0.05 côté train_multi_task.py) utile à P(entity).",
+    "role_coarse/role_oblique restaurés pour les obliques rares; verbfam abaissé pour protéger NER/SVO."
+  ],
+
+  "run": {
+    "name_suffix": "runpod-v821-boundary-primary-r1",
+    "max_epochs": 25,
+    "model": "microsoft/deberta-v3-base",
+    "loss_weighting": "fixed",
+    "ner_only_bench": false,
+    "ignore_coarse_none": false,
+    "detach_ner_classifier_backbone": true,
+    "boundary_aux_from_ner": true,
+    "boundary_aux_scale": 0.5
+  },
+
+  "optimizer": {
+    "lr": 1e-5,
+    "head_lr_multiplier": 4.0,
+    "warmup_epochs": 0,
+    "max_grad_norm": 1.0,
+    "layer_lr_decay": 0.9,
+    "ema_decay": 0.0,
+    "class_weight_power": 0.35
+  },
+
+  "lambdas": {
+    "boundary": 4.0,
+    "coarse": 0.8,
+    "fine": 1.5,
+    "svo_boundary": 0.4,
+    "svo": 0.7,
+    "role": 0.7,
+    "role_coarse": 0.3,
+    "role_oblique": 0.3,
+    "voice": 0.2,
+    "certainty": 0.3,
+    "morpho": 0.1,
+    "verb_ptr": 0.6,
+    "verb_family": 0.8,
+    "verb_family_fine": 0.5,
+    "verb_polarity": 0.5,
+    "verb_aspect": 0.3,
+    "verb_source": 0.2,
+    "compat": 0.2
+  },
+
+  "focal": {
+    "boundary_gamma": 0.5,
+    "fine_gamma": 1.5,
+    "coarse_gamma": 0.0
+  },
+
+  "boundary_first": {
+    "enabled": false,
+    "unlock_threshold": 0.0,
+    "unlock_ramp_epochs": 1,
+    "coarse_warmup_lambda": 0.0,
+    "fine_warmup_lambda": 0.0
+  },
+
+  "svo_cascade": {
+    "role_coarse_bnd_thr": 0.0,
+    "role_coarse_warmup_lambda": 0.3,
+    "role_ramp_epochs": 1,
+    "role_thr_svo_bnd": 0.0,
+    "phase2_ramp_epochs": 1,
+    "oblique_thr_role_crs": 0.0,
+    "oblique_ramp_epochs": 1
+  },
+
+  "boundary_rescue": {
+    "window": 999,
+    "target": 0.0,
+    "min_delta": 0.0,
+    "factor_vptr_voice": 1.0,
+    "factor_coarse": 1.0,
+    "bnd_boost": 1.0
+  },
+
+  "boundary_plateau": {
+    "window": 999,
+    "min_delta": 0.0,
+    "regression_window": 999,
+    "regression_delta": 0.0
+  },
+
+  "hard_negatives": {
+    "every_n_epochs": 999,
+    "decay": 1.0,
+    "max_weight": 1.0,
+    "min_weight": 1.0,
+    "boost_fp": 1.0,
+    "boost_fn": 1.0,
+    "boost_coarse": 1.0,
+    "boost_fine": 1.0,
+    "boost_fp_svo": 1.0,
+    "boost_fn_svo": 1.0,
+    "boost_role_coarse": 1.0
+  },
+
+  "difficulty_levels": {
+    "names": ["full"],
+    "hard_per_gold": [6],
+    "soft_factors": [1.0],
+    "max_epochs_per_level": 999,
+    "min_delta_for_progress": 0.0,
+    "patience": 999
+  },
+
+  "early_stopping": {
+    "patience": 0,
+    "min_delta": 0.0
+  },
+
+  "hardware": {
+    "h100_80gb": {"bs": 160, "accum": 1, "workers": 8},
+    "l40s_48gb": {"bs": 128, "accum": 1, "workers": 6},
+    "a100_40gb": {"bs": 96, "accum": 1, "workers": 6},
+    "rtx_4090": {"bs": 80, "accum": 1, "workers": 8},
+    "rtx_3090": {"bs": 64, "accum": 1, "workers": 4},
+    "default": {"bs": 8, "accum": 4, "workers": 0}
+  }
+}
+

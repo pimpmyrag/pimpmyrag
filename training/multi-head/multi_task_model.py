@@ -43,8 +43,15 @@ class SpanMultiTaskModel(nn.Module):
             span_hidden_dim: int = 512,
             max_width_bucket: int = 16,
             dropout: float = 0.1,
+            detach_ner_classifier_backbone: bool = False,
+            boundary_aux_from_ner: bool = False,
+            boundary_aux_scale: float = 1.0,
     ):
         super().__init__()
+
+        self.detach_ner_classifier_backbone = detach_ner_classifier_backbone
+        self.boundary_aux_from_ner = boundary_aux_from_ner
+        self.boundary_aux_scale = float(boundary_aux_scale)
 
         self.encoder = AutoModel.from_pretrained(model_name)
         hidden_size = self.encoder.config.hidden_size
@@ -67,6 +74,10 @@ class SpanMultiTaskModel(nn.Module):
         self.boundary_head     = nn.Linear(span_hidden_dim, 2)
         self.coarse_head       = nn.Linear(span_hidden_dim, num_coarse)
         self.fine_head         = nn.Linear(span_hidden_dim, NUM_FINE)
+        # Evidence NER → boundary : coarse/fine peuvent corriger boundary sans
+        # renvoyer de gradient vers leurs têtes ni vers le backbone partagé.
+        self.boundary_ner_evidence_head = nn.Linear(num_coarse + NUM_FINE, 2, bias=False)
+        nn.init.zeros_(self.boundary_ner_evidence_head.weight)
         num_fine = NUM_FINE  # utilisé pour ner_fine_to_oblique
 
         # Heads syntaxiques v4
@@ -262,16 +273,34 @@ class SpanMultiTaskModel(nn.Module):
         # Même pattern que verbfam_fine : softmax(role_coarse.detach())[:, OBLIQ] comme gate
         rc_logits   = self.role_coarse_head(span_h_role)
 
-        # ── NER heads : boundary / coarse / fine sur span_h_ner complet ─────────
-        # Pas de boundary gate — les 3 têtes partagent span_h_ner directement.
+        # ── NER heads ───────────────────────────────────────────────────────────
+        # Boundary reste la tête primaire sur span_h_ner complet.
+        # Option detach_ner_classifier_backbone : coarse/fine apprennent leurs
+        # classifieurs sur les features boundary-optimisées, mais leur loss ne tire
+        # plus encoder/span_mlp dans une direction concurrente.
         # Le gate (bnd_gate * span_h_ner) créait un équilibre pathologique :
         #   boundary prédit "entité partout" → gate≈1 → coarse/fine apprennent bien
         #   → mais aucun signal ne corrige boundary (detach) → precision boundary ≈ 0.47 ep8.
         # Compétition directe sur span_h_ner = comportement sain observé sur tous les runs 0531.
 
-        boundary_logits = self.boundary_head(span_h_ner)  # [N, 2]
-        coarse_logits   = self.coarse_head(span_h_ner)    # [N, num_coarse]
-        fine_logits_raw = self.fine_head(span_h_ner)      # [N, NUM_FINE]
+        span_h_cls = span_h_ner.detach() if self.detach_ner_classifier_backbone else span_h_ner
+        boundary_logits_base = self.boundary_head(span_h_ner)  # [N, 2]
+        coarse_logits        = self.coarse_head(span_h_cls)    # [N, num_coarse]
+        fine_logits_raw      = self.fine_head(span_h_cls)      # [N, NUM_FINE]
+
+        if self.boundary_aux_from_ner and N > 0:
+            ner_evidence = torch.cat(
+                [
+                    F.softmax(coarse_logits.detach(), dim=-1),
+                    F.softmax(fine_logits_raw.detach(), dim=-1),
+                ],
+                dim=-1,
+            )
+            boundary_ner_evidence_logits = self.boundary_ner_evidence_head(ner_evidence)
+            boundary_logits = boundary_logits_base + self.boundary_aux_scale * boundary_ner_evidence_logits
+        else:
+            boundary_ner_evidence_logits = torch.zeros_like(boundary_logits_base)
+            boundary_logits = boundary_logits_base
 
         # Soft coarse→fine mask pour les MÉTRIQUES et l'INFÉRENCE uniquement.
         # detach() → fine ne pollue pas le gradient coarse.
@@ -310,6 +339,8 @@ class SpanMultiTaskModel(nn.Module):
             # ── NER heads ─────────────────────────────────────────────────────
             # boundary/coarse/fine : span_h_ner complet (pas de gate)
             "boundary_logits":     boundary_logits,
+            "boundary_logits_base": boundary_logits_base,
+            "boundary_ner_evidence_logits": boundary_ner_evidence_logits,
             "coarse_logits":       coarse_logits,
             "fine_logits":         fine_logits_raw,       # pour la LOSS
             "fine_logits_masked":  fine_logits_masked,    # pour les MÉTRIQUES et l'INFÉRENCE
@@ -328,7 +359,7 @@ class SpanMultiTaskModel(nn.Module):
             "role_oblique_logits": (
                 self.role_oblique_head(
                     span_h_role + self.ner_fine_to_oblique(
-                        torch.softmax(self.fine_head(span_h_ner).detach(), dim=-1)
+                        torch.softmax(fine_logits_raw.detach(), dim=-1)
                     )
                 ) + torch.log(
                     F.softmax(rc_logits.detach(), dim=-1)[:, 2:3].clamp(min=1e-9)
