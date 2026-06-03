@@ -8,7 +8,7 @@ cd /workspace/pimpmyrag/training/multi-head
 CONFIG="${CONFIG:-configs/bnd-fine-balanced.json}"
 GOLD_VERSION="${GOLD_VERSION:-v8.21_verbfam}"
 export TOKENIZERS_PARALLELISM="false"
-export AUTO_BS=0  # BS statique via config hardware — auto-BS désactivé (fake batch instable)
+export AUTO_BS="${AUTO_BS:-0}"  # AUTO_BS=1 pour benchmarker le batch size avant run long
 
 # ── Détection device ────────────────────────────────────────────────────────
 if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then

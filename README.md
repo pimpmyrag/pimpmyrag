@@ -27,8 +27,9 @@ Interface interactive pour tester l'extraction NER/SVO en temps réel :
 
 | Fonctionnalité | Description |
 |---|---|
-| 🏷️ **NER 32 labels** | Extraction d'entités nommées avec labels fins (person, org, location, event, value…) |
-| 🔗 **SVO** | Extraction des relations Sujet–Verbe–Objet avec rôles syntaxiques |
+| 🏷️ **NER 38 labels fins** | Extraction d'entités nommées avec taxonomie coarse/fine (`PER`, `LOC`, `ORG`, `TIME`, `EVENT`, `OBJECT`, `VALUE`, `WORK`, `ABSTRACT`) |
+| 🔗 **SVO + rôles 12 labels** | Extraction Sujet–Verbe–Objet avec rôles syntaxiques (`SUBJECT`, `OBJECT`, `OBLIQUE_*`, `APPOS`) |
+| 🧭 **Verbfam** | Classification sémantique des verbes (`verb_family`, `verb_family_fine`, polarity/aspect/source) |
 | 🤖 **LLM Judge** | Évaluation automatique de la qualité NER via un LLM (OpenAI, Mistral, Ollama, GitHub Copilot, Azure…) |
 | ⚙️ **Paramètres live** | Ajustement des seuils de détection en temps réel |
 | 🌍 **Multilingue** | Interface disponible en FR / EN / DE / ES / IT |
@@ -73,6 +74,33 @@ pimpmyrag/
 ├── ner-demo/            Démo UI Spring/Vaadin + serveur MCP SSE
 ├── training/multi-head/ Dataset, training, export ONNX, bench/eval
 └── scripts/             Eval, tests fonctionnels, utilitaires
+```
+
+### Taxonomie NER/SVO
+
+La taxonomie maintenue est générée depuis le code source de vérité `training/multi-head/labels.py` :
+
+| Famille | Labels actifs | Source |
+|---|---:|---|
+| NER coarse | 10 (`NONE` inclus côté modèle) | `COARSE_LABELS` |
+| NER fine | 38 | `FINE_LABELS` |
+| Syntax spans | 3 | `SYN_LABELS` |
+| Role principal | 12 | `ROLE_LABELS` |
+| Verb family / fine | 12 / 38 | `VERB_FAMILY_LABELS`, `VERB_FAMILY_FINE_LABELS` |
+| Morphologie/modalité | voice, certainty, gender, number, person | `labels.py` |
+
+Documents générés :
+
+- Taxonomie lisible : [`docs/TAXONOMY.md`](docs/TAXONOMY.md)
+- Export machine-readable : [`docs/taxonomy.json`](docs/taxonomy.json)
+- JSON Schema : [`docs/taxonomy.schema.json`](docs/taxonomy.schema.json)
+
+Après toute modification de `training/multi-head/labels.py`, régénérer :
+
+```zsh
+cd pimpmyrag
+source training/multi-head/venv/bin/activate
+python3 training/multi-head/export_taxonomy.py
 ```
 
 ### Prérequis
@@ -141,8 +169,9 @@ Interactive interface to test NER/SVO extraction in real time:
 
 | Feature | Description |
 |---|---|
-| 🏷️ **NER 32 labels** | Named entity extraction with fine labels (person, org, location, event, value…) |
-| 🔗 **SVO** | Subject–Verb–Object extraction with syntactic roles |
+| 🏷️ **NER 38 fine labels** | Named entity extraction with coarse/fine taxonomy (`PER`, `LOC`, `ORG`, `TIME`, `EVENT`, `OBJECT`, `VALUE`, `WORK`, `ABSTRACT`) |
+| 🔗 **SVO + 12 role labels** | Subject–Verb–Object extraction with syntactic roles (`SUBJECT`, `OBJECT`, `OBLIQUE_*`, `APPOS`) |
+| 🧭 **Verbfam** | Semantic verb classification (`verb_family`, `verb_family_fine`, polarity/aspect/source) |
 | 🤖 **LLM Judge** | Automatic NER quality evaluation via LLM (OpenAI, Mistral, Ollama, GitHub Copilot, Azure…) |
 | ⚙️ **Live parameters** | Real-time threshold tuning |
 | 🌍 **Multilingual UI** | Available in FR / EN / DE / ES / IT |
@@ -179,6 +208,8 @@ docker-compose up -d && ./gradlew :rag-app:bootRun
 ```
 
 ### Training (multi-head NER + SVO)
+
+Current taxonomy is generated from `training/multi-head/labels.py` and documented in [`docs/TAXONOMY.md`](docs/TAXONOMY.md). Machine-readable export and schema are available as [`docs/taxonomy.json`](docs/taxonomy.json) and [`docs/taxonomy.schema.json`](docs/taxonomy.schema.json).
 
 ```zsh
 cd training/multi-head

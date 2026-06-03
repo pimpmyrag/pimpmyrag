@@ -1,0 +1,228 @@
+{
+  "$defs": {
+    "labelItem": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
+    "labelSet": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "groups": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        },
+        "labels": {
+          "items": {
+            "$ref": "#/$defs/labelItem"
+          },
+          "type": "array"
+        },
+        "none_id": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "other_id": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "count",
+        "none_id",
+        "labels"
+      ],
+      "type": "object"
+    },
+    "mapping": {
+      "additionalProperties": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "type": "object"
+    },
+    "morphology": {
+      "additionalProperties": false,
+      "properties": {
+        "certainty": {
+          "$ref": "#/$defs/labelSet"
+        },
+        "gender": {
+          "$ref": "#/$defs/labelSet"
+        },
+        "number": {
+          "$ref": "#/$defs/labelSet"
+        },
+        "person": {
+          "$ref": "#/$defs/labelSet"
+        },
+        "voice": {
+          "$ref": "#/$defs/labelSet"
+        }
+      },
+      "required": [
+        "voice",
+        "certainty",
+        "gender",
+        "number",
+        "person"
+      ],
+      "type": "object"
+    },
+    "ner": {
+      "additionalProperties": false,
+      "properties": {
+        "coarse": {
+          "$ref": "#/$defs/labelSet"
+        },
+        "coarse_to_fine": {
+          "$ref": "#/$defs/mapping"
+        },
+        "fine": {
+          "$ref": "#/$defs/labelSet"
+        }
+      },
+      "required": [
+        "coarse",
+        "fine",
+        "coarse_to_fine"
+      ],
+      "type": "object"
+    },
+    "syntax": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/labelSet"
+        },
+        "role_coarse": {
+          "$ref": "#/$defs/labelSet"
+        },
+        "role_fine_to_coarse": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "role_oblique": {
+          "$ref": "#/$defs/labelSet"
+        },
+        "role_to_oblique": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "span_labels": {
+          "$ref": "#/$defs/labelSet"
+        }
+      },
+      "required": [
+        "span_labels",
+        "role",
+        "role_coarse",
+        "role_oblique",
+        "role_fine_to_coarse",
+        "role_to_oblique"
+      ],
+      "type": "object"
+    },
+    "verb": {
+      "additionalProperties": false,
+      "properties": {
+        "aspect": {
+          "$ref": "#/$defs/labelSet"
+        },
+        "family": {
+          "$ref": "#/$defs/labelSet"
+        },
+        "family_fine": {
+          "$ref": "#/$defs/labelSet"
+        },
+        "family_to_fine": {
+          "$ref": "#/$defs/mapping"
+        },
+        "polarity": {
+          "$ref": "#/$defs/labelSet"
+        },
+        "source": {
+          "$ref": "#/$defs/labelSet"
+        }
+      },
+      "required": [
+        "family",
+        "family_fine",
+        "family_to_fine",
+        "polarity",
+        "aspect",
+        "source"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/pimpmyrag/pimpmyrag/docs/taxonomy.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "generated_on": {
+      "type": "string"
+    },
+    "morphology": {
+      "$ref": "#/$defs/morphology"
+    },
+    "ner": {
+      "$ref": "#/$defs/ner"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "source": {
+      "type": "string"
+    },
+    "syntax": {
+      "$ref": "#/$defs/syntax"
+    },
+    "verb": {
+      "$ref": "#/$defs/verb"
+    }
+  },
+  "required": [
+    "source",
+    "generated_on",
+    "ner",
+    "syntax",
+    "verb",
+    "morphology"
+  ],
+  "title": "PimpMyRAG taxonomy export",
+  "type": "object"
+}

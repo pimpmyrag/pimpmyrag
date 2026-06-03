@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -33,11 +34,51 @@ def load_config(path: str) -> dict:
     return json.loads(raw)
 
 
+def patch_epoch_metrics_jsonl(path: str, epoch: int, patch: dict) -> None:
+    """Fusionne des champs additionnels dans le record JSONL type=epoch sans dupliquer la ligne."""
+    metrics_path = Path(path)
+    if not metrics_path.exists():
+        return
+    lines = []
+    patched = False
+    for line in metrics_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            lines.append(line)
+            continue
+        if record.get("type", "epoch") == "epoch" and record.get("epoch") == epoch:
+            for key, value in patch.items():
+                if isinstance(value, dict) and isinstance(record.get(key), dict):
+                    record[key].update(value)
+                else:
+                    record[key] = value
+            patched = True
+        lines.append(json.dumps(record, ensure_ascii=False, sort_keys=True))
+    if patched:
+        metrics_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 # ─────────────────────────────────────────────────────
 #  Détection hardware
 # ─────────────────────────────────────────────────────
 
 def detect_hw(cfg: dict) -> dict:
+    def _env_int(name: str):
+        value = os.environ.get(name)
+        if value in (None, ""):
+            return None
+        try:
+            parsed = int(value)
+            if parsed < 0:
+                raise ValueError
+            return parsed
+        except ValueError:
+            print(f"⚠️  {name}={value!r} invalide — override ignoré")
+            return None
+
     hw_cfg = cfg["hardware"]
     try:
         import torch
@@ -139,6 +180,14 @@ def detect_hw(cfg: dict) -> dict:
         except Exception:
             hw = {"device": "cpu", "gpu_name": "CPU", "bs": 16, "accum": 2, "workers": 0}
             print("💻 Device CPU")
+
+    for env_name, hw_key in [("RUN_BS", "bs"), ("RUN_ACCUM", "accum"), ("RUN_WORKERS", "workers")]:
+        override = _env_int(env_name)
+        if override is not None:
+            old = hw.get(hw_key)
+            hw[hw_key] = override
+            print(f"🛠️  Override {env_name}: {hw_key} {old} → {override}")
+    print(f"📐 Profil effectif: device={hw['device']} gpu={hw['gpu_name']} bs={hw['bs']} accum={hw['accum']} workers={hw['workers']}")
     return hw
 
 
@@ -353,6 +402,9 @@ def run_epoch(cfg: dict, hw: dict, state: dict, lambdas: dict,
         "--wandb-run-name",  state["wandb_run_name"],
         "--wandb-tags",      state["wandb_tags"],
         "--wandb-id-file",   "wandb_run_id.txt",
+        "--metrics-jsonl",      state["metrics_jsonl"],
+        "--metrics-latest-json", state["metrics_latest_json"],
+        "--skip-test-eval",
     ]
     if state.get("ner_only_bench"):
         cmd.append("--ner-only-score")
@@ -373,6 +425,7 @@ def run_epoch(cfg: dict, hw: dict, state: dict, lambdas: dict,
 
     # Popen + lecture ligne-par-ligne : écrit dans fichier ET stdout
     # Pas de deadlock car on consomme le buffer en continu (vs communicate())
+    t0 = time.perf_counter()
     with open(log_path, "w") as lf:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -384,6 +437,13 @@ def run_epoch(cfg: dict, hw: dict, state: dict, lambdas: dict,
             lf.write(line)
             lf.flush()
         proc.wait()
+    wall_s = time.perf_counter() - t0
+    print(f"⏱️  Epoch {epoch} subprocess wall={wall_s:.1f}s ({wall_s/60:.2f}min)")
+    patch_epoch_metrics_jsonl(
+        state["metrics_jsonl"],
+        epoch,
+        {"timings": {"subprocess_wall_s": round(wall_s, 3)}},
+    )
 
     output = log_path.read_text(encoding="utf-8", errors="replace")
 
@@ -395,6 +455,7 @@ def run_epoch(cfg: dict, hw: dict, state: dict, lambdas: dict,
 # ─────────────────────────────────────────────────────
 
 def rebuild_dataset(level: int, cfg: dict, gold_version: str, state: dict):
+    t0 = time.perf_counter()
     levels   = cfg["difficulty_levels"]
     hard = levels["hard_per_gold"][level]
     soft = levels["soft_factors"][level]
@@ -439,6 +500,9 @@ def rebuild_dataset(level: int, cfg: dict, gold_version: str, state: dict):
             "--hard-per-gold", "2",
             "--soft-factor",   "1.0",
         ], check=True)
+
+    elapsed = time.perf_counter() - t0
+    print(f"⏱️  Rebuild dataset terminé en {elapsed:.1f}s ({elapsed/60:.2f}min)")
 
 
 # ─────────────────────────────────────────────────────
@@ -503,6 +567,8 @@ def main():
 
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
+    metrics_dir = log_dir / wandb_run_name
+    metrics_dir.mkdir(parents=True, exist_ok=True)
     log_main = log_dir / "training.log"
 
     def log(msg):
@@ -555,7 +621,10 @@ def main():
         "resume_arg":            resume_arg,
         "wandb_run_name":        wandb_run_name,
         "wandb_tags":            wandb_tags,
+        "metrics_jsonl":         str(metrics_dir / "metrics.jsonl"),
+        "metrics_latest_json":   str(metrics_dir / "metrics_latest.json"),
     }
+    log(f"🧾 Metrics JSONL : {state['metrics_jsonl']}")
 
     rebuild_dataset(state["level"], cfg, gold_version, state)
 
@@ -596,7 +665,9 @@ def main():
         coarse_f1    = extract_metric(output, "Coarse")
         voice_f1     = extract_metric(output, "Voice F1")
         svo_bnd_f1   = extract_metric(output, "SVO Bnd F1")
-        role_crs_f1  = extract_metric(output, "Role Crs F1")
+        role_crs_f1  = extract_metric(output, "Role Coarse F1")
+        if role_crs_f1 is None:
+            role_crs_f1 = extract_metric(output, "Role Crs F1")
 
         if val_score is None:
             log(f"⚠️  Impossible d'extraire le val score ep{epoch} — on continue")

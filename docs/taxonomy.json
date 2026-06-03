@@ -1,0 +1,907 @@
+{
+  "$schema": "./taxonomy.schema.json",
+  "generated_on": "2026-06-03",
+  "morphology": {
+    "certainty": {
+      "count": 3,
+      "labels": [
+        {
+          "id": 0,
+          "label": "certain"
+        },
+        {
+          "id": 1,
+          "label": "modal"
+        },
+        {
+          "id": 2,
+          "label": "denied"
+        }
+      ],
+      "none_id": 3
+    },
+    "gender": {
+      "count": 2,
+      "labels": [
+        {
+          "id": 0,
+          "label": "M"
+        },
+        {
+          "id": 1,
+          "label": "F"
+        }
+      ],
+      "none_id": 2
+    },
+    "number": {
+      "count": 2,
+      "labels": [
+        {
+          "id": 0,
+          "label": "SG"
+        },
+        {
+          "id": 1,
+          "label": "PL"
+        }
+      ],
+      "none_id": 2
+    },
+    "person": {
+      "count": 3,
+      "labels": [
+        {
+          "id": 0,
+          "label": "1"
+        },
+        {
+          "id": 1,
+          "label": "2"
+        },
+        {
+          "id": 2,
+          "label": "3"
+        }
+      ],
+      "none_id": 3
+    },
+    "voice": {
+      "count": 2,
+      "labels": [
+        {
+          "id": 0,
+          "label": "active"
+        },
+        {
+          "id": 1,
+          "label": "passive"
+        }
+      ],
+      "none_id": 2
+    }
+  },
+  "ner": {
+    "coarse": {
+      "count": 10,
+      "labels": [
+        {
+          "id": 0,
+          "label": "PER"
+        },
+        {
+          "id": 1,
+          "label": "LOC"
+        },
+        {
+          "id": 2,
+          "label": "ORG"
+        },
+        {
+          "id": 3,
+          "label": "TIME"
+        },
+        {
+          "id": 4,
+          "label": "EVENT"
+        },
+        {
+          "id": 5,
+          "label": "OBJECT"
+        },
+        {
+          "id": 6,
+          "label": "VALUE"
+        },
+        {
+          "id": 7,
+          "label": "WORK"
+        },
+        {
+          "id": 8,
+          "label": "ABSTRACT"
+        },
+        {
+          "id": 9,
+          "label": "NONE"
+        }
+      ],
+      "none_id": 9
+    },
+    "coarse_to_fine": {
+      "ABSTRACT": [
+        "hint_disease",
+        "hint_language",
+        "hint_doctrine",
+        "hint_state",
+        "hint_notion",
+        "hint_field"
+      ],
+      "EVENT": [
+        "hint_event_nominal",
+        "hint_event_named"
+      ],
+      "LOC": [
+        "hint_gpe",
+        "hint_fac_name",
+        "hint_loc_generic",
+        "hint_infra"
+      ],
+      "OBJECT": [
+        "hint_weapon",
+        "hint_vehicle",
+        "hint_substance",
+        "hint_food",
+        "hint_tool",
+        "hint_object_generic",
+        "hint_object_name"
+      ],
+      "ORG": [
+        "hint_org_name",
+        "hint_inst_name",
+        "hint_inst_role"
+      ],
+      "PER": [
+        "hint_person_name",
+        "hint_person_role",
+        "hint_norp",
+        "hint_group_role"
+      ],
+      "TIME": [
+        "hint_time_date",
+        "hint_time_clock",
+        "hint_time_duration"
+      ],
+      "VALUE": [
+        "hint_measure",
+        "hint_percentage",
+        "hint_count",
+        "hint_money",
+        "hint_rate"
+      ],
+      "WORK": [
+        "hint_work_of_art",
+        "hint_law",
+        "hint_document",
+        "hint_work_generic"
+      ]
+    },
+    "fine": {
+      "count": 38,
+      "groups": {
+        "abstract": [
+          "hint_person_role",
+          "hint_norp",
+          "hint_group_role",
+          "hint_loc_generic",
+          "hint_weapon",
+          "hint_vehicle",
+          "hint_substance",
+          "hint_food",
+          "hint_infra",
+          "hint_tool",
+          "hint_object_generic",
+          "hint_event_nominal",
+          "hint_document",
+          "hint_disease",
+          "hint_language",
+          "hint_inst_role",
+          "hint_doctrine",
+          "hint_state",
+          "hint_notion",
+          "hint_work_generic",
+          "hint_field"
+        ],
+        "concrete": [
+          "hint_person_name",
+          "hint_org_name",
+          "hint_inst_name",
+          "hint_gpe",
+          "hint_fac_name",
+          "hint_object_name",
+          "hint_event_named",
+          "hint_time_date",
+          "hint_time_clock",
+          "hint_time_duration",
+          "hint_measure",
+          "hint_percentage",
+          "hint_count",
+          "hint_money",
+          "hint_rate",
+          "hint_work_of_art",
+          "hint_law"
+        ]
+      },
+      "labels": [
+        {
+          "id": 0,
+          "label": "hint_person_name"
+        },
+        {
+          "id": 1,
+          "label": "hint_person_role"
+        },
+        {
+          "id": 2,
+          "label": "hint_norp"
+        },
+        {
+          "id": 3,
+          "label": "hint_group_role"
+        },
+        {
+          "id": 4,
+          "label": "hint_org_name"
+        },
+        {
+          "id": 5,
+          "label": "hint_inst_name"
+        },
+        {
+          "id": 6,
+          "label": "hint_gpe"
+        },
+        {
+          "id": 7,
+          "label": "hint_fac_name"
+        },
+        {
+          "id": 8,
+          "label": "hint_loc_generic"
+        },
+        {
+          "id": 9,
+          "label": "hint_weapon"
+        },
+        {
+          "id": 10,
+          "label": "hint_vehicle"
+        },
+        {
+          "id": 11,
+          "label": "hint_substance"
+        },
+        {
+          "id": 12,
+          "label": "hint_food"
+        },
+        {
+          "id": 13,
+          "label": "hint_infra"
+        },
+        {
+          "id": 14,
+          "label": "hint_tool"
+        },
+        {
+          "id": 15,
+          "label": "hint_object_generic"
+        },
+        {
+          "id": 16,
+          "label": "hint_object_name"
+        },
+        {
+          "id": 17,
+          "label": "hint_event_nominal"
+        },
+        {
+          "id": 18,
+          "label": "hint_event_named"
+        },
+        {
+          "id": 19,
+          "label": "hint_time_date"
+        },
+        {
+          "id": 20,
+          "label": "hint_time_clock"
+        },
+        {
+          "id": 21,
+          "label": "hint_time_duration"
+        },
+        {
+          "id": 22,
+          "label": "hint_measure"
+        },
+        {
+          "id": 23,
+          "label": "hint_percentage"
+        },
+        {
+          "id": 24,
+          "label": "hint_count"
+        },
+        {
+          "id": 25,
+          "label": "hint_money"
+        },
+        {
+          "id": 26,
+          "label": "hint_rate"
+        },
+        {
+          "id": 27,
+          "label": "hint_work_of_art"
+        },
+        {
+          "id": 28,
+          "label": "hint_law"
+        },
+        {
+          "id": 29,
+          "label": "hint_document"
+        },
+        {
+          "id": 30,
+          "label": "hint_disease"
+        },
+        {
+          "id": 31,
+          "label": "hint_language"
+        },
+        {
+          "id": 32,
+          "label": "hint_inst_role"
+        },
+        {
+          "id": 33,
+          "label": "hint_doctrine"
+        },
+        {
+          "id": 34,
+          "label": "hint_state"
+        },
+        {
+          "id": 35,
+          "label": "hint_notion"
+        },
+        {
+          "id": 36,
+          "label": "hint_work_generic"
+        },
+        {
+          "id": 37,
+          "label": "hint_field"
+        }
+      ],
+      "none_id": 38
+    }
+  },
+  "notes": [
+    "Sentinel none_id values are outside the active label range unless explicitly part of labels (ROLE_LABELS contains NONE at id 6).",
+    "role is the current primary SVO role head (12 labels). role_coarse and role_oblique are auxiliary/cascade heads and may be trained with lambda=0 in selected configs.",
+    "COARSE_LABELS intentionally includes NONE at id 9 for model compatibility."
+  ],
+  "source": "training/multi-head/labels.py",
+  "syntax": {
+    "role": {
+      "count": 12,
+      "labels": [
+        {
+          "id": 0,
+          "label": "SUBJECT"
+        },
+        {
+          "id": 1,
+          "label": "OBJECT"
+        },
+        {
+          "id": 2,
+          "label": "OBLIQUE"
+        },
+        {
+          "id": 3,
+          "label": "OBLIQUE_AGENT"
+        },
+        {
+          "id": 4,
+          "label": "OBLIQUE_CAUSE"
+        },
+        {
+          "id": 5,
+          "label": "APPOS"
+        },
+        {
+          "id": 6,
+          "label": "NONE"
+        },
+        {
+          "id": 7,
+          "label": "OBLIQUE_ADVERSARY"
+        },
+        {
+          "id": 8,
+          "label": "OBLIQUE_BENEFICIARY"
+        },
+        {
+          "id": 9,
+          "label": "OBLIQUE_COMITATIVE"
+        },
+        {
+          "id": 10,
+          "label": "OBLIQUE_DOMAIN"
+        },
+        {
+          "id": 11,
+          "label": "OBLIQUE_SOURCE"
+        }
+      ],
+      "none_id": 6
+    },
+    "role_coarse": {
+      "count": 5,
+      "labels": [
+        {
+          "id": 0,
+          "label": "SUBJ"
+        },
+        {
+          "id": 1,
+          "label": "OBJ"
+        },
+        {
+          "id": 2,
+          "label": "OBLIQ"
+        },
+        {
+          "id": 3,
+          "label": "APPOS"
+        },
+        {
+          "id": 4,
+          "label": "OTHER"
+        }
+      ],
+      "none_id": 5,
+      "other_id": 4
+    },
+    "role_fine_to_coarse": {
+      "APPOS": "APPOS",
+      "NONE": "OTHER",
+      "OBJECT": "OBJ",
+      "OBLIQUE": "OBLIQ",
+      "OBLIQUE_ADVERSARY": "OBLIQ",
+      "OBLIQUE_AGENT": "OBLIQ",
+      "OBLIQUE_BENEFICIARY": "OBLIQ",
+      "OBLIQUE_CAUSE": "OBLIQ",
+      "OBLIQUE_COMITATIVE": "OBLIQ",
+      "OBLIQUE_DOMAIN": "OBLIQ",
+      "OBLIQUE_SOURCE": "OBLIQ",
+      "SUBJECT": "SUBJ"
+    },
+    "role_oblique": {
+      "count": 10,
+      "labels": [
+        {
+          "id": 0,
+          "label": "OBLIQUE"
+        },
+        {
+          "id": 1,
+          "label": "OBLIQUE_AGENT"
+        },
+        {
+          "id": 2,
+          "label": "OBLIQUE_CAUSE"
+        },
+        {
+          "id": 3,
+          "label": "OBLIQUE_ADVERSARY"
+        },
+        {
+          "id": 4,
+          "label": "OBLIQUE_BENEFICIARY"
+        },
+        {
+          "id": 5,
+          "label": "OBLIQUE_COMITATIVE"
+        },
+        {
+          "id": 6,
+          "label": "OBLIQUE_DOMAIN"
+        },
+        {
+          "id": 7,
+          "label": "OBLIQUE_SOURCE"
+        },
+        {
+          "id": 8,
+          "label": "OBLIQUE_TIME"
+        },
+        {
+          "id": 9,
+          "label": "OBLIQUE_LOC"
+        }
+      ],
+      "none_id": 10
+    },
+    "role_to_oblique": {
+      "OBLIQUE": "OBLIQUE",
+      "OBLIQUE_ADVERSARY": "OBLIQUE_ADVERSARY",
+      "OBLIQUE_AGENT": "OBLIQUE_AGENT",
+      "OBLIQUE_BENEFICIARY": "OBLIQUE_BENEFICIARY",
+      "OBLIQUE_CAUSE": "OBLIQUE_CAUSE",
+      "OBLIQUE_COMITATIVE": "OBLIQUE_COMITATIVE",
+      "OBLIQUE_DOMAIN": "OBLIQUE_DOMAIN",
+      "OBLIQUE_SOURCE": "OBLIQUE_SOURCE"
+    },
+    "span_labels": {
+      "count": 3,
+      "labels": [
+        {
+          "id": 0,
+          "label": "verb_trigger"
+        },
+        {
+          "id": 1,
+          "label": "pron_subj"
+        },
+        {
+          "id": 2,
+          "label": "pron_obj"
+        }
+      ],
+      "none_id": 3
+    }
+  },
+  "verb": {
+    "aspect": {
+      "count": 2,
+      "labels": [
+        {
+          "id": 0,
+          "label": "DURATIF"
+        },
+        {
+          "id": 1,
+          "label": "PONCTUEL"
+        }
+      ],
+      "none_id": 2
+    },
+    "family": {
+      "count": 12,
+      "labels": [
+        {
+          "id": 0,
+          "label": "Causality"
+        },
+        {
+          "id": 1,
+          "label": "Cognition"
+        },
+        {
+          "id": 2,
+          "label": "Communication"
+        },
+        {
+          "id": 3,
+          "label": "Conflict"
+        },
+        {
+          "id": 4,
+          "label": "Movement"
+        },
+        {
+          "id": 5,
+          "label": "OTHER"
+        },
+        {
+          "id": 6,
+          "label": "Perception"
+        },
+        {
+          "id": 7,
+          "label": "Possession"
+        },
+        {
+          "id": 8,
+          "label": "Relation"
+        },
+        {
+          "id": 9,
+          "label": "Social"
+        },
+        {
+          "id": 10,
+          "label": "State_Change"
+        },
+        {
+          "id": 11,
+          "label": "Temporal"
+        }
+      ],
+      "none_id": 12
+    },
+    "family_fine": {
+      "count": 38,
+      "labels": [
+        {
+          "id": 0,
+          "label": "Achat"
+        },
+        {
+          "id": 1,
+          "label": "Annonce"
+        },
+        {
+          "id": 2,
+          "label": "Appartenance"
+        },
+        {
+          "id": 3,
+          "label": "Cognitive"
+        },
+        {
+          "id": 4,
+          "label": "Combat"
+        },
+        {
+          "id": 5,
+          "label": "Concerne"
+        },
+        {
+          "id": 6,
+          "label": "Contenu"
+        },
+        {
+          "id": 7,
+          "label": "Creation"
+        },
+        {
+          "id": 8,
+          "label": "Croyance"
+        },
+        {
+          "id": 9,
+          "label": "Debut"
+        },
+        {
+          "id": 10,
+          "label": "Decision"
+        },
+        {
+          "id": 11,
+          "label": "Demande"
+        },
+        {
+          "id": 12,
+          "label": "Deplacement"
+        },
+        {
+          "id": 13,
+          "label": "Destruction"
+        },
+        {
+          "id": 14,
+          "label": "Don"
+        },
+        {
+          "id": 15,
+          "label": "Duree"
+        },
+        {
+          "id": 16,
+          "label": "Ecrit"
+        },
+        {
+          "id": 17,
+          "label": "Election"
+        },
+        {
+          "id": 18,
+          "label": "Fin"
+        },
+        {
+          "id": 19,
+          "label": "Intention"
+        },
+        {
+          "id": 20,
+          "label": "Jugement"
+        },
+        {
+          "id": 21,
+          "label": "Legislation"
+        },
+        {
+          "id": 22,
+          "label": "Lien"
+        },
+        {
+          "id": 23,
+          "label": "Negatif"
+        },
+        {
+          "id": 24,
+          "label": "Negociation"
+        },
+        {
+          "id": 25,
+          "label": "Nomination"
+        },
+        {
+          "id": 26,
+          "label": "OTHER"
+        },
+        {
+          "id": 27,
+          "label": "Opposition"
+        },
+        {
+          "id": 28,
+          "label": "Permission"
+        },
+        {
+          "id": 29,
+          "label": "Positif"
+        },
+        {
+          "id": 30,
+          "label": "Reponse"
+        },
+        {
+          "id": 31,
+          "label": "Savoir"
+        },
+        {
+          "id": 32,
+          "label": "Sensorielle"
+        },
+        {
+          "id": 33,
+          "label": "Transformation"
+        },
+        {
+          "id": 34,
+          "label": "Transport"
+        },
+        {
+          "id": 35,
+          "label": "Vente"
+        },
+        {
+          "id": 36,
+          "label": "Visuelle"
+        },
+        {
+          "id": 37,
+          "label": "Voyage"
+        }
+      ],
+      "none_id": 38
+    },
+    "family_to_fine": {
+      "Causality": [
+        "Negatif",
+        "Positif",
+        "Transformation",
+        "Destruction",
+        "Creation"
+      ],
+      "Cognition": [
+        "Cognitive",
+        "Croyance",
+        "Decision",
+        "Intention",
+        "Savoir",
+        "Jugement"
+      ],
+      "Communication": [
+        "Annonce",
+        "Demande",
+        "Ecrit",
+        "Reponse",
+        "Contenu",
+        "Negociation"
+      ],
+      "Conflict": [
+        "Combat",
+        "Opposition",
+        "Negatif"
+      ],
+      "Movement": [
+        "Deplacement",
+        "Transport",
+        "Voyage"
+      ],
+      "OTHER": [
+        "OTHER",
+        "Concerne",
+        "Lien"
+      ],
+      "Perception": [
+        "Sensorielle",
+        "Visuelle",
+        "Cognitive"
+      ],
+      "Possession": [
+        "Achat",
+        "Appartenance",
+        "Don",
+        "Vente"
+      ],
+      "Relation": [
+        "Appartenance",
+        "Lien",
+        "Concerne"
+      ],
+      "Social": [
+        "Election",
+        "Legislation",
+        "Nomination",
+        "Negociation",
+        "Permission"
+      ],
+      "State_Change": [
+        "Debut",
+        "Fin",
+        "Transformation",
+        "Nomination"
+      ],
+      "Temporal": [
+        "Debut",
+        "Duree",
+        "Fin"
+      ]
+    },
+    "polarity": {
+      "count": 3,
+      "labels": [
+        {
+          "id": 0,
+          "label": "NEGATIVE"
+        },
+        {
+          "id": 1,
+          "label": "NEUTRAL"
+        },
+        {
+          "id": 2,
+          "label": "POSITIVE"
+        }
+      ],
+      "none_id": 3
+    },
+    "source": {
+      "count": 3,
+      "labels": [
+        {
+          "id": 0,
+          "label": "DIRECT"
+        },
+        {
+          "id": 1,
+          "label": "HYPOTHETICAL"
+        },
+        {
+          "id": 2,
+          "label": "REPORTED"
+        }
+      ],
+      "none_id": 3
+    }
+  }
+}

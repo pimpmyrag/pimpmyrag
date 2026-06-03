@@ -6,7 +6,9 @@ os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
 import argparse
 import csv
 import json
+import time
 from collections import Counter
+from pathlib import Path
 
 # W&B — import optionnel pour ne pas bloquer si non installé
 try:
@@ -44,6 +46,95 @@ from labels import (
     # compat
     SVO_LABELS, NUM_SVO,
 )
+
+
+_JSONL_SCALAR_METRICS = {
+    "loss": "loss",
+    "boundary_f1": "boundary_f1",
+    "coarse_macro_f1": "coarse_f1",
+    "fine_macro_f1": "fine_f1",
+    "fine_concrete_f1": "fine_concrete_f1",
+    "fine_abstract_f1": "fine_abstract_f1",
+    "svo_boundary_f1": "svo_boundary_f1",
+    "role_macro_f1": "role_f1",
+    "role_coarse_macro_f1": "role_coarse_f1",
+    "role_coarse_from_role_macro_f1": "role_coarse_from_role_f1",
+    "role_oblique_macro_f1": "role_oblique_f1",
+    "role_oblique_cascaded_macro_f1": "role_oblique_cascaded_f1",
+    "voice_macro_f1": "voice_f1",
+    "certainty_macro_f1": "certainty_f1",
+    "gender_macro_f1": "gender_f1",
+    "number_macro_f1": "number_f1",
+    "person_macro_f1": "person_f1",
+    "verb_ptr_acc": "verb_ptr_acc",
+    "verb_ptr_n": "verb_ptr_n",
+    "num_batches": "num_batches",
+    "num_samples": "num_samples",
+    "num_candidates": "num_candidates",
+    "avg_candidates_per_sample": "avg_candidates_per_sample",
+    "samples_per_s": "samples_per_s",
+    "candidates_per_s": "candidates_per_s",
+    "tokens_per_s": "tokens_per_s",
+    "verb_family_macro_f1": "verb_family_f1",
+    "verb_family_fine_macro_f1": "verb_family_fine_f1",
+    "verb_polarity_macro_f1": "verb_polarity_f1",
+    "verb_aspect_macro_f1": "verb_aspect_f1",
+    "verb_source_macro_f1": "verb_source_f1",
+}
+
+
+def _json_safe_scalar(value):
+    if isinstance(value, torch.Tensor):
+        value = value.detach().cpu().item() if value.numel() == 1 else value.detach().cpu().tolist()
+    if isinstance(value, (int, str, bool)) or value is None:
+        return value
+    if isinstance(value, float):
+        return value if value == value and value not in (float("inf"), float("-inf")) else None
+    return value
+
+
+def _compact_metrics(metrics: dict) -> dict:
+    """Ne garde que les scalaires utiles : pas de reports texte, pas de confusions détaillées."""
+    compact = {}
+    for src_key, dst_key in _JSONL_SCALAR_METRICS.items():
+        if src_key in metrics:
+            compact[dst_key] = _json_safe_scalar(metrics[src_key])
+    return compact
+
+
+def _write_metrics_record(path: str | None, record: dict, latest_path: str | None = None) -> None:
+    """Écrit un JSONL sans doublon logique (type+epoch), plus un latest JSON optionnel."""
+    if not path:
+        return
+    metrics_path = Path(path)
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+
+    record_type = record.get("type", "epoch")
+    record_epoch = record.get("epoch")
+    kept_lines: list[str] = []
+    if metrics_path.exists():
+        for line in metrics_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                previous = json.loads(line)
+            except json.JSONDecodeError:
+                kept_lines.append(line)
+                continue
+            same_record = previous.get("type", "epoch") == record_type and previous.get("epoch") == record_epoch
+            if not same_record:
+                kept_lines.append(json.dumps(previous, ensure_ascii=False, sort_keys=True))
+
+    kept_lines.append(json.dumps(record, ensure_ascii=False, sort_keys=True))
+    metrics_path.write_text("\n".join(kept_lines) + "\n", encoding="utf-8")
+    print(f"🧾 Metrics JSONL: {metrics_path}")
+
+    if latest_path:
+        latest = Path(latest_path)
+        latest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = latest.with_suffix(latest.suffix + ".tmp")
+        tmp.write_text(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tmp.replace(latest)
 
 # ──────────────────────────────────────────────────────────
 #  Inline Hard Negative Mining — constantes
@@ -509,6 +600,11 @@ def run_epoch(
         model.eval()
 
     losses = []
+    run_t0 = time.perf_counter()
+    num_batches = 0
+    num_samples = 0
+    num_candidates_seen = 0
+    num_tokens_seen = 0
 
     all_b_true, all_b_pred = [], []
     all_c_true, all_c_pred = [], []
@@ -615,6 +711,10 @@ def run_epoch(
 
         # Sanity check avant forward
         num_spans = sum(len(x) for x in spans)
+        num_batches += 1
+        num_samples += input_ids.size(0)
+        num_candidates_seen += num_spans
+        num_tokens_seen += input_ids.numel()
         if not (
                 num_spans
                 == boundary_labels.size(0)
@@ -1096,8 +1196,16 @@ def run_epoch(
         if ema is not None:
             ema.update(model)
 
+    elapsed_s = max(1e-9, time.perf_counter() - run_t0)
     metrics = {
         "loss": sum(losses) / max(1, len(losses)),
+        "num_batches": num_batches,
+        "num_samples": num_samples,
+        "num_candidates": num_candidates_seen,
+        "avg_candidates_per_sample": num_candidates_seen / max(1, num_samples),
+        "samples_per_s": num_samples / elapsed_s,
+        "candidates_per_s": num_candidates_seen / elapsed_s,
+        "tokens_per_s": num_tokens_seen / elapsed_s,
         "boundary_f1": safe_macro_f1_local(all_b_true, all_b_pred),
         "coarse_macro_f1": safe_macro_f1_local(
             all_c_true_pos,
@@ -1352,6 +1460,7 @@ def _hn_is_valid(c: dict) -> bool:
 
 
 def main():
+    process_t0 = time.perf_counter()
     parser = argparse.ArgumentParser()
     parser.add_argument("--train", required=True)
     parser.add_argument("--val", required=True)
@@ -1520,6 +1629,14 @@ def main():
                         help="Fichier où sauvegarder/lire le run ID W&B entre les epochs")
     parser.add_argument("--wandb-tags", type=str, default="",
                         help="Tags W&B séparés par des virgules (ex: 'v6.3,deberta,5090')")
+    parser.add_argument("--metrics-jsonl", type=str, default=None,
+                        help="Chemin JSONL compact pour écrire une ligne par epoch (désactivé si absent).")
+    parser.add_argument("--metrics-latest-json", type=str, default=None,
+                        help="Chemin JSON contenant le dernier record métriques écrit.")
+    parser.add_argument("--metrics-log-test", action="store_true",
+                        help="Ajoute aussi un record final type=test au JSONL (désactivé par défaut pour éviter la redondance en run adaptatif).")
+    parser.add_argument("--skip-test-eval", action="store_true",
+                        help="Saute l'évaluation test finale (utile en boucle adaptative : val suffit par epoch).")
     parser.add_argument("--ner-only-score", action="store_true",
                         help="Calcule le score d'early stopping uniquement sur les têtes NER (sans SVO)")
 
@@ -1925,12 +2042,15 @@ def main():
             )
 
     for epoch in range(start_epoch, args.epochs + 1):
+        epoch_t0 = time.perf_counter()
+        setup_s = epoch_t0 - process_t0
         # Log LR
         head_lrs = [pg['lr'] for pg in optimizer.param_groups if pg.get('name') == 'heads']
         enc_lrs = [pg['lr'] for pg in optimizer.param_groups if pg.get('name', '').startswith('layer_')]
         top_lr = enc_lrs[-1] if enc_lrs else args.lr
         print(f"\n🔧 Epoch {epoch} | LR top_layer={top_lr:.2e}, heads={head_lrs[0] if head_lrs else '?':.2e}")
 
+        train_t0 = time.perf_counter()
         train_metrics = run_epoch(
             train_loader,
             model,
@@ -1979,6 +2099,7 @@ def main():
             weighting=weighting,
             gradnorm_every=args.gradnorm_every,
         )
+        train_s = time.perf_counter() - train_t0
 
         # ── Inline HN mining — mise à jour des poids in-memory ────────────────
         if use_inline_hn and (epoch % args.hn_every == 0):
@@ -1998,6 +2119,7 @@ def main():
         if use_ema:
             original_state = ema.apply(model)
 
+        val_t0 = time.perf_counter()
         val_metrics = run_epoch(
             val_loader,
             model,
@@ -2043,12 +2165,14 @@ def main():
             ignore_coarse_none=args.ignore_coarse_none,
             weighting=weighting,
         )
+        val_s = time.perf_counter() - val_t0
 
         if use_ema:
             ema.restore(model, original_state)
 
         # Step scheduler after each epoch
         scheduler.step()
+        epoch_compute_s = time.perf_counter() - epoch_t0
 
         if args.ner_only_score:
             score = (
@@ -2189,14 +2313,76 @@ def main():
                     "boundary": args.lambda_boundary, "coarse": args.lambda_coarse,
                     "fine": args.lambda_fine, "svo_boundary": args.lambda_svo_boundary,
                     "svo": args.lambda_svo,
+                    "role_coarse": args.lambda_role_coarse,
+                    "role_oblique": args.lambda_role_oblique,
+                    "role": args.lambda_role,
                     "voice": args.lambda_voice, "certainty": args.lambda_certainty,
                     "morpho": args.lambda_morpho, "verb_ptr": args.lambda_verb_ptr,
                     "compat": args.lambda_compat,
+                    "verb_family": args.lambda_verb_family,
+                    "verb_family_fine": args.lambda_verb_family_fine,
+                    "verb_polarity": args.lambda_verb_polarity,
+                    "verb_aspect": args.lambda_verb_aspect,
+                    "verb_source": args.lambda_verb_source,
                 }
                 eff_weights = weighting.get_effective_weights(ramp_lambdas)
                 for k, v in eff_weights.items():
                     log_dict[f"weights/{k}"] = v
             wandb.log(log_dict, step=epoch)
+
+        epoch_record = {
+            "type": "epoch",
+            "epoch": epoch,
+            "score": _json_safe_scalar(score),
+            "runtime": {
+                "device": device,
+                "model_name": args.model_name,
+                "batch_size": args.batch_size,
+                "accum_steps": args.accum_steps,
+                "num_workers": num_workers,
+                "pin_memory": pin_memory,
+                "persistent_workers": persistent,
+                "amp": bool(use_amp),
+                "train_batches": len(train_loader),
+                "val_batches": len(val_loader),
+                "train_rows": len(train_ds),
+                "val_rows": len(val_ds),
+            },
+            "timings": {
+                "setup_s": round(setup_s, 3),
+                "train_s": round(train_s, 3),
+                "val_s": round(val_s, 3),
+                "train_val_scheduler_s": round(epoch_compute_s, 3),
+            },
+            "lr": {
+                "top_layer": _json_safe_scalar(top_lr),
+                "head": _json_safe_scalar(head_lrs[0] if head_lrs else None),
+            },
+            "lambdas": {
+                "boundary": args.lambda_boundary,
+                "coarse": args.lambda_coarse,
+                "fine": args.lambda_fine,
+                "svo_boundary": args.lambda_svo_boundary,
+                "svo": args.lambda_svo,
+                "role_coarse": args.lambda_role_coarse,
+                "role_oblique": args.lambda_role_oblique,
+                "role": args.lambda_role,
+                "voice": args.lambda_voice,
+                "certainty": args.lambda_certainty,
+                "morpho": args.lambda_morpho,
+                "verb_ptr": args.lambda_verb_ptr,
+                "compat": args.lambda_compat,
+                "verb_family": args.lambda_verb_family,
+                "verb_family_fine": args.lambda_verb_family_fine,
+                "verb_polarity": args.lambda_verb_polarity,
+                "verb_aspect": args.lambda_verb_aspect,
+                "verb_source": args.lambda_verb_source,
+            },
+            "train": _compact_metrics(train_metrics),
+            "val": _compact_metrics(val_metrics),
+        }
+        _write_metrics_record(args.metrics_jsonl, epoch_record, args.metrics_latest_json)
+        print(f"⏱️  Epoch {epoch} timings: train={train_s:.1f}s val={val_s:.1f}s train+val={epoch_compute_s:.1f}s")
 
         print("\n[VAL boundary]")
         print(val_metrics["boundary_report"])
@@ -2216,10 +2402,15 @@ def main():
             print(f"[VAL fine exports] csv={val_metrics['fine_confusion_csv']} json={val_metrics['fine_diagnostics_json']}")
         print("[VAL svo boundary (verb_trigger)]")
         print(val_metrics["svo_boundary_report"])
-        # ⚠️ Ces lignes sont parsées par run_training.py extract_metric() — format EXACT requis
+        # ⚠️ Ces lignes sont parsées par run_training.py extract_metric() — format stable requis
         print(f"Val SVO Bnd F1={val_metrics['svo_boundary_f1']:.4f}")
-        # Val Role Crs F1 = role_macro_f1 (12 labels — remplace l'ancienne role_coarse désactivée)
-        print(f"Val Role Crs F1={val_metrics.get('role_macro_f1', 0.0):.4f}")
+        print(f"Val Role F1={val_metrics.get('role_macro_f1', 0.0):.4f}")
+        print(f"Val Role Coarse F1={val_metrics.get('role_coarse_macro_f1', 0.0):.4f}")
+        print(f"Val Role Coarse FromRole F1={val_metrics.get('role_coarse_from_role_macro_f1', 0.0):.4f}")
+        print(f"Val Role Oblique F1={val_metrics.get('role_oblique_macro_f1', 0.0):.4f}")
+        print(f"Val Role Oblique Cascaded F1={val_metrics.get('role_oblique_cascaded_macro_f1', 0.0):.4f}")
+        # Compat anciens parsers: désormais Role Crs = vraie tête role_coarse native.
+        print(f"Val Role Crs F1={val_metrics.get('role_coarse_macro_f1', 0.0):.4f}")
         if val_metrics.get("role_report") and val_metrics["role_report"] != "N/A":
             print("[VAL role (12 labels — SUBJECT/OBJECT/OBLIQUE_*)]")
             print(val_metrics["role_report"])
@@ -2235,6 +2426,7 @@ def main():
         if val_metrics.get("gender_macro_f1", 0) > 0:
             print(f"[VAL morpho]  Gender F1={val_metrics['gender_macro_f1']:.4f}  Number F1={val_metrics['number_macro_f1']:.4f}  Person F1={val_metrics['person_macro_f1']:.4f}")
 
+        checkpoint_t0 = time.perf_counter()
         torch.save({
             "epoch": epoch,
             "model_state": model.state_dict(),
@@ -2269,6 +2461,11 @@ def main():
             if args.patience > 0:
                 patience_msg = f" [{epochs_no_improve}/{args.patience} sans amélioration]"
             print(f"⏳ Pas d'amélioration du score{patience_msg}")
+        checkpoint_s = time.perf_counter() - checkpoint_t0
+        epoch_record["timings"]["checkpoint_s"] = round(checkpoint_s, 3)
+        epoch_record["timings"]["process_until_checkpoint_s"] = round(time.perf_counter() - process_t0, 3)
+        _write_metrics_record(args.metrics_jsonl, epoch_record, args.metrics_latest_json)
+        print(f"⏱️  Epoch {epoch} checkpoint={checkpoint_s:.1f}s")
 
         # Early stopping
         if args.patience > 0 and epochs_no_improve >= args.patience:
@@ -2278,12 +2475,21 @@ def main():
             )
             break
 
+    if args.skip_test_eval:
+        print("\n✅ Fin training — évaluation test sautée (--skip-test-eval)")
+        if _wandb_enabled:
+            wandb.finish()
+            print("📊 W&B run terminé")
+        return
+
     print("\n✅ Fin training, évaluation test sur le best model")
 
     best_ckpt_path = "checkpoint_best_multitask.pt"
+    best_ckpt_epoch = None
     if os.path.exists(best_ckpt_path):
         ckpt = torch.load(best_ckpt_path, map_location=device)
         model.load_state_dict(ckpt["model_state"])
+        best_ckpt_epoch = ckpt.get("epoch")
         print(f"✅ Best model chargé depuis {best_ckpt_path}")
     else:
         print("⚠️ Pas de checkpoint best trouvé — évaluation avec le modèle courant")
@@ -2379,6 +2585,15 @@ def main():
         print(test_metrics["verb_family_report"])
     if test_metrics.get("gender_macro_f1", 0) > 0:
         print(f"[TEST morpho]  Gender F1={test_metrics['gender_macro_f1']:.4f}  Number F1={test_metrics['number_macro_f1']:.4f}  Person F1={test_metrics['person_macro_f1']:.4f}")
+
+    if args.metrics_log_test:
+        test_record = {
+            "type": "test",
+            "epoch": best_ckpt_epoch,
+            "best_score": _json_safe_scalar(best_score),
+            "test": _compact_metrics(test_metrics),
+        }
+        _write_metrics_record(args.metrics_jsonl, test_record)
 
     # ── W&B log test final ───────────────────────────────────────────────────
     if _wandb_enabled:
