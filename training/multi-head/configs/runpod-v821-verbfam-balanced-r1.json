@@ -16,7 +16,9 @@
     "loss_weighting": "fixed",
     "ner_only_bench": false,
     "ignore_coarse_none": true,
-    "detach_ner_classifier_backbone": false
+    "detach_ner_classifier_backbone": true,
+    "boundary_aux_from_ner": false,
+    "boundary_aux_scale": 0.1
   },
 
   "optimizer": {
@@ -30,23 +32,23 @@
   },
 
   "lambdas": {
-    "boundary": 2.5,
+    "boundary": 1.5,
     "coarse": 0.5,
-    "fine": 1.5,
+    "fine": 1,
     "svo_boundary": 0.35,
-    "svo": 0.7,
-    "role": 0.7,
-    "role_coarse": 0.3,
-    "role_oblique": 0.3,
-    "voice": 0.2,
-    "certainty": 0.3,
-    "morpho": 0.1,
-    "verb_ptr": 0.6,
+    "svo": 0.70,
+    "role": 0.70,
+    "role_coarse": 0.7,
+    "role_oblique": 0.5,
+    "voice": 0.20,
+    "certainty": 0.30,
+    "morpho": 0.10,
+    "verb_ptr": 0.60,
     "verb_family": 1.5,
     "verb_family_fine": 1.5,
     "verb_polarity": 1.0,
     "verb_aspect": 0.5,
-    "verb_source": 0.3,
+    "verb_source": 0.4,
     "compat": 0.2
   },
 
@@ -57,16 +59,16 @@
   },
 
   "boundary_first": {
-    "enabled": true,
-    "unlock_threshold": 0.90,
-    "unlock_ramp_epochs": 3,
-    "coarse_warmup_lambda": 0.25,
-    "fine_warmup_lambda": 0.9
+    "enabled": false,
+    "unlock_threshold": 0.92,
+    "unlock_ramp_epochs": 1,
+    "coarse_warmup_lambda": 0.0,
+    "fine_warmup_lambda": 0.0
   },
 
   "svo_cascade": {
     "role_coarse_bnd_thr": 0.0,
-    "role_coarse_warmup_lambda": 0.0,
+    "role_coarse_warmup_lambda": 0.3,
     "role_ramp_epochs": 1,
     "role_thr_svo_bnd": 0.0,
     "phase2_ramp_epochs": 1,
