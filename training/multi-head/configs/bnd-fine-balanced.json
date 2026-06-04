@@ -27,7 +27,7 @@
     "class_weight_power": 0.5
   },
   "lambdas": {
-    "boundary": 2.0,
+    "boundary": 5.0,
     "coarse": 0.75,
     "fine": 1.8,
     "svo_boundary": 0.35,
@@ -57,7 +57,7 @@
     "unlock_threshold": 0.94,
     "unlock_ramp_epochs": 5,
     "coarse_warmup_lambda": 0.05,
-    "fine_warmup_lambda": 0.5
+    "fine_warmup_lambda": 0.1
   },
   "svo_cascade": {
     "role_coarse_bnd_thr": 0.0,
