@@ -32,7 +32,7 @@
     "fine": 1.8,
     "svo_boundary": 0.35,
     "svo": 0.70,
-    "role": 0.70,
+    "role": 0,
     "role_coarse": 0.7,
     "role_oblique": 0.5,
     "voice": 0.20,
@@ -105,22 +105,22 @@
       "full"
     ],
     "hard_per_gold": [
+      2,
+      3,
+      4,
       5,
       6,
-      7,
-      8,
-      9,
-      10
+      7
     ],
     "soft_factors": [
-      2.0,
-      2.25,
+      1.0,
+      1.5,
+      2,
       2.5,
-      3.0,
-      3.5,
-      4.0
+      2.5,
+      3.0
     ],
-    "max_epochs_per_level": 3,
+    "max_epochs_per_level": 4,
     "min_delta_for_progress": 0.0003,
     "patience": 5
   },
