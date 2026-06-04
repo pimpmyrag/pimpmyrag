@@ -24,16 +24,16 @@
     "max_grad_norm": 1.0,
     "layer_lr_decay": 0.9,
     "ema_decay": 0.0,
-    "class_weight_power": 0.25
+    "class_weight_power": 0.5
   },
   "lambdas": {
     "boundary": 2.0,
     "coarse": 0.75,
     "fine": 1.8,
     "svo_boundary": 0.35,
-    "svo": 0.70,
+    "svo": 0.60,
     "role": 0,
-    "role_coarse": 0.7,
+    "role_coarse": 0.5,
     "role_oblique": 0.5,
     "voice": 0.20,
     "certainty": 0.30,
@@ -53,8 +53,8 @@
   },
   "boundary_first": {
     "_comment": "unlock à 0.88 au lieu de 0.92 → fine démarre ep4-5 au lieu de ep8-10",
-    "enabled": false,
-    "unlock_threshold": 0.88,
+    "enabled": true,
+    "unlock_threshold": 0.94,
     "unlock_ramp_epochs": 5,
     "coarse_warmup_lambda": 0.05,
     "fine_warmup_lambda": 0.5
@@ -83,17 +83,17 @@
     "regression_delta": 0.008
   },
   "hard_negatives": {
-    "every_n_epochs": 3,
-    "decay": 0.85,
+    "every_n_epochs": 5,
+    "decay": 1,
     "max_weight": 8.0,
     "min_weight": 0.3,
-    "boost_fp": 5.0,
+    "boost_fp": 2.0,
     "boost_fn": 2.0,
-    "boost_coarse": 2.5,
-    "boost_fine": 3.0,
-    "boost_fp_svo": 3.0,
+    "boost_coarse": 2.0,
+    "boost_fine": 2.0,
+    "boost_fp_svo": 2.0,
     "boost_fn_svo": 2.0,
-    "boost_role_coarse": 2.5
+    "boost_role_coarse": 2
   },
   "difficulty_levels": {
     "names": [
@@ -116,8 +116,8 @@
       1.0,
       1.5,
       2,
-      2.5,
-      2.5,
+      2.25,
+      2.25,
       3.0
     ],
     "max_epochs_per_level": 4,
