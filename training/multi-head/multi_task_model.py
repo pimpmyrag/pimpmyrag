@@ -25,13 +25,13 @@ from labels import (
     NUM_VERB_SOURCE, VERB_SOURCE_NONE_ID,
     VERB_FAMILY_FINE_MASK,
 )
+from labels import FINE_LABELS
 
 
 def _agg_group_logit(logits: torch.Tensor, ids: list) -> torch.Tensor:
     """Agrège les logits d'un groupe d'IDs via logsumexp (probabilistiquement stable)."""
     idx = torch.tensor(ids, device=logits.device, dtype=torch.long)
     return torch.logsumexp(logits.index_select(-1, idx), dim=-1)
-from labels import FINE_LABELS
 
 
 class SpanMultiTaskModel(nn.Module):
@@ -44,12 +44,18 @@ class SpanMultiTaskModel(nn.Module):
             max_width_bucket: int = 16,
             dropout: float = 0.1,
             detach_ner_classifier_backbone: bool = False,
+            ner_coarse_backbone_grad_scale: float = 0.15,
+            ner_fine_backbone_grad_scale: float = 0.35,
             boundary_aux_from_ner: bool = False,
             boundary_aux_scale: float = 1.0,
     ):
         super().__init__()
 
         self.detach_ner_classifier_backbone = detach_ner_classifier_backbone
+        # Soft detach / gradient scaling pour éviter que coarse/fine ne contredisent trop boundary.
+        # 1.0 = gradient complet vers encoder/span_mlp ; 0.0 = detach complet.
+        self.ner_coarse_backbone_grad_scale = float(ner_coarse_backbone_grad_scale)
+        self.ner_fine_backbone_grad_scale = float(ner_fine_backbone_grad_scale)
         self.boundary_aux_from_ner = boundary_aux_from_ner
         self.boundary_aux_scale = float(boundary_aux_scale)
 
@@ -150,6 +156,27 @@ class SpanMultiTaskModel(nn.Module):
 
     def _bucket_width(self, width: int) -> int:
         return min(width, self.max_width_bucket - 1)
+
+    def _soft_detach(self, x: torch.Tensor, grad_scale: float) -> torch.Tensor:
+        """
+        Soft detach / gradient scaling.
+
+        Forward:
+            retourne exactement x.
+
+        Backward:
+            le gradient vers x est multiplié par grad_scale.
+
+        grad_scale = 1.0 -> aucun detach
+        grad_scale = 0.0 -> detach complet
+        grad_scale = 0.25 -> coarse/fine ne renvoient que 25% du gradient
+                             vers span_mlp / encoder
+        """
+        if grad_scale >= 1.0:
+            return x
+        if grad_scale <= 0.0:
+            return x.detach()
+        return x.detach() + grad_scale * (x - x.detach())
 
     def _build_span_representations(self, hidden_states, spans):
         reps = []
@@ -275,18 +302,27 @@ class SpanMultiTaskModel(nn.Module):
 
         # ── NER heads ───────────────────────────────────────────────────────────
         # Boundary reste la tête primaire sur span_h_ner complet.
-        # Option detach_ner_classifier_backbone : coarse/fine apprennent leurs
-        # classifieurs sur les features boundary-optimisées, mais leur loss ne tire
-        # plus encoder/span_mlp dans une direction concurrente.
-        # Le gate (bnd_gate * span_h_ner) créait un équilibre pathologique :
-        #   boundary prédit "entité partout" → gate≈1 → coarse/fine apprennent bien
-        #   → mais aucun signal ne corrige boundary (detach) → precision boundary ≈ 0.47 ep8.
-        # Compétition directe sur span_h_ner = comportement sain observé sur tous les runs 0531.
-
-        span_h_cls = span_h_ner.detach() if self.detach_ner_classifier_backbone else span_h_ner
+        # Coarse/fine voient les mêmes features au forward, mais leur gradient vers
+        # encoder/span_mlp est réduit via _soft_detach. Cela évite que coarse/fine
+        # reprennent tout le contrôle de la représentation et fassent régresser boundary.
         boundary_logits_base = self.boundary_head(span_h_ner)  # [N, 2]
-        coarse_logits        = self.coarse_head(span_h_cls)    # [N, num_coarse]
-        fine_logits_raw      = self.fine_head(span_h_cls)      # [N, NUM_FINE]
+
+        if self.detach_ner_classifier_backbone:
+            # Compat historique : detach complet pour coarse/fine.
+            span_h_coarse = span_h_ner.detach()
+            span_h_fine   = span_h_ner.detach()
+        else:
+            span_h_coarse = self._soft_detach(
+                span_h_ner,
+                self.ner_coarse_backbone_grad_scale,
+            )
+            span_h_fine = self._soft_detach(
+                span_h_ner,
+                self.ner_fine_backbone_grad_scale,
+            )
+
+        coarse_logits   = self.coarse_head(span_h_coarse)  # [N, num_coarse]
+        fine_logits_raw = self.fine_head(span_h_fine)      # [N, NUM_FINE]
 
         if self.boundary_aux_from_ner and N > 0:
             ner_evidence = torch.cat(
@@ -337,13 +373,21 @@ class SpanMultiTaskModel(nn.Module):
             "span_reps":           span_h,
             "span_indices":        span_indices,
             # ── NER heads ─────────────────────────────────────────────────────
-            # boundary/coarse/fine : span_h_ner complet (pas de gate)
+            # boundary : span_h_ner complet ; coarse/fine : soft-detach configurable.
             "boundary_logits":     boundary_logits,
             "boundary_logits_base": boundary_logits_base,
             "boundary_ner_evidence_logits": boundary_ner_evidence_logits,
             "coarse_logits":       coarse_logits,
             "fine_logits":         fine_logits_raw,       # pour la LOSS
             "fine_logits_masked":  fine_logits_masked,    # pour les MÉTRIQUES et l'INFÉRENCE
+            "ner_coarse_backbone_grad_scale": torch.tensor(
+                self.ner_coarse_backbone_grad_scale,
+                device=span_h.device,
+            ),
+            "ner_fine_backbone_grad_scale": torch.tensor(
+                self.ner_fine_backbone_grad_scale,
+                device=span_h.device,
+            ),
             # ── SVO heads : span_h brut ────────────────────────────────────────
             "svo_boundary_logits":  svo_boundary_logits,  # déjà calculé plus haut, pas de double appel
             "syn_logits":           self.syn_head(span_h),
@@ -479,6 +523,7 @@ class SpanMultiTaskModel(nn.Module):
         syn_labels          = syn_labels.to(device=device, dtype=torch.long)
         role_coarse_labels  = role_coarse_labels.to(device=device, dtype=torch.long)
         role_oblique_labels = role_oblique_labels.to(device=device, dtype=torch.long)
+        role_labels         = role_labels.to(device=device, dtype=torch.long)
         voice_labels        = voice_labels.to(device=device, dtype=torch.long)
         certainty_labels    = certainty_labels.to(device=device, dtype=torch.long)
         gender_labels       = gender_labels.to(device=device, dtype=torch.long)
@@ -507,12 +552,8 @@ class SpanMultiTaskModel(nn.Module):
         loss_b = (loss_b_per * sample_weights).mean()
 
         # ── 2) Coarse ─────────────────────────────────────────────────────────────
-        # focal_coarse_gamma appliqué UNIQUEMENT sur spans positifs (coarse≠NONE)
-        # pour down-weighter PERSON/LOC déjà bien appris et up-weighter OBJECT/EVENT.
-        # Le focal global coarse (incluant NONE) dégradait les perfs → évité ici.
-        # ignore_coarse_none=True : loss coarse calculée uniquement sur spans positifs (boundary=1).
-        # Raisonnement : boundary head gère déjà la détection entité/non-entité.
-        # La tête coarse n'a pas besoin d'apprendre à prédire NONE → signal redondant + bruit.
+        # ignore_coarse_none=True : loss coarse calculée uniquement sur spans positifs.
+        # Recommandé quand boundary reste une tête dédiée : coarse ne réapprend pas NONE.
         if ignore_coarse_none:
             pos_mask_c = (coarse_labels != COARSE_NONE_ID)
             if pos_mask_c.any():
@@ -539,10 +580,6 @@ class SpanMultiTaskModel(nn.Module):
             loss_c = (loss_c_per * sample_weights).mean()
 
         # ── 3) Fine (NER positifs) ─────────────────────────────────────────
-        # Focal loss optionnel sur fine : down-weight les classes faciles (person_name,
-        # location) qui sont déjà bien apprises, up-weight les classes rares/difficiles
-        # (hint_state/doctrine/notion) où le modèle hésite encore.
-        # focal_fine_gamma=1.5 : (1-p_correct)^1.5 × CE
         pos_mask = (boundary_labels == 1) & (fine_labels >= 0) & (fine_labels < f_logits.size(-1))
         if pos_mask.any():
             _fine_w = fine_class_weights if fine_class_weights is not None else None
@@ -592,11 +629,6 @@ class SpanMultiTaskModel(nn.Module):
             loss_role = torch.tensor(0.0, device=device)
 
         # ── 6c) Role oblique fin (conditionné role_coarse==OBLIQ, OBLIQUE_GENERIC inclus) ──
-        # ANCIENNE APPROCHE : excluait OBLIQUE_GENERIC (id=0, 77.7% des obliques) → seulement
-        # 22% des obliques recevaient un gradient → signal 5× plus faible que role_head → sous-perfs.
-        # NOUVELLE APPROCHE : on conditionne sur role_coarse==OBLIQ (= spans vraiment obliques),
-        # ce qui inclut OBLIQUE_GENERIC. Les class weights gèrent le déséquilibre.
-        # Cohérence entraînement / inférence : la tête est utilisée IFF role_coarse==OBLIQ → mask identique.
         _OBLIQ_RC_ID = 2  # ROLE_COARSE_LABELS.index("OBLIQ")
         ro_mask = (
             (role_coarse_labels == _OBLIQ_RC_ID)
@@ -629,7 +661,6 @@ class SpanMultiTaskModel(nn.Module):
             loss_cert = torch.tensor(0.0, device=device)
 
         # ── 9) Morpho : gender + number + person ───────────────────────────
-        # Supervisés sur NER spans + syntactic spans qui ont les champs annotés
         gender_mask = (gender_labels >= 0) & (gender_labels < g_logits.size(-1))
         number_mask = (number_labels >= 0) & (number_labels < n_logits.size(-1))
         person_mask = (person_labels >= 0) & (person_labels < p_logits.size(-1))
@@ -650,10 +681,7 @@ class SpanMultiTaskModel(nn.Module):
             loss_verb_ptr = torch.tensor(0.0, device=device)
 
         # ── 11) Compat : cohérence inter-têtes pour les eventlets ──────────
-        #
-        # A) role → boundary :
-        #    Un span participant (role != NONE) est forcément un span NER (boundary=1).
-        #    Si boundary manque ce span, l'eventlet est cassé.
+        # A) role → boundary : Un span participant est forcément un span NER.
         role_active_mask = (role_coarse_labels >= 0) & (role_coarse_labels < ROLE_COARSE_NONE_ID)
         if lambda_compat > 0.0 and role_active_mask.any():
             forced_boundary = torch.ones(
@@ -666,9 +694,8 @@ class SpanMultiTaskModel(nn.Module):
         else:
             loss_compat_rb = torch.tensor(0.0, device=device)
 
-        # B) boundary ↔ coarse soft alignment :
-        #    P(boundary=1) doit s'aligner avec P(coarse≠NONE).
-        #    On utilise boundary comme superviseur stable (detach) pour guider coarse.
+        # B) boundary ↔ coarse soft alignment : P(boundary=1) doit s'aligner avec P(coarse≠NONE).
+        # On utilise boundary comme superviseur stable (detach) pour guider coarse.
         if lambda_compat > 0.0 and b_logits.size(0) > 0:
             p_boundary_pos  = torch.softmax(b_logits.detach(), dim=-1)[:, 1]          # [N]
             p_coarse_entity = 1.0 - torch.softmax(c_logits, dim=-1)[:, COARSE_NONE_ID]  # [N]
@@ -679,13 +706,13 @@ class SpanMultiTaskModel(nn.Module):
         loss_compat = loss_compat_rb + loss_compat_bc
 
         # ── VerbFam losses (verb_trigger spans uniquement) ────────────────────
-        # Masque : spans dont SVO boundary = 1 (verb_trigger détecté)
         vt_mask = (svo_boundary_labels == 1)  # [N] bool
 
         def _verbfam_ce(logits, labels, none_id, weight=None):
             """CE loss sur les spans verb_trigger avec label valide (≠ none_id)."""
             if not vt_mask.any() or labels is None:
                 return torch.tensor(0.0, device=device)
+            labels = labels.to(device=device, dtype=torch.long)
             m = vt_mask & (labels != none_id)
             if not m.any():
                 return torch.tensor(0.0, device=device)
@@ -788,6 +815,3 @@ class SpanMultiTaskModel(nn.Module):
             "num_oblique_spans":    int(ro_mask.sum().item()),
             "num_vt_spans":         int(vt_mask.sum().item()),
         }
-
-
-

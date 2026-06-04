@@ -27,7 +27,7 @@
     "class_weight_power": 0.5
   },
   "lambdas": {
-    "boundary": 5.0,
+    "boundary": 2.0,
     "coarse": 0.75,
     "fine": 1.8,
     "svo_boundary": 0.35,
@@ -53,10 +53,10 @@
   },
   "boundary_first": {
     "_comment": "unlock à 0.88 au lieu de 0.92 → fine démarre ep4-5 au lieu de ep8-10",
-    "enabled": true,
-    "unlock_threshold": 0.94,
+    "enabled": false,
+    "unlock_threshold": 0.88,
     "unlock_ramp_epochs": 5,
-    "coarse_warmup_lambda": 0.05,
+    "coarse_warmup_lambda": 0.1,
     "fine_warmup_lambda": 0.1
   },
   "svo_cascade": {
@@ -83,7 +83,7 @@
     "regression_delta": 0.008
   },
   "hard_negatives": {
-    "every_n_epochs": 5,
+    "every_n_epochs": 3,
     "decay": 1,
     "max_weight": 8.0,
     "min_weight": 0.3,
