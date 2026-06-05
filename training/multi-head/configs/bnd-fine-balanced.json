@@ -27,9 +27,9 @@
     "class_weight_power": 0.5
   },
   "lambdas": {
-    "boundary": 1.4,
-    "coarse": 0.9,
-    "fine": 1.0,
+    "boundary": 5,
+    "coarse": 1.5,
+    "fine": 2.5,
     "svo_boundary": 0.35,
     "svo": 0.60,
     "role": 0,
@@ -54,10 +54,10 @@
   "boundary_first": {
     "_comment": "unlock à 0.88 au lieu de 0.92 → fine démarre ep4-5 au lieu de ep8-10",
     "enabled": false,
-    "unlock_threshold": 0.88,
+    "unlock_threshold": 0.90,
     "unlock_ramp_epochs": 5,
-    "coarse_warmup_lambda": 0.1,
-    "fine_warmup_lambda": 0.1
+    "coarse_warmup_lambda": 0.3,
+    "fine_warmup_lambda": 0.3
   },
   "svo_cascade": {
     "role_coarse_bnd_thr": 0.0,
@@ -100,17 +100,20 @@
     "_comment": "Full data dès ep1 — pas de curriculum",
     "names": [
       "soft-full",
+      "medium-full",
       "full"
     ],
     "hard_per_gold": [
       3,
-      6
+      5,
+      7
     ],
     "soft_factors": [
       1.0,
+      1.0,
       1.0
     ],
-    "max_epochs_per_level": 10,
+    "max_epochs_per_level": 3,
     "min_delta_for_progress": 0.0,
     "patience": 999
   },
