@@ -43,11 +43,11 @@ class SpanMultiTaskModel(nn.Module):
             span_hidden_dim: int = 512,
             max_width_bucket: int = 16,
             dropout: float = 0.1,
-            detach_ner_classifier_backbone: bool = False,
+            detach_ner_classifier_backbone: bool = True,
             ner_coarse_backbone_grad_scale: float = 0.3,
             ner_fine_backbone_grad_scale: float = 0.5,
             boundary_aux_from_ner: bool = False,
-            boundary_aux_scale: float = 1.0,
+            boundary_aux_scale: float = 0.1,
     ):
         super().__init__()
 

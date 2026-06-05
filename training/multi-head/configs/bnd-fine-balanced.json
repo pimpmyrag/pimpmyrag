@@ -27,9 +27,9 @@
     "class_weight_power": 0.5
   },
   "lambdas": {
-    "boundary": 1.3,
-    "coarse": 0.75,
-    "fine": 1.8,
+    "boundary": 1.4,
+    "coarse": 0.9,
+    "fine": 1.0,
     "svo_boundary": 0.35,
     "svo": 0.60,
     "role": 0,
@@ -39,8 +39,8 @@
     "certainty": 0.30,
     "morpho": 0.10,
     "verb_ptr": 0.60,
-    "verb_family": 1.5,
-    "verb_family_fine": 1.5,
+    "verb_family": 1,
+    "verb_family_fine": 0,
     "verb_polarity": 1.0,
     "verb_aspect": 0.5,
     "verb_source": 0.4,
@@ -83,35 +83,39 @@
     "regression_delta": 0.0
   },
   "hard_negatives": {
-    "every_n_epochs": 999,
+    "_comment": "Mining orienté précision boundary : boost FP > FN pour réduire les faux positifs boundary.",
+    "every_n_epochs": 3,
     "decay": 1.0,
-    "max_weight": 1.0,
+    "max_weight": 4.0,
     "min_weight": 1.0,
-    "boost_fp": 1.0,
+    "boost_fp": 2.0,
     "boost_fn": 1.0,
-    "boost_coarse": 1.0,
-    "boost_fine": 1.0,
-    "boost_fp_svo": 1.0,
+    "boost_coarse": 1.5,
+    "boost_fine": 1.5,
+    "boost_fp_svo": 1.5,
     "boost_fn_svo": 1.0,
     "boost_role_coarse": 1.0
   },
   "difficulty_levels": {
     "_comment": "Full data dès ep1 — pas de curriculum",
     "names": [
+      "soft-full",
       "full"
     ],
     "hard_per_gold": [
+      3,
       6
     ],
     "soft_factors": [
+      1.0,
       1.0
     ],
-    "max_epochs_per_level": 999,
+    "max_epochs_per_level": 10,
     "min_delta_for_progress": 0.0,
     "patience": 999
   },
   "early_stopping": {
-    "patience": 0,
+    "patience": 999,
     "min_delta": 0.0
   },
   "hardware": {
