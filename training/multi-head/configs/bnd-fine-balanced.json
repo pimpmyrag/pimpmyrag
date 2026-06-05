@@ -27,7 +27,7 @@
     "class_weight_power": 0.5
   },
   "lambdas": {
-    "boundary": 2.0,
+    "boundary": 1.3,
     "coarse": 0.75,
     "fine": 1.8,
     "svo_boundary": 0.35,
@@ -77,77 +77,63 @@
     "bnd_boost": 1.0
   },
   "boundary_plateau": {
-    "window": 4,
-    "min_delta": 0.003,
-    "regression_window": 3,
-    "regression_delta": 0.008
+    "window": 999,
+    "min_delta": 0.0,
+    "regression_window": 999,
+    "regression_delta": 0.0
   },
   "hard_negatives": {
-    "every_n_epochs": 3,
-    "decay": 1,
-    "max_weight": 8.0,
-    "min_weight": 0.3,
-    "boost_fp": 2.0,
-    "boost_fn": 2.0,
-    "boost_coarse": 2.0,
-    "boost_fine": 2.0,
-    "boost_fp_svo": 2.0,
-    "boost_fn_svo": 2.0,
-    "boost_role_coarse": 2
+    "every_n_epochs": 999,
+    "decay": 1.0,
+    "max_weight": 1.0,
+    "min_weight": 1.0,
+    "boost_fp": 1.0,
+    "boost_fn": 1.0,
+    "boost_coarse": 1.0,
+    "boost_fine": 1.0,
+    "boost_fp_svo": 1.0,
+    "boost_fn_svo": 1.0,
+    "boost_role_coarse": 1.0
   },
   "difficulty_levels": {
+    "_comment": "Full data dès ep1 — pas de curriculum",
     "names": [
-      "easy",
-      "easy+",
-      "medium",
-      "medium+",
-      "hard",
       "full"
     ],
     "hard_per_gold": [
-      2,
-      3,
-      4,
-      5,
-      6,
-      7
+      6
     ],
     "soft_factors": [
-      1.0,
-      1.5,
-      2,
-      2.25,
-      2.25,
-      3.0
+      1.0
     ],
-    "max_epochs_per_level": 4,
-    "min_delta_for_progress": 0.0003,
-    "patience": 5
+    "max_epochs_per_level": 999,
+    "min_delta_for_progress": 0.0,
+    "patience": 999
   },
   "early_stopping": {
-    "patience": 5,
-    "min_delta": 0.0003
+    "patience": 0,
+    "min_delta": 0.0
   },
   "hardware": {
     "h100_80gb": {
       "bs": 160,
       "accum": 1,
-      "workers": 8
+      "workers": 12
     },
     "l40s_48gb": {
       "bs": 128,
       "accum": 1,
-      "workers": 6
+      "workers": 12
     },
     "a100_40gb": {
       "bs": 96,
       "accum": 1,
-      "workers": 6
+      "workers": 10
     },
     "rtx_4090": {
       "bs": 80,
       "accum": 1,
-      "workers": 12
+      "workers": 10
     },
     "rtx_3090": {
       "bs": 64,
