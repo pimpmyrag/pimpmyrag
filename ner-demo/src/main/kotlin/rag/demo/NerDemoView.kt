@@ -51,16 +51,23 @@ class NerDemoView(
         )
         // Clés = displayKey v4 : synLabel (verb_trigger/pron_subj/pron_obj) ou role (SUBJECT…)
         val SVO_COLORS = mapOf(
-            "verb_trigger"   to ("#e0f2fe" to "#0369a1"),   // bleu — verbe déclencheur
-            "SUBJECT"        to ("#dcfce7" to "#15803d"),   // vert — sujet
-            "OBJECT"         to ("#fce7f3" to "#9d174d"),   // rose — objet direct
-            "OBLIQUE"        to ("#fff7ed" to "#c2410c"),   // orange — obl/iobj
-            "OBLIQUE_AGENT"  to ("#fdf4ff" to "#7e22ce"),   // violet — agent passif "par X"
-            "OBLIQUE_CAUSE"  to ("#fef9c3" to "#854d0e"),   // jaune — cause "en raison de"
-            "APPOS"          to ("#f8fafc" to "#475569"),   // gris — apposition
-            "pron_subj"      to ("#f0fdf4" to "#166534"),   // vert foncé — pronom sujet
-            "pron_obj"       to ("#fdf2f8" to "#7e22ce"),   // violet clair — pronom objet
-            "NONE"           to ("#f3f4f6" to "#6b7280"),   // gris neutre
+            "verb_trigger"        to ("#e0f2fe" to "#0369a1"),   // bleu — verbe déclencheur
+            "SUBJECT"             to ("#dcfce7" to "#15803d"),   // vert — sujet
+            "OBJECT"              to ("#fce7f3" to "#9d174d"),   // rose — objet direct
+            "OBLIQUE"             to ("#fff7ed" to "#c2410c"),   // orange — obl générique
+            "OBLIQUE_AGENT"       to ("#fdf4ff" to "#7e22ce"),   // violet — agent passif "par X"
+            "OBLIQUE_CAUSE"       to ("#fef9c3" to "#854d0e"),   // jaune — cause "en raison de"
+            "OBLIQUE_ADVERSARY"   to ("#fee2e2" to "#991b1b"),   // rouge — adversaire "contre"
+            "OBLIQUE_BENEFICIARY" to ("#d1fae5" to "#065f46"),   // vert foncé — bénéficiaire "pour"
+            "OBLIQUE_COMITATIVE"  to ("#ede9fe" to "#5b21b6"),   // violet clair — comitatif "avec"
+            "OBLIQUE_DOMAIN"      to ("#f0f9ff" to "#0369a1"),   // bleu clair — domaine "sur"
+            "OBLIQUE_SOURCE"      to ("#fefce8" to "#713f12"),   // jaune foncé — source "selon"
+            "OBLIQUE_TIME"        to ("#ffedd5" to "#9a3412"),   // orange clair — temps
+            "OBLIQUE_LOC"         to ("#f0fdf4" to "#166534"),   // vert pâle — lieu oblique
+            "APPOS"               to ("#f8fafc" to "#475569"),   // gris — apposition
+            "pron_subj"           to ("#f0fdf4" to "#166534"),   // vert foncé — pronom sujet
+            "pron_obj"            to ("#fdf2f8" to "#7e22ce"),   // violet clair — pronom objet
+            "NONE"                to ("#f3f4f6" to "#6b7280"),   // gris neutre
         )
         val COMPACT_LABEL = mapOf(
             "hint_person_name"    to "pers",
@@ -104,41 +111,62 @@ class NerDemoView(
         )
         val ALL_COARSE = COARSE_COLORS.keys.filter { it != "NONE" }
         private val SVO_EMOJI = mapOf(
-            "verb_trigger"   to "🔵",
-            "SUBJECT"        to "🟢",
-            "OBJECT"         to "🔴",
-            "OBLIQUE"        to "🟠",
-            "OBLIQUE_AGENT"  to "💡",
-            "OBLIQUE_CAUSE"  to "⚡",
-            "APPOS"          to "🏷️",
-            "pron_subj"      to "🟢",
-            "pron_obj"       to "🔴",
-            "NONE"           to "⚪",
+            "verb_trigger"        to "🔵",
+            "SUBJECT"             to "🟢",
+            "OBJECT"              to "🔴",
+            "OBLIQUE"             to "🟠",
+            "OBLIQUE_AGENT"       to "💡",
+            "OBLIQUE_CAUSE"       to "⚡",
+            "OBLIQUE_ADVERSARY"   to "⚔️",
+            "OBLIQUE_BENEFICIARY" to "🎁",
+            "OBLIQUE_COMITATIVE"  to "🤝",
+            "OBLIQUE_DOMAIN"      to "📌",
+            "OBLIQUE_SOURCE"      to "📰",
+            "OBLIQUE_TIME"        to "🕐",
+            "OBLIQUE_LOC"         to "📍",
+            "APPOS"               to "🏷️",
+            "pron_subj"           to "🟢",
+            "pron_obj"            to "🔴",
+            "NONE"                to "⚪",
         )
         /** Libellé compact (badge) par displayKey v4. */
         private val SVO_LABEL = mapOf(
-            "verb_trigger"   to "verb",
-            "SUBJECT"        to "subj",
-            "OBJECT"         to "obj",
-            "OBLIQUE"        to "obl",
-            "OBLIQUE_AGENT"  to "obl:agt",
-            "OBLIQUE_CAUSE"  to "obl:cause",
-            "APPOS"          to "appos",
-            "pron_subj"      to "pron:subj",
-            "pron_obj"       to "pron:obj",
-            "NONE"           to "none",
+            "verb_trigger"        to "verb",
+            "SUBJECT"             to "subj",
+            "OBJECT"              to "obj",
+            "OBLIQUE"             to "obl",
+            "OBLIQUE_AGENT"       to "obl:agt",
+            "OBLIQUE_CAUSE"       to "obl:cause",
+            "OBLIQUE_ADVERSARY"   to "obl:adv",
+            "OBLIQUE_BENEFICIARY" to "obl:ben",
+            "OBLIQUE_COMITATIVE"  to "obl:com",
+            "OBLIQUE_DOMAIN"      to "obl:dom",
+            "OBLIQUE_SOURCE"      to "obl:src",
+            "OBLIQUE_TIME"        to "obl:time",
+            "OBLIQUE_LOC"         to "obl:loc",
+            "APPOS"               to "appos",
+            "pron_subj"           to "pron:subj",
+            "pron_obj"            to "pron:obj",
+            "NONE"                to "none",
         )
-        /** Couleurs des rôles syntaxiques UD v4 (nsubj / obj / obl / obl:agent / obl:cause / appos). */
+        /** Couleurs des rôles syntaxiques UD v4. */
         val SYNTACTIC_ROLE_COLORS = mapOf(
-            "nsubj"     to ("#dcfce7" to "#15803d"),  // sujet
-            "obj"       to ("#fce7f3" to "#9d174d"),  // objet direct
-            "iobj"      to ("#fff7ed" to "#c2410c"),  // objet indirect (legacy)
-            "obl"       to ("#fff7ed" to "#c2410c"),  // oblique / complément prép.
-            "obl:agent" to ("#fdf4ff" to "#7e22ce"),  // agent passif "par X"
-            "obl:cause" to ("#fef9c3" to "#854d0e"),  // cause "en raison de"
-            "attr"      to ("#f0fdf4" to "#166534"),  // attribut copule (legacy)
-            "appos"     to ("#f8fafc" to "#475569"),  // apposition
-            "nmod"      to ("#fff1f2" to "#be123c"),  // modifieur nominal (legacy)
+            "nsubj"        to ("#dcfce7" to "#15803d"),  // sujet
+            "obj"          to ("#fce7f3" to "#9d174d"),  // objet direct
+            "iobj"         to ("#fff7ed" to "#c2410c"),  // objet indirect (legacy)
+            "obl"          to ("#fff7ed" to "#c2410c"),  // oblique générique
+            "obl:agent"    to ("#fdf4ff" to "#7e22ce"),  // agent passif "par X"
+            "obl:cause"    to ("#fef9c3" to "#854d0e"),  // cause "en raison de"
+            "obl:adversary" to ("#fee2e2" to "#991b1b"),  // adversaire "contre"
+            "obl:ben"      to ("#d1fae5" to "#065f46"),  // bénéficiaire "pour"
+            "obl:com"      to ("#ede9fe" to "#5b21b6"),  // comitatif "avec"
+            "obl:domain"   to ("#f0f9ff" to "#0369a1"),  // domaine "sur"
+            "obl:source"   to ("#fefce8" to "#713f12"),  // source "selon"
+            "obl:tmod"     to ("#ffedd5" to "#9a3412"),  // temps
+            "obl:lmod"     to ("#f0fdf4" to "#166534"),  // lieu oblique
+            "attr"         to ("#f0fdf4" to "#166534"),  // attribut copule (legacy)
+            "appos"        to ("#f8fafc" to "#475569"),  // apposition
+            "nmod"         to ("#fff1f2" to "#be123c"),  // modifieur nominal (legacy)
         )
         private val executor = Executors.newCachedThreadPool { r ->
             Thread(r, "ner-stream").also { it.isDaemon = true }
@@ -1523,6 +1551,13 @@ class NerDemoView(
         // Verb pointer : affiche le texte du verbe gouverneur si résolu, sinon la position brute
         val verbRef = svo.govVerbText?.let { "«$it»" } ?: svo.govVerbCharStart?.let { "@$it" }
         verbRef?.let { addRow(detailPanel, "→ trigger", it) }
+        // ── Verb semantic heads (verb_trigger uniquement) ──────────────────────
+        if (svo.synLabel == "verb_trigger" || svo.role == "NONE") {
+            svo.base.verbFamily?.let   { addRow(detailPanel, "family",   "$it (${"%.2f".format(svo.base.verbFamilyProb)})") }
+            svo.base.verbPolarity?.let { addRow(detailPanel, "polarity", "$it (${"%.2f".format(svo.base.verbPolarityProb)})") }
+            svo.base.verbAspect?.let   { addRow(detailPanel, "aspect",   "$it (${"%.2f".format(svo.base.verbAspectProb)})") }
+            svo.base.verbSource?.let   { addRow(detailPanel, "source",   "$it (${"%.2f".format(svo.base.verbSourceProb)})") }
+        }
         if (svo.fromNer) addRow(detailPanel, i18n.rowSource, i18n.syntheticNer)
     }
 

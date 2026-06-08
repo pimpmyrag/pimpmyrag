@@ -197,7 +197,7 @@ jobs:
 
       - name: Summary
         run: |
-          echo "## Export ONNX terminé 🎉" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Export ONNX terminé " >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Fichier | SHA-256 |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"

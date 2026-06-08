@@ -49,7 +49,7 @@ else:
     print("  ✅ Aucun pod actif.")
 
 # Commit v8.6 — à mettre à jour après git push
-commit_sha = "main"
+commit_sha = "bce3603"
 start_cmd = (
     "bash -c '"
     "cd /workspace && "

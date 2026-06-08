@@ -18,7 +18,7 @@ private val REPO_ROOT: String = System.getProperty("user.dir").let { cwd ->
             .firstOrNull { it.resolve("gradlew").exists() }?.absolutePath ?: cwd
     }
 }
-private val MODEL_DIR = System.getProperty("ner.model.dir", "$REPO_ROOT/models/deberta/fine-tunning-23042026")
+private val MODEL_DIR = System.getProperty("ner.model.dir", "$REPO_ROOT/models/deberta/fine-tuning-29042026")
 private val MODEL_ONNX = "$MODEL_DIR/best_model_multitask_full.onnx"
 private val TOKENIZER_DIR = System.getProperty("ner.tokenizer.dir", "$REPO_ROOT/training/multi-head/tokenizer_export_clean")
 

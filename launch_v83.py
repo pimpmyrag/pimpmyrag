@@ -41,24 +41,25 @@ if killed:
 else:
     print("  ✅ Aucun pod actif.")
 
-# Commande de démarrage (pattern canonique)
-# Clone main → setup_runpod.sh gère tout : deps / torch 2.6 / DVC pull v8.3 / training / upload R2 + W&B artifact
+# Commande de démarrage — Checkout 8ef6a03 (contient setup_runpod.sh v8.3 + run_adaptive_training.sh fix)
+commit_sha = "8ef6a03"  # Contient TOUT : dataset v8.3 .dvc + setup_runpod.sh v8.3 + ramp fix
 start_cmd = (
     "bash -c '"
     "cd /workspace && "
     "git clone https://github.com/pimpmyrag/pimpmyrag.git pimpmyrag 2>&1 | tail -3 && "
-    "cd pimpmyrag/training/multi-head && "
+    "cd pimpmyrag && git fetch origin && git checkout " + commit_sha + " && "
+    "cd training/multi-head && "
     "chmod +x setup_runpod.sh && "
     "./setup_runpod.sh 2>&1 | tee /workspace/training.log"
     "'"
 )
 
 # Création du pod
-print("\n🚀 Création pod RTX 3090 (v8.3 - pronoms + certainty + ramp SVO/morpho)...")
+print("\n🚀 Création pod A100 40GB (v8.3 - pronoms + certainty + ramp SVO/morpho)...")
 pod = runpod.create_pod(
     name="pimpmyrag-training-v8.3",
     image_name="runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
-    gpu_type_id="NVIDIA GeForce RTX 3090",
+    gpu_type_id="NVIDIA A100-SXM4-40GB",   # Supportée torch 2.4->2.6, BS=128, ~3x plus vite
     cloud_type="SECURE",
     gpu_count=1,
     volume_in_gb=50,

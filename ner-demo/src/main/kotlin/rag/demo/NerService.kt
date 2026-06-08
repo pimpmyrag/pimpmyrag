@@ -240,7 +240,13 @@ class NerService(
 
     // Helper v4 : un SvoSpan est sujet si role=SUBJECT ou synLabel=pron_subj
     private fun SvoSpan.isSubject() = role == "SUBJECT" || synLabel == "pron_subj"
-    private fun SvoSpan.isObject()  = role in setOf("OBJECT", "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE", "APPOS") || synLabel == "pron_obj"
+    private fun SvoSpan.isObject()  = role in setOf(
+        "OBJECT",
+        "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE",
+        "OBLIQUE_ADVERSARY", "OBLIQUE_BENEFICIARY", "OBLIQUE_COMITATIVE",
+        "OBLIQUE_DOMAIN", "OBLIQUE_SOURCE", "OBLIQUE_TIME", "OBLIQUE_LOC",
+        "APPOS",
+    ) || synLabel == "pron_obj"
 
     private val subjCoarse   = setOf("PER", "ORG", "EVENT", "ABSTRACT")
     private val objCoarse    = setOf("PER", "ORG", "LOC", "EVENT", "OBJECT", "ABSTRACT", "VALUE", "TIME", "WORK")
@@ -266,7 +272,13 @@ class NerService(
             val svoRole = e.metadata["svoRole"] as? String ?: return@mapNotNull null
             // svoRole contient les nouveaux labels v4 : SUBJECT, OBJECT, OBLIQUE, etc.
             val isSubj = svoRole == "SUBJECT"
-            val isObj  = svoRole in setOf("OBJECT", "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE", "APPOS")
+            val isObj  = svoRole in setOf(
+                "OBJECT",
+                "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE",
+                "OBLIQUE_ADVERSARY", "OBLIQUE_BENEFICIARY", "OBLIQUE_COMITATIVE",
+                "OBLIQUE_DOMAIN", "OBLIQUE_SOURCE", "OBLIQUE_TIME", "OBLIQUE_LOC",
+                "APPOS",
+            )
             if (!isSubj && !isObj) return@mapNotNull null
             val coarse  = e.metadata["coarse"] as? String ?: return@mapNotNull null
             val allowed = if (isSubj) subjCoarse else objCoarse
@@ -368,10 +380,15 @@ class NerService(
         }
 
         // ── Déduplication finale ──────────────────────────────────────────────
-        // Deux rôles sont "en conflit" si identiques OU si OBLIQUE vs OBLIQUE_AGENT
-        // (même span ne peut être les deux : OBLIQUE_AGENT est plus spécifique).
+        // Deux rôles sont "en conflit" si identiques OU si deux sous-types OBLIQUE_*
+        // (même span ne peut pas avoir deux rôles obliques différents).
+        val OBLIQUE_ROLES = setOf(
+            "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE",
+            "OBLIQUE_ADVERSARY", "OBLIQUE_BENEFICIARY", "OBLIQUE_COMITATIVE",
+            "OBLIQUE_DOMAIN", "OBLIQUE_SOURCE", "OBLIQUE_TIME", "OBLIQUE_LOC",
+        )
         fun rolesConflict(a: String, b: String) =
-            a == b || (a in setOf("OBLIQUE", "OBLIQUE_AGENT") && b in setOf("OBLIQUE", "OBLIQUE_AGENT"))
+            a == b || (a in OBLIQUE_ROLES && b in OBLIQUE_ROLES)
 
         // Phase 1 vs Phase 2 : si un span Phase 2 chevauche un span Phase 1 avec rôle
         // en conflit, on garde le plus confiant (svoConfidence).

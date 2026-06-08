@@ -12,7 +12,7 @@ source venv/bin/activate
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CHECKPOINT="${NER_CHECKPOINT:-$REPO_ROOT/checkpoint_best_multitask.pt}"
-OUT_DIR="${NER_OUT_DIR:-$REPO_ROOT/models/deberta/fine-tuning-29042026}"
+OUT_DIR="${NER_OUT_DIR:-$REPO_ROOT/models/deberta/fine-tuning-07062026}"
 OUT_ONNX="$OUT_DIR/best_model_multitask_full.onnx"
 OUT_Q8="$OUT_DIR/best_model_multitask_q8.onnx"
 TOKENIZER="$REPO_ROOT/tokenizer_export_clean"

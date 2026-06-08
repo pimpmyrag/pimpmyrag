@@ -596,7 +596,7 @@ Respond in the SAME LANGUAGE as the analyzed text.
                 val argsStr  = fn["arguments"] as? String ?: "{}"
 
                 log.info("Agent → {}({})", toolName, argsStr.take(120))
-                toolTrace.appendLine("🔧 **$toolName** `${argsStr.take(80)}${if (argsStr.length > 80) "…" else ""}`")
+                toolTrace.appendLine(" **$toolName** `${argsStr.take(80)}${if (argsStr.length > 80) "…" else ""}`")
                 onProgress(toolTrace.toString(), true)
 
                 val toolResult = try {

@@ -209,13 +209,20 @@ import kotlin.math.roundToInt
  *     pron_obj     — pronom objet (peut avoir un rôle OBJECT)
  *
  *   role (rôle argumental v4) :
- *     NONE           — verbe déclencheur (isActualVerb) — pas un argument
- *     SUBJECT        — agent (actif) ou patient (passif)
- *     OBJECT         — objet direct
- *     OBLIQUE        — complément prépositionnel  (ex: "à Paris", "par train")
- *     OBLIQUE_AGENT  — agent passif explicite     (ex: "par le président")
- *     OBLIQUE_CAUSE  — cause / but               (ex: "pour raisons économiques")
- *     APPOS          — apposition NE→rôle         (ex: "Macron, président")
+ *     NONE                — verbe déclencheur (isActualVerb) — pas un argument
+ *     SUBJECT             — agent (actif) ou patient (passif)
+ *     OBJECT              — objet direct
+ *     OBLIQUE             — complément prépositionnel générique  (ex: "à Paris", "par train")
+ *     OBLIQUE_AGENT       — agent passif explicite               (ex: "par le président")
+ *     OBLIQUE_CAUSE       — cause / but                          (ex: "pour raisons économiques")
+ *     OBLIQUE_ADVERSARY   — adversaire / opposant                (ex: "contre la coalition")
+ *     OBLIQUE_BENEFICIARY — bénéficiaire de l'action             (ex: "pour les enfants")
+ *     OBLIQUE_COMITATIVE  — comitative / accompagnement          (ex: "avec ses alliés")
+ *     OBLIQUE_DOMAIN      — domaine / secteur                    (ex: "en matière de santé")
+ *     OBLIQUE_SOURCE      — source / origine                     (ex: "selon le rapport")
+ *     OBLIQUE_TIME        — complément de temps                  (ex: "depuis 2023", "lundi")
+ *     OBLIQUE_LOC         — complément de lieu                   (ex: "à Bruxelles")
+ *     APPOS               — apposition NE→rôle                   (ex: "Macron, président")
  *
  *   svoConfidence (score unifié, utilisé pour NMS et affichage) :
  *     • Pour les verbes  (role == NONE) → svoBoundaryProb
@@ -469,13 +476,20 @@ class NerMcpTools(private val nerService: NerService) {
           voice          — ACTIVE | PASSIVE (with confidence)
           govVerbText    — governing verb text for NP argument spans (null for verbs themselves)
           govVerbCharStart — char offset of the governing verb (null for verb spans)
+          [VERB SEMANTIC HEADS — verb_trigger spans only, null for NP args]
+          verbFamily     — semantic class of the verb: Causality | Cognition | Communication |
+                           Conflict | Movement | OTHER | Perception | Possession |
+                           Relation | Social | State_Change | Temporal  (+ prob in parentheses)
+          verbPolarity   — sentiment polarity: NEGATIVE | NEUTRAL | POSITIVE  (+ prob)
+          verbAspect     — aspectual class: DURATIF | PONCTUEL  (+ prob)
+          verbSource     — source modality: DIRECT | HYPOTHETICAL | REPORTED  (+ prob)
           entityText     — text of the merged NER entity (null if no entity matched)
           entityFine     — fine label of the matched entity (null if no entity matched)
           entityCoarse   — coarse family of the matched entity
           chars          — character offsets [start:end]
 
         EVENTLET FIELDS (structured events grouped by governing verb):
-          verb           — {text, chars, voice, p_confidence}
+          verb           — {text, chars, voice, p_confidence, verbFamily, verbPolarity, verbAspect, verbSource}
           subject        — {text, nerEntity, confidence, resolved} or null
           obj            — object slot or null
           iobjs          — list of OBLIQUE / OBLIQUE_AGENT slots
@@ -499,7 +513,13 @@ class NerMcpTools(private val nerService: NerService) {
         val inferenceMs = System.currentTimeMillis() - t0
 
         // Résumé SVO pré-formaté — v4 : args ont role != NONE, verbes ont role == NONE
-        val v4ArgRoles = setOf("SUBJECT", "OBJECT", "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE", "APPOS", "pron_subj", "pron_obj")
+        val v4ArgRoles = setOf(
+            "SUBJECT", "OBJECT",
+            "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE", "OBLIQUE_ADVERSARY",
+            "OBLIQUE_BENEFICIARY", "OBLIQUE_COMITATIVE", "OBLIQUE_DOMAIN",
+            "OBLIQUE_SOURCE", "OBLIQUE_TIME", "OBLIQUE_LOC",
+            "APPOS", "pron_subj", "pron_obj"
+        )
         val svoArgSpans = result.svoSpans.filter { it.role in v4ArgRoles }
         val svoSummaryLines = if (result.svoSpans.isEmpty()) {
             listOf("Aucun span SVO détecté avec les seuils actuels (tauSvoBoundary=${nerService.config.tauSvoBoundary}).")
@@ -509,7 +529,15 @@ class NerMcpTools(private val nerService: NerService) {
                     "→ entité NER : \"${s.entity!!.text}\" (${s.entity!!.type})"
                 else "→ aucune entité NER matchée"
                 val roleDisplay = if (s.role == "NONE") "VERB/${s.synLabel}" else s.role
-                "• [$roleDisplay] \"${s.text}\"  p_conf=%.3f  p_bnd=%.3f  p_role=%.3f  voix=${s.voice}  cert=${s.certainty}  $entityPart".format(
+                val verbHeads = if (s.synLabel == "verb_trigger") {
+                    listOfNotNull(
+                        s.base.verbFamily?.let   { "fam=$it" },
+                        s.base.verbPolarity?.let { "pol=$it" },
+                        s.base.verbAspect?.let   { "asp=$it" },
+                        s.base.verbSource?.let   { "src=$it" },
+                    ).joinToString(" ").let { if (it.isNotEmpty()) "  [$it]" else "" }
+                } else ""
+                "• [$roleDisplay] \"${s.text}\"  p_conf=%.3f  p_bnd=%.3f  p_role=%.3f  voix=${s.voice}  cert=${s.certainty}$verbHeads  $entityPart".format(
                     s.svoConfidence, s.svoBoundaryProb, s.roleProb)
             }
         }
@@ -587,6 +615,13 @@ class NerMcpTools(private val nerService: NerService) {
                     if (s.fromNer) put("fromNer", true)
                     s.gender?.let { put("gender", it) }
                     s.number?.let { put("number", it) }
+                    // ── Verb semantic heads (verb_trigger uniquement) ──────────────
+                    if (s.synLabel == "verb_trigger") {
+                        s.base.verbFamily?.let   { put("verbFamily",   "$it (${"%.2f".format(s.base.verbFamilyProb)})") }
+                        s.base.verbPolarity?.let { put("verbPolarity", "$it (${"%.2f".format(s.base.verbPolarityProb)})") }
+                        s.base.verbAspect?.let   { put("verbAspect",   "$it (${"%.2f".format(s.base.verbAspectProb)})") }
+                        s.base.verbSource?.let   { put("verbSource",   "$it (${"%.2f".format(s.base.verbSourceProb)})") }
+                    }
                 }
             },
             "eventlets" to result.eventlets.map { serializeEventlet(it) },
@@ -727,7 +762,13 @@ class NerMcpTools(private val nerService: NerService) {
                 }
                 r.svoSpans.forEach { s ->
                     svoRoleCounts[s.role] = (svoRoleCounts[s.role] ?: 0) + 1
-                    val isArg = s.role in setOf("SUBJECT","OBJECT","OBLIQUE","OBLIQUE_AGENT","OBLIQUE_CAUSE","APPOS","pron_subj","pron_obj")
+                    val isArg = s.role in setOf(
+                        "SUBJECT","OBJECT",
+                        "OBLIQUE","OBLIQUE_AGENT","OBLIQUE_CAUSE","OBLIQUE_ADVERSARY",
+                        "OBLIQUE_BENEFICIARY","OBLIQUE_COMITATIVE","OBLIQUE_DOMAIN",
+                        "OBLIQUE_SOURCE","OBLIQUE_TIME","OBLIQUE_LOC",
+                        "APPOS","pron_subj","pron_obj"
+                    )
                     if (isArg) { svoTotal++; if (s.entity != null) svoWithEntity++ }
                 }
             }
@@ -994,7 +1035,10 @@ class NerMcpTools(private val nerService: NerService) {
 
         ÉTAPE 1 — VÉRIFIER LES SPANS ARGUMENTAUX ("argumentSpans") :
           Pour chaque span :
-          1. Rôle (SUBJECT/OBJECT/OBLIQUE/OBLIQUE_AGENT/OBLIQUE_CAUSE/APPOS) cohérent ?
+          1. Rôle cohérent ?
+             (SUBJECT/OBJECT/OBLIQUE/OBLIQUE_AGENT/OBLIQUE_CAUSE/OBLIQUE_ADVERSARY/
+              OBLIQUE_BENEFICIARY/OBLIQUE_COMITATIVE/OBLIQUE_DOMAIN/OBLIQUE_SOURCE/
+              OBLIQUE_TIME/OBLIQUE_LOC/APPOS)
           2. Entité NER associée (entityCoarse/entityFine) correcte ?
              → SUBJECT :  doit être PER/ORG/EVENT — JAMAIS LOC ni TIME.
              → OBJECT  :  PER/ORG/LOC/EVENT/OBJECT acceptables.
@@ -1034,7 +1078,13 @@ class NerMcpTools(private val nerService: NerService) {
     ): Map<String, Any> {
         val result = nerService.analyseSingle(text)
 
-        val v4ArgRoles = setOf("SUBJECT", "OBJECT", "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE", "APPOS", "pron_subj", "pron_obj")
+        val v4ArgRoles = setOf(
+            "SUBJECT", "OBJECT",
+            "OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_CAUSE", "OBLIQUE_ADVERSARY",
+            "OBLIQUE_BENEFICIARY", "OBLIQUE_COMITATIVE", "OBLIQUE_DOMAIN",
+            "OBLIQUE_SOURCE", "OBLIQUE_TIME", "OBLIQUE_LOC",
+            "APPOS", "pron_subj", "pron_obj"
+        )
         val argSpans  = result.svoSpans.filter { it.role in v4ArgRoles }
         val verbSpans = result.svoSpans.filter { it.role == "NONE" }
 
@@ -1111,14 +1161,19 @@ class NerMcpTools(private val nerService: NerService) {
                 }
             },
             "verbSpans" to verbSpans.map { s ->
-                mapOf(
-                    "text"         to s.text,
-                    "p_confidence" to "%.3f".format(s.svoConfidence),
-                    "p_svo_bnd"    to "%.3f".format(s.svoBoundaryProb),
-                    "certainty"    to s.certainty,
-                    "voice"        to "${s.voice} (%.2f)".format(s.voiceProb),
-                    "chars"        to "[${s.charStart}:${s.charEnd}]",
-                )
+                buildMap {
+                    put("text",         s.text)
+                    put("p_confidence", "%.3f".format(s.svoConfidence))
+                    put("p_svo_bnd",    "%.3f".format(s.svoBoundaryProb))
+                    put("certainty",    s.certainty)
+                    put("voice",        "${s.voice} (%.2f)".format(s.voiceProb))
+                    put("chars",        "[${s.charStart}:${s.charEnd}]")
+                    // ── Verb semantic heads ──────────────────────────────────────
+                    s.base.verbFamily?.let   { put("verbFamily",   "$it (${"%.2f".format(s.base.verbFamilyProb)})") }
+                    s.base.verbPolarity?.let { put("verbPolarity", "$it (${"%.2f".format(s.base.verbPolarityProb)})") }
+                    s.base.verbAspect?.let   { put("verbAspect",   "$it (${"%.2f".format(s.base.verbAspectProb)})") }
+                    s.base.verbSource?.let   { put("verbSource",   "$it (${"%.2f".format(s.base.verbSourceProb)})") }
+                }
             },
             "eventlets" to result.eventlets.map { serializeEventlet(it) },
             "nerEntitiesWithRole" to result.entities
@@ -1167,12 +1222,17 @@ class NerMcpTools(private val nerService: NerService) {
     }
 
     private fun serializeEventlet(ev: Eventlet): Map<String, Any?> = buildMap {
-        put("verb", mapOf(
-            "text"         to ev.verb.text,
-            "chars"        to "[${ev.verb.charStart}:${ev.verb.charEnd}]",
-            "p_confidence" to "%.3f".format(ev.verb.svoBoundaryProb),
-            "certainty"    to ev.verb.certainty,
-        ))
+        put("verb", buildMap<String, Any?> {
+            put("text",         ev.verb.text)
+            put("chars",        "[${ev.verb.charStart}:${ev.verb.charEnd}]")
+            put("p_confidence", "%.3f".format(ev.verb.svoBoundaryProb))
+            put("certainty",    ev.verb.certainty)
+            // Verb semantic heads (non-null uniquement si tête activée sur ce verbe)
+            ev.verb.verbFamily?.let   { put("verbFamily",   "$it (${"%.2f".format(ev.verb.verbFamilyProb)})") }
+            ev.verb.verbPolarity?.let { put("verbPolarity", "$it (${"%.2f".format(ev.verb.verbPolarityProb)})") }
+            ev.verb.verbAspect?.let   { put("verbAspect",   "$it (${"%.2f".format(ev.verb.verbAspectProb)})") }
+            ev.verb.verbSource?.let   { put("verbSource",   "$it (${"%.2f".format(ev.verb.verbSourceProb)})") }
+        })
         put("voice",       ev.voice)
         put("negated",     ev.negated)
         put("subject",     ev.subject?.let { serializeSlot(it) })
