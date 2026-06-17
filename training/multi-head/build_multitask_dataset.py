@@ -427,6 +427,94 @@ def generate_hard_negatives(offsets, gold_candidates, gold_char_spans, max_per_g
 
     return out
 
+
+def generate_svo_hard_negatives(offsets, gold_candidates, gold_char_spans, max_per_gold=4):
+    """
+    Hard negatives pour svo_boundary : variantes de frontières autour des spans SYNTAXIQUES golds.
+    
+    Contrairement aux hard negatives NER qui ciblent boundary_label,
+    ceux-ci ciblent svo_boundary_label.
+    
+    Pour chaque span syntaxique gold (verb_trigger, pron_subj, pron_obj),
+    génère des variantes proches (IoU > 0) qui devraient être prédites comme NON-syntaxiques.
+    """
+    n_tokens = len(offsets)
+    out = []
+    seen = set()
+
+    # Filtrer les gold_candidates qui sont des spans syntaxiques (svo_boundary_label == 1)
+    syn_golds = [gc for gc in gold_candidates if gc.get("svo_boundary_label", 0) == 1]
+
+    for gc in syn_golds:
+        l = gc["tok_start"]
+        r = gc["tok_end"]
+
+        proposals = []
+        for dl in [-2, -1, 0, 1, 2]:
+            for dr in [-2, -1, 0, 1, 2]:
+                nl = l + dl
+                nr = r + dr
+                if nl < 0 or nr < 0 or nl >= n_tokens or nr >= n_tokens or nl > nr:
+                    continue
+                if nl == l and nr == r:
+                    continue
+
+                cstart, cend = token_span_to_char_span(offsets, nl, nr)
+                if (cstart, cend) in gold_char_spans:
+                    continue
+
+                # On veut des spans "proches" d'un gold SYNTAXIQUE
+                iou = token_span_iou((l, r), (nl, nr))
+                if iou <= 0.0:
+                    continue
+
+                proposals.append((nl, nr, cstart, cend, iou))
+
+        # garder les plus proches
+        proposals.sort(key=lambda x: x[-1], reverse=True)
+        kept = 0
+        for nl, nr, cstart, cend, iou in proposals:
+            key = (cstart, cend)
+            if key in seen:
+                continue
+            seen.add(key)
+            # Créer un candidat négatif pour svo_boundary
+            out.append({
+                "char_start": cstart,
+                "char_end": cend,
+                "tok_start": nl,
+                "tok_end": nr,
+                "boundary_label": 0,           # Pas un span NER
+                "svo_boundary_label": 0,      # Négatif pour svo_boundary (c'est le but !)
+                "coarse_label_id": COARSE_NONE_ID,
+                "fine_label_id": FINE_NONE_ID,
+                "syn_label_id": SYN_NONE_ID,
+                "role_label_id": ROLE_NONE_ID,
+                "role_coarse_label_id": ROLE_COARSE_NONE_ID,
+                "role_oblique_label_id": ROLE_OBLIQUE_NONE_ID,
+                "voice_label_id": VOICE_NONE_ID,
+                "certainty_label_id": CERTAINTY_NONE_ID,
+                "gender_label_id": GENDER_NONE_ID,
+                "number_label_id": NUMBER_NONE_ID,
+                "person_label_id": PERSON_NONE_ID,
+                "gov_verb_tok_start": -1,
+                "mod_of_tok_start": -1,
+                "verb_family_label_id": VERB_FAMILY_NONE_ID,
+                "verb_family_fine_label_id": VERB_FAMILY_FINE_NONE_ID,
+                "verb_polarity_label_id": VERB_POLARITY_NONE_ID,
+                "verb_aspect_label_id": VERB_ASPECT_NONE_ID,
+                "verb_source_label_id": VERB_SOURCE_NONE_ID,
+                "neg_type": "svo_hard_neg",
+                "sample_weight": 1.0,
+                "text": None,
+            })
+            kept += 1
+            if kept >= max_per_gold:
+                break
+
+    return out
+
+
 def generate_soft_negatives(offsets, gold_token_spans, gold_char_spans, num_soft=20, max_span_len=8, seed=13):
     """
     Soft negatives = spans aléatoires non-overlap.
@@ -560,7 +648,7 @@ def generate_multi_entity_negatives(gold_candidates, gold_char_spans, max_negati
     return out
 
 
-def make_multitask_row(row, tokenizer, hard_per_gold=6, soft_factor=2.0, max_span_len=8, seed=13):
+def make_multitask_row(row, tokenizer, hard_per_gold=6, soft_factor=2.0, max_span_len=8, seed=13, svo_hard_per_gold=4):
     text, input_ids, offsets, gold_candidates, gold_token_spans, gold_char_spans = build_gold_candidates(row, tokenizer)
 
     num_soft = max(1, int(len(gold_candidates) * soft_factor))
@@ -569,6 +657,13 @@ def make_multitask_row(row, tokenizer, hard_per_gold=6, soft_factor=2.0, max_spa
         gold_candidates,
         gold_char_spans,
         max_per_gold=hard_per_gold
+    )
+    # Hard negatives pour svo_boundary : variantes autour des spans syntaxiques
+    svo_hard_negs = generate_svo_hard_negatives(
+        offsets,
+        gold_candidates,
+        gold_char_spans,
+        max_per_gold=svo_hard_per_gold
     )
     soft_negs = generate_soft_negatives(
         offsets,
@@ -591,7 +686,7 @@ def make_multitask_row(row, tokenizer, hard_per_gold=6, soft_factor=2.0, max_spa
         max_negatives=5,
     )
 
-    candidates = gold_candidates + hard_negs + soft_negs + englobant_negs + multi_ent_negs
+    candidates = gold_candidates + hard_negs + svo_hard_negs + soft_negs + englobant_negs + multi_ent_negs
 
     # renseigner le texte du span si absent
     for c in candidates:
@@ -611,6 +706,7 @@ def make_multitask_row(row, tokenizer, hard_per_gold=6, soft_factor=2.0, max_spa
         "meta": {
             "num_gold": len(gold_candidates),
             "num_hard_neg": len(hard_negs),
+            "num_svo_hard_neg": len(svo_hard_negs),
             "num_soft_neg": len(soft_negs),
             "num_englobant_neg": len(englobant_negs),
             "num_multi_entity_neg": len(multi_ent_negs),
@@ -684,6 +780,7 @@ def main():
     parser.add_argument("--model-name", default="microsoft/deberta-v3-base")
     parser.add_argument("--tokenizer-path", default=None, help="si tu veux utiliser ton tokenizer local fast")
     parser.add_argument("--hard-per-gold", type=int, default=6)
+    parser.add_argument("--svo-hard-per-gold", type=int, default=4, help="nb hard negatives SVO par span syntaxique gold")
     parser.add_argument("--soft-factor", type=float, default=2.0, help="nb soft neg = soft_factor * nb gold")
     parser.add_argument("--max-span-len", type=int, default=8)
     parser.add_argument("--seed", type=int, default=13)
@@ -701,6 +798,7 @@ def main():
             row,
             tokenizer=tokenizer,
             hard_per_gold=args.hard_per_gold,
+            svo_hard_per_gold=args.svo_hard_per_gold,
             soft_factor=args.soft_factor,
             max_span_len=args.max_span_len,
             seed=args.seed
