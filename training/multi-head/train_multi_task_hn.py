@@ -87,12 +87,18 @@ def compute_hard_negative_boost(
     hn_conf_threshold: float = 0.8,
     hn_boost_factor: float = 3.0,
     hn_ramp: float = 1.0,  # 0→1 sur les epochs
+    # Nouveaux paramètres pour svo_boundary
+    svo_boundary_logits: torch.Tensor = None,
+    svo_boundary_labels: torch.Tensor = None,
+    hn_svo_conf_threshold: float = 0.8,
+    hn_svo_boost_factor: float = 3.0,
 ) -> tuple[torch.Tensor, dict]:
     """
     Identifie les hard negatives et booste leur sample_weight.
 
     Hard negative boundary : gold boundary=0, mais P(boundary=1) > threshold
     Hard negative coarse   : gold coarse=NONE, mais P(coarse!=NONE) > threshold
+    Hard negative svo_boundary : gold svo_boundary=0, mais P(svo_boundary=1) > threshold
 
     Args:
         boundary_logits: [N, 2]
@@ -100,9 +106,13 @@ def compute_hard_negative_boost(
         boundary_labels: [N]
         coarse_labels: [N]
         sample_weights: [N]
-        hn_conf_threshold: seuil de confiance pour considérer un hard negative
-        hn_boost_factor: facteur multiplicatif max sur le sample_weight
+        hn_conf_threshold: seuil de confiance pour considérer un hard negative (NER)
+        hn_boost_factor: facteur multiplicatif max sur le sample_weight (NER)
         hn_ramp: facteur de progression (0=pas de boost, 1=boost complet)
+        svo_boundary_logits: [N, 2] - logits pour la tête svo_boundary
+        svo_boundary_labels: [N] - labels pour svo_boundary
+        hn_svo_conf_threshold: seuil de confiance pour svo_boundary
+        hn_svo_boost_factor: facteur multiplicatif max pour svo_boundary
 
     Returns:
         boosted_weights: [N]
@@ -131,11 +141,22 @@ def compute_hard_negative_boost(
     conf_non_none = c_probs_no_none.max(dim=-1).values
     hn_coarse_mask = is_gold_none & (conf_non_none > hn_conf_threshold)
 
-    # Union des deux
+    # ── Hard negative svo_boundary ──
+    hn_svo_mask = None
+    if svo_boundary_logits is not None and svo_boundary_labels is not None:
+        svo_probs = F.softmax(svo_boundary_logits, dim=-1)  # [N, 2]
+        svo_conf_pos = svo_probs[:, 1]  # P(svo_boundary=1)
+        is_svo_gold_neg = (svo_boundary_labels == 0)
+        hn_svo_mask = is_svo_gold_neg & (svo_conf_pos > hn_svo_conf_threshold)
+
+    # Union des masques
     hn_mask = hn_boundary_mask | hn_coarse_mask
+    if hn_svo_mask is not None:
+        hn_mask = hn_mask | hn_svo_mask
 
     # Calculer le boost effectif (progressif)
     effective_boost = 1.0 + (hn_boost_factor - 1.0) * hn_ramp
+    effective_svo_boost = 1.0 + (hn_svo_boost_factor - 1.0) * hn_ramp
 
     # Appliquer le boost proportionnel à la confiance
     if hn_mask.any():
@@ -150,13 +171,22 @@ def compute_hard_negative_boost(
             conf_non_none,
             torch.zeros_like(conf_non_none),
         ))
-        # Normaliser entre [1, effective_boost]
+        # Ajouter la confiance svo_boundary
+        if hn_svo_mask is not None:
+            max_conf = torch.max(max_conf, torch.where(
+                hn_svo_mask,
+                svo_conf_pos,
+                torch.zeros_like(svo_conf_pos),
+            ))
+        # Normaliser entre [1, effective_boost] ou [1, effective_svo_boost] selon le type
+        # Pour simplifier, on utilise effective_boost pour tout
         boost = 1.0 + (effective_boost - 1.0) * max_conf
         boosted[hn_mask] = boosted[hn_mask] * boost[hn_mask]
 
     stats = {
         "hn_boundary_count": int(hn_boundary_mask.sum().item()),
         "hn_coarse_count": int(hn_coarse_mask.sum().item()),
+        "hn_svo_boundary_count": int(hn_svo_mask.sum().item()) if hn_svo_mask is not None else 0,
         "hn_total": int(hn_mask.sum().item()),
         "hn_mean_boost": float(boosted[hn_mask].mean().item()) if hn_mask.any() else 0.0,
         "hn_ramp": hn_ramp,
@@ -259,6 +289,11 @@ def run_epoch(
                     hn_conf_threshold=hn_conf_threshold,
                     hn_boost_factor=hn_boost_factor,
                     hn_ramp=hn_ramp,
+                    # Paramètres pour svo_boundary
+                    svo_boundary_logits=outputs.get("svo_boundary_logits"),
+                    svo_boundary_labels=svo_labels_loss,
+                    hn_svo_conf_threshold=hn_conf_threshold,  # même seuil par défaut
+                    hn_svo_boost_factor=hn_boost_factor,     # même boost par défaut
                 )
                 for k, v in hn_stats.items():
                     if k == "hn_ramp":
