@@ -43,11 +43,13 @@ FINE_LABELS = [
     # ▼ v7.0 : hint_rule, hint_process, hint_concept supprimés (→ hint_notion/hint_event_nominal)
     #          hint_concept éclaté en 4 sous-types sans fallback
     # ▼ v8.0 : hint_quantity supprimé (→ hint_measure comme fallback)
-    "hint_doctrine",         # 33  doctrine, idéologie, courant de pensée, théorie (nommée ou non)
-    "hint_state",            # 34  état, condition, situation abstraite (pauvreté, crise, guerre, paix…)
-    "hint_notion",           # 35  notion, concept abstrait pur, valeur, principe, règle/norme générique
-    "hint_work_generic",     # 36  production culturelle générique sans titre (film, livre, presse, médias…)
-    "hint_field",            # 37  domaine / secteur d'activité (santé, éducation, agriculture, finance…)
+    "hint_animal",           # 33  animal (vivant non-humain)
+    "hint_vegetal",          # 34  végétal (plante, arbre, fleur, etc.)
+    "hint_doctrine",         # 35  doctrine, idéologie, courant de pensée, théorie (nommée ou non)
+    "hint_state",            # 36  état, condition, situation abstraite (pauvreté, crise, guerre, paix…)
+    "hint_notion",           # 37  notion, concept abstrait pur, valeur, principe, règle/norme générique
+    "hint_work_generic",     # 38  production culturelle générique sans titre (film, livre, presse, médias…)
+    "hint_field",            # 39  domaine / secteur d'activité (santé, éducation, agriculture, finance…)
 ]
 
 FINE2ID = {x: i for i, x in enumerate(FINE_LABELS)}
@@ -86,7 +88,7 @@ FINE_CONCRETE_LABELS = [
 FINE_ABSTRACT_LABELS = [
     "hint_person_role",    # rôle (fonctionnel, non-nom propre)
     "hint_norp",           # nationalité / religion / politique
-    "hint_group_role",     # groupe générique (l'opposition, les civils…)
+    "hint_group_role",     # groupe générique (l opposition, les civils…)
     "hint_loc_generic",    # lieu générique (non nommé)
     "hint_infra",          # infrastructure générique
     "hint_weapon",         # arme générique
@@ -124,7 +126,8 @@ COARSE_LABELS = [
     "VALUE",    # 6
     "WORK",     # 7  ← nouveau : productions intellectuelles/culturelles (oeuvre, loi)
     "ABSTRACT", # 8
-    "NONE",     # 9
+    "BIO",      # 9  ← nouveau : vivant (animaux, végétaux, maladies)
+    "NONE",     # 10
 ]
 
 COARSE2ID = {x: i for i, x in enumerate(COARSE_LABELS)}
@@ -162,6 +165,7 @@ COARSE_TO_FINE = {
     COARSE2ID["EVENT"]: [
         FINE2ID["hint_event_nominal"],
         FINE2ID["hint_event_named"],
+        FINE2ID["hint_state"],
     ],
     COARSE2ID["OBJECT"]: [
         FINE2ID["hint_weapon"],
@@ -185,12 +189,15 @@ COARSE_TO_FINE = {
         FINE2ID["hint_document"],       # rapport, lettre, communiqué, données, contrat…
         FINE2ID["hint_work_generic"],   # v6.9 : production culturelle générique sans titre (film, presse, cinéma…)
     ],
-    COARSE2ID["ABSTRACT"]: [
+    COARSE2ID["BIO"]: [
         FINE2ID["hint_disease"],
+        FINE2ID["hint_animal"],
+        FINE2ID["hint_vegetal"],
+    ],
+    COARSE2ID["ABSTRACT"]: [
         FINE2ID["hint_language"],
         # v7.0 : hint_rule, hint_process, hint_concept supprimés → hint_notion/hint_event_nominal
         FINE2ID["hint_doctrine"],
-        FINE2ID["hint_state"],
         FINE2ID["hint_notion"],
         FINE2ID["hint_field"],
     ],
@@ -560,4 +567,28 @@ VERB_SOURCE2ID      = {x: i for i, x in enumerate(VERB_SOURCE_LABELS)}
 ID2VERB_SOURCE      = {i: x for x, i in VERB_SOURCE2ID.items()}
 NUM_VERB_SOURCE     = len(VERB_SOURCE_LABELS)
 VERB_SOURCE_NONE_ID = NUM_VERB_SOURCE   # sentinel = 3
+
+
+# ─────────────────────────────────────────────────────────────
+# NOMINAL RELATION LABELS  (relation nominale parent→enfant)
+# Prédit sur chaque span nominal enfant (NER boundary=1)
+# quand un parent nominal est annoté dans la phrase.
+# ─────────────────────────────────────────────────────────────
+
+NOMINAL_RELATION_LABELS = [
+    "APPOS",     # 0  apposition rôle/titre + nom propre : "PDG Bernard Arnault"
+    "NMOD",      # 1  complément du nom : "action du groupe LVMH"
+    "POSS",      # 2  possessif : "son PDG", "sa filiale"
+    "AMOD",      # 3  adjectif qualificatif : "fondations solides"
+    "COMPOUND",  # 4  nom propre multi-tokens / flat : "Union européenne"
+    "SOURCE",    # 5  complément source d'EVENT_NOMINAL Communication : "déclarations du PDG"
+    "MEDIUM",    # 6  support de publication : "dans le journal Les Échos"
+    "LOC",       # 7  complément nominal locatif
+    "TIME",      # 8  complément nominal temporel
+    "MISC",      # 9  fallback conservateur
+]
+NOMINAL_RELATION2ID      = {x: i for i, x in enumerate(NOMINAL_RELATION_LABELS)}
+ID2NOMINAL_RELATION      = {i: x for x, i in NOMINAL_RELATION2ID.items()}
+NUM_NOMINAL_RELATION     = len(NOMINAL_RELATION_LABELS)   # = 10
+NOMINAL_RELATION_NONE_ID = NUM_NOMINAL_RELATION           # = 10 (sentinel NO_PARENT / non-supervisé)
 

@@ -10,7 +10,8 @@ from torch.utils.data import Dataset
 from labels import (SVO_NONE_ID, SYN_NONE_ID, ROLE_NONE_ID, ROLE2ID, VOICE_NONE_ID, CERTAINTY_NONE_ID,
                     GENDER_NONE_ID, NUMBER_NONE_ID, PERSON_NONE_ID, ROLE_COARSE_NONE_ID, ROLE_OBLIQUE_NONE_ID,
                     VERB_FAMILY_NONE_ID, VERB_FAMILY_FINE_NONE_ID, VERB_POLARITY_NONE_ID,
-                    VERB_ASPECT_NONE_ID, VERB_SOURCE_NONE_ID)
+                    VERB_ASPECT_NONE_ID, VERB_SOURCE_NONE_ID,
+                    NOMINAL_RELATION_NONE_ID)
 
 
 class MultiTaskSpanDataset(Dataset):
@@ -25,7 +26,7 @@ class MultiTaskSpanDataset(Dataset):
         # Pré-tokenisation vectorisée en __init__ — évite la tokenisation répétée à chaque __getitem__
         # Sur 31k phrases courtes (NER), batch_encode_plus est ~50x plus rapide que appels séquentiels.
         # Élimine le bottleneck CPU/DataLoader qui plafonnait le GPU à ~17% VRAM utilisée.
-        print(f"📦 Pré-tokenisation de {len(self.rows)} phrases...", flush=True)
+        print(f" Pré-tokenisation de {len(self.rows)} phrases...", flush=True)
         texts = [row["text"] for row in self.rows]
         encodings = tokenizer(
             texts,
@@ -100,6 +101,10 @@ class MultiTaskSpanDataset(Dataset):
                                          if c.get("gov_verb_tok_start", -1) >= 0 else -1,
                 "mod_of_tok_start":      min(c["mod_of_tok_start"] + 1, self.max_length - 1)
                                          if c.get("mod_of_tok_start", -1) >= 0 else -1,
+                # Nominal parent pointer (v8.22) — +1 décalage CLS ; -1 = NO_PARENT
+                "nominal_parent_tok_start": min(c["nominal_parent_tok_start"] + 1, self.max_length - 1)
+                                            if c.get("nominal_parent_tok_start", -1) >= 0 else -1,
+                "nominal_relation_label_id": c.get("nominal_relation_label_id", NOMINAL_RELATION_NONE_ID),
                 # verbfam labels (verb_trigger uniquement ; NONE_ID pour les autres spans)
                 "verb_family_label_id":      c.get("verb_family_label_id", VERB_FAMILY_NONE_ID),
                 "verb_family_fine_label_id": c.get("verb_family_fine_label_id", VERB_FAMILY_FINE_NONE_ID),
@@ -120,11 +125,7 @@ class MultiTaskSpanDataset(Dataset):
 
 
 class CollateFn:
-    """Callable picklable (compatible multiprocessing DataLoader num_workers>0).
-
-    Une closure locale ne peut pas être picklée par le spawn de workers.
-    Une classe de niveau module, elle, l'est.
-    """
+    """Callable picklable (compatible multiprocessing DataLoader num_workers>0)."""
 
     def __init__(self, pad_id: int):
         self.pad_id = pad_id
@@ -151,6 +152,8 @@ class CollateFn:
         number_labels = []
         person_labels = []
         gov_verb_labels = []
+        nominal_parent_labels    = []
+        nominal_relation_labels  = []
         verb_family_labels      = []
         verb_family_fine_labels = []
         verb_polarity_labels    = []
@@ -202,6 +205,8 @@ class CollateFn:
                 number_labels.append(c.get("number_label_id", NUMBER_NONE_ID))
                 person_labels.append(c.get("person_label_id", PERSON_NONE_ID))
                 gov_verb_labels.append(c.get("gov_verb_tok_start", -1))
+                nominal_parent_labels.append(c.get("nominal_parent_tok_start", -1))
+                nominal_relation_labels.append(c.get("nominal_relation_label_id", NOMINAL_RELATION_NONE_ID))
                 verb_family_labels.append(c.get("verb_family_label_id", VERB_FAMILY_NONE_ID))
                 verb_family_fine_labels.append(c.get("verb_family_fine_label_id", VERB_FAMILY_FINE_NONE_ID))
                 verb_polarity_labels.append(c.get("verb_polarity_label_id", VERB_POLARITY_NONE_ID))
@@ -230,6 +235,8 @@ class CollateFn:
             "number_labels":        torch.tensor(number_labels,       dtype=torch.long),
             "person_labels":        torch.tensor(person_labels,       dtype=torch.long),
             "gov_verb_labels":      torch.tensor(gov_verb_labels,     dtype=torch.long),
+            "nominal_parent_labels":   torch.tensor(nominal_parent_labels,   dtype=torch.long),
+            "nominal_relation_labels": torch.tensor(nominal_relation_labels, dtype=torch.long),
             "verb_family_labels":      torch.tensor(verb_family_labels,      dtype=torch.long),
             "verb_family_fine_labels": torch.tensor(verb_family_fine_labels, dtype=torch.long),
             "verb_polarity_labels":    torch.tensor(verb_polarity_labels,    dtype=torch.long),

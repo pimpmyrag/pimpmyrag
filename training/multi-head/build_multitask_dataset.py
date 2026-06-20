@@ -30,6 +30,8 @@ from labels import (
     VERB_POLARITY2ID, VERB_POLARITY_NONE_ID,
     VERB_ASPECT2ID, VERB_ASPECT_NONE_ID,
     VERB_SOURCE2ID, VERB_SOURCE_NONE_ID,
+    # Nominal parent pointer (v8.22)
+    NOMINAL_RELATION2ID, NOMINAL_RELATION_NONE_ID,
     # compat aliases
     SVO2ID, SVO_NONE_ID, ALL_SVO_LABELS,
 )
@@ -76,6 +78,7 @@ _VFINE_CANON_MAP = _build_canon_map(VERB_FAMILY_FINE2ID)
 _VPOL_CANON_MAP = _build_canon_map(VERB_POLARITY2ID)
 _VASP_CANON_MAP = _build_canon_map(VERB_ASPECT2ID)
 _VSRC_CANON_MAP = _build_canon_map(VERB_SOURCE2ID)
+_NOMINAL_RELATION_CANON_MAP = _build_canon_map(NOMINAL_RELATION2ID)
 
 
 def _parse_verb_labels(sp: dict) -> tuple[int, int, int, int, int]:
@@ -197,6 +200,10 @@ def build_gold_candidates(row, tokenizer):
             person_raw = sp.get("person")
             person_id = PERSON2ID.get(str(person_raw) if person_raw is not None else "", PERSON_NONE_ID)
 
+            # Nominal parent pointer — syn spans n'ont pas de parent nominal
+            syn_nominal_parent_tok_start = -1
+            syn_nominal_relation_label_id = NOMINAL_RELATION_NONE_ID
+
             cand = {
                 "char_start":          start,
                 "char_end":            end,
@@ -223,6 +230,9 @@ def build_gold_candidates(row, tokenizer):
                 "verb_polarity_label_id":    vpol_id,
                 "verb_aspect_label_id":      vasp_id,
                 "verb_source_label_id":      vsrc_id,
+                # Nominal parent pointer (v8.22) — non supervisé pour les spans syntaxiques
+                "nominal_parent_tok_start":  syn_nominal_parent_tok_start,
+                "nominal_relation_label_id": syn_nominal_relation_label_id,
                 "neg_type":            "syn_gold",
                 "sample_weight":       1.0,
                 "text":                sp.get("text", text[start:end]),
@@ -278,6 +288,25 @@ def build_gold_candidates(row, tokenizer):
             if m_tok is not None:
                 mod_of_tok_start = m_tok[0]
 
+        # ── Nominal parent pointer (v8.22) ────────────────────────────────
+        # nominal_parent_start : char offset du span parent nominal annoté
+        # nominal_relation     : relation APPOS/NMOD/POSS/AMOD/COMPOUND/SOURCE/MEDIUM/LOC/TIME/MISC
+        # -1 = NO_PARENT (racine ou non supervisé)
+        nominal_parent_tok_start = -1
+        nps = sp.get("nominal_parent_start")
+        if nps is not None:
+            np_tok = char_span_to_token_span(offsets, nps, nps + 1)
+            if np_tok is not None:
+                nominal_parent_tok_start = np_tok[0]
+
+        nominal_relation_str = sp.get("nominal_relation", "")
+        nominal_relation_label_id = NOMINAL_RELATION2ID.get(
+            nominal_relation_str, NOMINAL_RELATION_NONE_ID
+        )
+        # Si pas de parent annoté → sentinel (non supervisé pour le pointer)
+        if nominal_parent_tok_start < 0:
+            nominal_relation_label_id = NOMINAL_RELATION_NONE_ID
+
         cand = {
             "char_start":          start,
             "char_end":            end,
@@ -298,6 +327,9 @@ def build_gold_candidates(row, tokenizer):
             "person_label_id":     PERSON_NONE_ID,
             "gov_verb_tok_start":  gov_verb_tok_start,
             "mod_of_tok_start":    mod_of_tok_start,
+            # Nominal parent pointer (v8.22)
+            "nominal_parent_tok_start":  nominal_parent_tok_start,
+            "nominal_relation_label_id": nominal_relation_label_id,
             # VerbFam : toujours NONE pour les spans NER (ce sont des entités, pas des verbes)
             "verb_family_label_id":      VERB_FAMILY_NONE_ID,
             "verb_family_fine_label_id": VERB_FAMILY_FINE_NONE_ID,
@@ -367,6 +399,9 @@ def _make_negative(neg_type: str, char_start: int, char_end: int,
         "person_label_id":     PERSON_NONE_ID,
         "gov_verb_tok_start":  -1,
         "mod_of_tok_start":    -1,
+        # Nominal parent pointer (v8.22) — sentinel pour les négatifs
+        "nominal_parent_tok_start":  -1,
+        "nominal_relation_label_id": NOMINAL_RELATION_NONE_ID,
         # VerbFam : NONE pour les spans négatifs
         "verb_family_label_id":      VERB_FAMILY_NONE_ID,
         "verb_family_fine_label_id": VERB_FAMILY_FINE_NONE_ID,
