@@ -101,3 +101,6 @@
 /train_v8.21_verbfam.jsonl
 /val_v8.21_verbfam.jsonl
 /test_v8.21_verbfam.jsonl
+/train_v8.21_verbfam_bio.jsonl
+/val_v8.21_verbfam_bio.jsonl
+/test_v8.21_verbfam_bio.jsonl
