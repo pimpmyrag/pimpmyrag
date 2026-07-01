@@ -1,0 +1,5 @@
+outs:
+- md5: 03197a11945b3cea97cd857c4a2f8358
+  size: 5629439
+  hash: md5
+  path: test_v8.22_semrole.jsonl

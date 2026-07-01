@@ -104,3 +104,6 @@
 /train_v8.21_verbfam_bio.jsonl
 /val_v8.21_verbfam_bio.jsonl
 /test_v8.21_verbfam_bio.jsonl
+/train_v8.22_semrole.jsonl
+/val_v8.22_semrole.jsonl
+/test_v8.22_semrole.jsonl
