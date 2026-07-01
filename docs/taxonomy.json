@@ -2,24 +2,6 @@
   "$schema": "./taxonomy.schema.json",
   "generated_on": "2026-06-03",
   "morphology": {
-    "certainty": {
-      "count": 3,
-      "labels": [
-        {
-          "id": 0,
-          "label": "certain"
-        },
-        {
-          "id": 1,
-          "label": "modal"
-        },
-        {
-          "id": 2,
-          "label": "denied"
-        }
-      ],
-      "none_id": 3
-    },
     "gender": {
       "count": 2,
       "labels": [
@@ -65,20 +47,6 @@
         }
       ],
       "none_id": 3
-    },
-    "voice": {
-      "count": 2,
-      "labels": [
-        {
-          "id": 0,
-          "label": "active"
-        },
-        {
-          "id": 1,
-          "label": "passive"
-        }
-      ],
-      "none_id": 2
     }
   },
   "ner": {
@@ -396,177 +364,104 @@
   ],
   "source": "training/multi-head/labels.py",
   "syntax": {
+    "syntactic_role": {
+      "labels": ["SUBJECT","OBJECT","OBLIQUE","NONE"]
+    },
+    "nominal_relation": {
+      "labels": ["NMOD","AMOD","APPOS","COMPOUND"]
+    }
+  },
+
+  "semantic": {
     "role": {
-      "count": 12,
       "labels": [
-        {
-          "id": 0,
-          "label": "SUBJECT"
-        },
-        {
-          "id": 1,
-          "label": "OBJECT"
-        },
-        {
-          "id": 2,
-          "label": "OBLIQUE"
-        },
-        {
-          "id": 3,
-          "label": "OBLIQUE_AGENT"
-        },
-        {
-          "id": 4,
-          "label": "OBLIQUE_CAUSE"
-        },
-        {
-          "id": 5,
-          "label": "APPOS"
-        },
-        {
-          "id": 6,
-          "label": "NONE"
-        },
-        {
-          "id": 7,
-          "label": "OBLIQUE_ADVERSARY"
-        },
-        {
-          "id": 8,
-          "label": "OBLIQUE_BENEFICIARY"
-        },
-        {
-          "id": 9,
-          "label": "OBLIQUE_COMITATIVE"
-        },
-        {
-          "id": 10,
-          "label": "OBLIQUE_DOMAIN"
-        },
-        {
-          "id": 11,
-          "label": "OBLIQUE_SOURCE"
-        }
-      ],
-      "none_id": 6
-    },
-    "role_coarse": {
-      "count": 5,
+        "AGENT","PATIENT","CONTENT","SOURCE","LOCATION","TEMPORAL",
+        "CAUSE","PURPOSE","MEASURE",
+        "BENEFICIARY","COMITATIVE","ADVERSARY",
+        "DOMAIN","INSTRUMENT",
+        "PART_OF","MEMBER_OF","OWNER","IDENTITY",
+        "NONE","OBLIQUE_UNRESOLVED"
+      ]
+    }
+  },
+
+  "modifiers": {
+    "type": {
       "labels": [
-        {
-          "id": 0,
-          "label": "SUBJ"
-        },
-        {
-          "id": 1,
-          "label": "OBJ"
-        },
-        {
-          "id": 2,
-          "label": "OBLIQ"
-        },
-        {
-          "id": 3,
-          "label": "APPOS"
-        },
-        {
-          "id": 4,
-          "label": "OTHER"
-        }
-      ],
-      "none_id": 5,
-      "other_id": 4
-    },
-    "role_fine_to_coarse": {
-      "APPOS": "APPOS",
-      "NONE": "OTHER",
-      "OBJECT": "OBJ",
-      "OBLIQUE": "OBLIQ",
-      "OBLIQUE_ADVERSARY": "OBLIQ",
-      "OBLIQUE_AGENT": "OBLIQ",
-      "OBLIQUE_BENEFICIARY": "OBLIQ",
-      "OBLIQUE_CAUSE": "OBLIQ",
-      "OBLIQUE_COMITATIVE": "OBLIQ",
-      "OBLIQUE_DOMAIN": "OBLIQ",
-      "OBLIQUE_SOURCE": "OBLIQ",
-      "SUBJECT": "SUBJ"
-    },
-    "role_oblique": {
-      "count": 10,
+        "MOD_MODALITY",
+        "MOD_SOURCE",
+        "MOD_MANNER",
+        "MOD_INTENSITY",
+        "MOD_TEMPORAL"
+      ]
+    }
+  },
+
+  "discourse": {
+    "connector": {
       "labels": [
-        {
-          "id": 0,
-          "label": "OBLIQUE"
-        },
-        {
-          "id": 1,
-          "label": "OBLIQUE_AGENT"
-        },
-        {
-          "id": 2,
-          "label": "OBLIQUE_CAUSE"
-        },
-        {
-          "id": 3,
-          "label": "OBLIQUE_ADVERSARY"
-        },
-        {
-          "id": 4,
-          "label": "OBLIQUE_BENEFICIARY"
-        },
-        {
-          "id": 5,
-          "label": "OBLIQUE_COMITATIVE"
-        },
-        {
-          "id": 6,
-          "label": "OBLIQUE_DOMAIN"
-        },
-        {
-          "id": 7,
-          "label": "OBLIQUE_SOURCE"
-        },
-        {
-          "id": 8,
-          "label": "OBLIQUE_TIME"
-        },
-        {
-          "id": 9,
-          "label": "OBLIQUE_LOC"
-        }
-      ],
-      "none_id": 10
+        "RESULT","CONTRAST","ADDITION",
+        "CAUSE","CONDITION","TEMPORAL"
+      ]
     },
-    "role_to_oblique": {
-      "OBLIQUE": "OBLIQUE",
-      "OBLIQUE_ADVERSARY": "OBLIQUE_ADVERSARY",
-      "OBLIQUE_AGENT": "OBLIQUE_AGENT",
-      "OBLIQUE_BENEFICIARY": "OBLIQUE_BENEFICIARY",
-      "OBLIQUE_CAUSE": "OBLIQUE_CAUSE",
-      "OBLIQUE_COMITATIVE": "OBLIQUE_COMITATIVE",
-      "OBLIQUE_DOMAIN": "OBLIQUE_DOMAIN",
-      "OBLIQUE_SOURCE": "OBLIQUE_SOURCE"
-    },
-    "span_labels": {
+    "sentence_role": {
+      "labels": [
+        "NEW_EVENT","CONTINUE_EVENT","DETAIL","BACKGROUND","SHIFT"
+      ]
+    }
+  },
+
+  "span_labels": {
+    "count": 3,
+    "labels": [
+      {
+        "id": 0,
+        "label": "verb_trigger"
+      },
+      {
+        "id": 1,
+        "label": "pron_subj"
+      },
+      {
+        "id": 2,
+        "label": "pron_obj"
+      }
+    ],
+    "none_id": 3
+  },
+  "verb": {
+    "certainty": {
       "count": 3,
       "labels": [
         {
           "id": 0,
-          "label": "verb_trigger"
+          "label": "certain"
         },
         {
           "id": 1,
-          "label": "pron_subj"
+          "label": "modal"
         },
         {
           "id": 2,
-          "label": "pron_obj"
+          "label": "denied"
         }
       ],
       "none_id": 3
-    }
-  },
-  "verb": {
+    },
+    "voice": {
+      "count": 2,
+      "labels": [
+        {
+          "id": 0,
+          "label": "active"
+        },
+        {
+          "id": 1,
+          "label": "passive"
+        }
+      ],
+      "none_id": 2
+    },
     "aspect": {
       "count": 2,
       "labels": [

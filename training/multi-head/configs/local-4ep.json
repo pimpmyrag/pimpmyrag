@@ -24,7 +24,7 @@
     "svo": 0.7,
     "role": 0.7,
     "role_coarse": 0.0,
-    "role_oblique": 0.0,
+    "semantic_role": 0.0,
     "voice": 0.15,
     "certainty": 0.3,
     "morpho": 0.1,

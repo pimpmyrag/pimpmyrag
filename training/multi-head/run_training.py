@@ -18,7 +18,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 
@@ -34,51 +33,11 @@ def load_config(path: str) -> dict:
     return json.loads(raw)
 
 
-def patch_epoch_metrics_jsonl(path: str, epoch: int, patch: dict) -> None:
-    """Fusionne des champs additionnels dans le record JSONL type=epoch sans dupliquer la ligne."""
-    metrics_path = Path(path)
-    if not metrics_path.exists():
-        return
-    lines = []
-    patched = False
-    for line in metrics_path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            lines.append(line)
-            continue
-        if record.get("type", "epoch") == "epoch" and record.get("epoch") == epoch:
-            for key, value in patch.items():
-                if isinstance(value, dict) and isinstance(record.get(key), dict):
-                    record[key].update(value)
-                else:
-                    record[key] = value
-            patched = True
-        lines.append(json.dumps(record, ensure_ascii=False, sort_keys=True))
-    if patched:
-        metrics_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 # ─────────────────────────────────────────────────────
 #  Détection hardware
 # ─────────────────────────────────────────────────────
 
 def detect_hw(cfg: dict) -> dict:
-    def _env_int(name: str):
-        value = os.environ.get(name)
-        if value in (None, ""):
-            return None
-        try:
-            parsed = int(value)
-            if parsed < 0:
-                raise ValueError
-            return parsed
-        except ValueError:
-            print(f"⚠️  {name}={value!r} invalide — override ignoré")
-            return None
-
     hw_cfg = cfg["hardware"]
     try:
         import torch
@@ -86,11 +45,11 @@ def detect_hw(cfg: dict) -> dict:
             raise RuntimeError("no cuda")
         vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
         gpu_name = torch.cuda.get_device_name(0)
-        print(f"🖥️  GPU : {gpu_name} ({vram_gb:.1f} GB VRAM)")
+        print(f"️  GPU : {gpu_name} ({vram_gb:.1f} GB VRAM)")
 
         if vram_gb >= 70:
             hw = {"device": "cuda", "gpu_name": gpu_name, **hw_cfg["h100_80gb"]}
-            print(f"🔥 H100/A100-80GB détecté → BS={hw['bs']}, workers={hw['workers']}")
+            print(f" H100/A100-80GB détecté → BS={hw['bs']}, workers={hw['workers']}")
         elif vram_gb >= 45:
             hw = {"device": "cuda", "gpu_name": gpu_name, **hw_cfg["l40s_48gb"]}
             print(f"⚡ L40S/A6000-48GB détecté → BS={hw['bs']}, workers={hw['workers']}")
@@ -99,7 +58,7 @@ def detect_hw(cfg: dict) -> dict:
             print(f"⚡ A100-40GB détecté → BS={hw['bs']}")
         elif vram_gb >= 20:
             hw = {"device": "cuda", "gpu_name": gpu_name, **hw_cfg["rtx_4090"]}
-            print(f"💪 RTX 4090/3090 détecté → BS={hw['bs']}, accum={hw['accum']}")
+            print(f" RTX 4090/3090 détecté → BS={hw['bs']}, accum={hw['accum']}")
         else:
             hw = {"device": "cuda", "gpu_name": gpu_name, **hw_cfg["default"]}
             print(f"❓ GPU inconnu {vram_gb:.1f}GB → config default BS={hw['bs']}")
@@ -130,7 +89,7 @@ def detect_hw(cfg: dict) -> dict:
                 except Exception:
                     cache_path.unlink(missing_ok=True)
                     force_recompute = True
-            print(f"🔍 Auto-tuning batch size (BS statique={bs_static}, AUTO_BS=1)...")
+            print(f" Auto-tuning batch size (BS statique={bs_static}, AUTO_BS=1)...")
             find_bs_cmd = [
                 sys.executable, "find_optimal_bs.py",
                 "--bs-min",   str(bs_static),           # jamais descendre sous la valeur statique
@@ -174,20 +133,12 @@ def detect_hw(cfg: dict) -> dict:
             import torch
             if torch.backends.mps.is_available():
                 hw = {"device": "mps", "gpu_name": "MPS", "bs": 24, "accum": 2, "workers": 0}
-                print("🍎 Device MPS")
+                print(" Device MPS")
             else:
                 raise RuntimeError
         except Exception:
             hw = {"device": "cpu", "gpu_name": "CPU", "bs": 16, "accum": 2, "workers": 0}
-            print("💻 Device CPU")
-
-    for env_name, hw_key in [("RUN_BS", "bs"), ("RUN_ACCUM", "accum"), ("RUN_WORKERS", "workers")]:
-        override = _env_int(env_name)
-        if override is not None:
-            old = hw.get(hw_key)
-            hw[hw_key] = override
-            print(f"🛠️  Override {env_name}: {hw_key} {old} → {override}")
-    print(f"📐 Profil effectif: device={hw['device']} gpu={hw['gpu_name']} bs={hw['bs']} accum={hw['accum']} workers={hw['workers']}")
+            print(" Device CPU")
     return hw
 
 
@@ -203,7 +154,7 @@ def detect_hw(cfg: dict) -> dict:
 #                   → découplé de svo_bnd pour éviter le collapse 7-epoch
 #   PHASE 2  (svo_bnd_f1 > seuil) : voice + verb_ptr + certainty rampent
 #   PHASE 3 (ner_bnd_f1 > seuil) : NER coarse + fine rampent (boundary-first)
-#   PHASE 4 (role_coarse_f1 > seuil) : role_oblique + morpho rampent
+#   PHASE 4 (role_coarse_f1 > seuil) : semantic_role + morpho rampent
 #
 # Pourquoi role_coarse a son propre trigger ner_bnd ?
 # role_coarse utilise des labels GOLD → peut apprendre dès ep1.
@@ -223,7 +174,7 @@ def compute_lambdas(cfg: dict, state: dict) -> dict:
             "coarse":       L["coarse"],
             "fine":         L["fine"],
             "svo_boundary": 0.0, "svo": 0.0,
-            "role_coarse":  0.0, "role_oblique": 0.0,
+            "role_coarse":  0.0, "semantic_role": 0.0,
             "voice": 0.0, "certainty": 0.0, "morpho": 0.0,
             "verb_ptr": 0.0, "compat": 0.0,
             "verb_family": 0.0, "verb_family_fine": 0.0,
@@ -284,7 +235,7 @@ def compute_lambdas(cfg: dict, state: dict) -> dict:
     else:
         phase4_prog = 0.0
 
-    l_role_oblique = round(L["role_oblique"] * phase4_prog, 4)
+    l_semantic_role = round(L["semantic_role"] * phase4_prog, 4)
     l_morpho       = round(L["morpho"]       * phase4_prog, 4)
 
     return {
@@ -294,7 +245,7 @@ def compute_lambdas(cfg: dict, state: dict) -> dict:
         "svo_boundary": l_svo_boundary,
         "svo":          l_svo,
         "role_coarse":  l_role_coarse,
-        "role_oblique": l_role_oblique,
+        "semantic_role": l_semantic_role,
         "role":         round(L.get("role", 0.0), 4),
         "voice":        l_voice,
         "certainty":    l_certainty,
@@ -369,7 +320,7 @@ def run_epoch(cfg: dict, hw: dict, state: dict, lambdas: dict,
         "--lambda-svo-boundary",  str(lambdas["svo_boundary"]),
         "--lambda-svo",           str(lambdas["svo"]),
         "--lambda-role-coarse",   str(lambdas["role_coarse"]),
-        "--lambda-role-oblique",  str(lambdas["role_oblique"]),
+        "--lambda-semantic-role",  str(lambdas["semantic_role"]),
         "--lambda-role",          str(lambdas.get("role", 0.0)),
         "--lambda-voice",         str(lambdas["voice"]),
         "--lambda-certainty",     str(lambdas["certainty"]),
@@ -397,21 +348,12 @@ def run_epoch(cfg: dict, hw: dict, state: dict, lambdas: dict,
         "--hn-boost-fn-svo", "0.0" if in_warmup or state.get("ner_only_bench") else str(hn["boost_fn_svo"]),
         "--hn-boost-role-coarse", str(hn["boost_role_coarse"]),
         "--loss-weighting", run_cfg.get("loss_weighting", "fixed"),
+        "--ignore-coarse-none",
         "--amp",
         "--wandb-run-name",  state["wandb_run_name"],
         "--wandb-tags",      state["wandb_tags"],
         "--wandb-id-file",   "wandb_run_id.txt",
-        "--metrics-jsonl",      state["metrics_jsonl"],
-        "--metrics-latest-json", state["metrics_latest_json"],
-        "--skip-test-eval",
     ]
-    if run_cfg.get("ignore_coarse_none", True):
-        cmd.append("--ignore-coarse-none")
-    if run_cfg.get("detach_ner_classifier_backbone", False):
-        cmd.append("--detach-ner-classifier-backbone")
-    if run_cfg.get("boundary_aux_from_ner", False):
-        cmd.append("--boundary-aux-from-ner")
-        cmd += ["--boundary-aux-scale", str(run_cfg.get("boundary_aux_scale", 1.0))]
     if state.get("ner_only_bench"):
         cmd.append("--ner-only-score")
     if state.get("resume_arg"):
@@ -422,16 +364,15 @@ def run_epoch(cfg: dict, hw: dict, state: dict, lambdas: dict,
     print(f"  Epoch {epoch}/{run_cfg['max_epochs']}  |  Niveau {state.get('level_name','?')} "
           f"(stagnation={state.get('stagnation',0)}/{cfg['early_stopping']['patience']})")
     print(f"{'═'*50}")
-    print(f"🎛️  Lambdas : bnd={lambdas['boundary']}  crs={lambdas['coarse']}  fin={lambdas['fine']}")
+    print(f"️  Lambdas : bnd={lambdas['boundary']}  crs={lambdas['coarse']}  fin={lambdas['fine']}")
     print(f"             svo_b={lambdas['svo_boundary']}  svo={lambdas['svo']}  "
-          f"rc={lambdas['role_coarse']}  ro={lambdas['role_oblique']}")
+          f"rc={lambdas['role_coarse']}  sr={lambdas['semantic_role']}")
     log_path = log_dir / f"epoch_{epoch}.log"
     # ...existing code (prints lambdas)...
     sys.stdout.flush()
 
     # Popen + lecture ligne-par-ligne : écrit dans fichier ET stdout
     # Pas de deadlock car on consomme le buffer en continu (vs communicate())
-    t0 = time.perf_counter()
     with open(log_path, "w") as lf:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -443,13 +384,6 @@ def run_epoch(cfg: dict, hw: dict, state: dict, lambdas: dict,
             lf.write(line)
             lf.flush()
         proc.wait()
-    wall_s = time.perf_counter() - t0
-    print(f"⏱️  Epoch {epoch} subprocess wall={wall_s:.1f}s ({wall_s/60:.2f}min)")
-    patch_epoch_metrics_jsonl(
-        state["metrics_jsonl"],
-        epoch,
-        {"timings": {"subprocess_wall_s": round(wall_s, 3)}},
-    )
 
     output = log_path.read_text(encoding="utf-8", errors="replace")
 
@@ -461,14 +395,13 @@ def run_epoch(cfg: dict, hw: dict, state: dict, lambdas: dict,
 # ─────────────────────────────────────────────────────
 
 def rebuild_dataset(level: int, cfg: dict, gold_version: str, state: dict):
-    t0 = time.perf_counter()
     levels   = cfg["difficulty_levels"]
     hard = levels["hard_per_gold"][level]
     soft = levels["soft_factors"][level]
     name = levels["names"][level]
     suffix = state.get("run_suffix", "adaptive")
     model_name = cfg.get("run", {}).get("model", "microsoft/deberta-v3-base")
-    print(f"\n📦 Rebuild dataset niveau {name} (hard={hard}, soft={soft})")
+    print(f"\n Rebuild dataset niveau {name} (hard={hard}, soft={soft})")
 
     def _resolve_split_input(split: str) -> str:
         # Priorité aux versions annotées verbfam si présentes
@@ -507,9 +440,6 @@ def rebuild_dataset(level: int, cfg: dict, gold_version: str, state: dict):
             "--soft-factor",   "1.0",
         ], check=True)
 
-    elapsed = time.perf_counter() - t0
-    print(f"⏱️  Rebuild dataset terminé en {elapsed:.1f}s ({elapsed/60:.2f}min)")
-
 
 # ─────────────────────────────────────────────────────
 #  Main
@@ -521,6 +451,7 @@ def main():
     p.add_argument("--gold-version",   default=None,   help="Override GOLD_VERSION (ex: v8.18)")
     p.add_argument("--start-epoch",    type=int, default=1)
     p.add_argument("--start-level",    type=int, default=0)
+    p.add_argument("--resume",         default="")
     p.add_argument("--keep-checkpoint", action="store_true")
     p.add_argument("--ner-only-bench",  action="store_true")
     p.add_argument("--device",          default=None, help="Forcer cuda/mps/cpu")
@@ -528,8 +459,8 @@ def main():
 
     cfg = load_config(args.config)
     gold_version = args.gold_version or os.environ.get("GOLD_VERSION", "v8.18")
-    print(f"📋 Config : {args.config}")
-    print(f"📦 Dataset : {gold_version}")
+    print(f" Config : {args.config}")
+    print(f" Dataset : {gold_version}")
 
     # Hardware
     hw = detect_hw(cfg)
@@ -541,7 +472,7 @@ def main():
             hw.update(default_hw)
             hw["device"] = "cpu"
             hw["gpu_name"] = "CPU"
-            print(f"💻 Device forcé CPU — bs={hw['bs']} accum={hw['accum']}")
+            print(f" Device forcé CPU — bs={hw['bs']} accum={hw['accum']}")
 
     # ID GPU court pour le nom de run
     gpu_short = hw["gpu_name"].replace("NVIDIA GeForce ", "").replace("NVIDIA ", "").replace(" ", "_")
@@ -556,6 +487,9 @@ def main():
 
     # Gestion checkpoint de reprise
     resume_arg = ""
+    if args.resume:
+        resume_arg = args.resume
+        print(f"♻️  Reprise explicite depuis : {resume_arg}")
     if args.keep_checkpoint and Path("checkpoint_best_multitask.pt").exists():
         import torch
         ckpt = torch.load("checkpoint_best_multitask.pt", map_location="cpu")
@@ -573,8 +507,6 @@ def main():
 
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
-    metrics_dir = log_dir / wandb_run_name
-    metrics_dir.mkdir(parents=True, exist_ok=True)
     log_main = log_dir / "training.log"
 
     def log(msg):
@@ -582,14 +514,14 @@ def main():
         with open(log_main, "a") as f:
             f.write(msg + "\n")
 
-    log(f"🚀 Démarrage training adaptatif — {datetime.now().isoformat()}")
+    log(f" Démarrage training adaptatif — {datetime.now().isoformat()}")
 
     # Traçabilité : git SHA + config dump
     git_sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
                              capture_output=True, text=True).stdout.strip() or "?"
     git_msg = subprocess.run(["git", "log", "--oneline", "-1"],
                              capture_output=True, text=True).stdout.strip() or "?"
-    log(f"📌 Git : {git_sha}  ({git_msg})")
+    log(f" Git : {git_sha}  ({git_msg})")
     log(f"   Config : {args.config}  |  Dataset : {gold_version}  |  GPU : {hw['gpu_name']}")
     log(f"   Lambdas : {json.dumps(cfg['lambdas'], indent=None)}")
 
@@ -627,10 +559,7 @@ def main():
         "resume_arg":            resume_arg,
         "wandb_run_name":        wandb_run_name,
         "wandb_tags":            wandb_tags,
-        "metrics_jsonl":         str(metrics_dir / "metrics.jsonl"),
-        "metrics_latest_json":   str(metrics_dir / "metrics_latest.json"),
     }
-    log(f"🧾 Metrics JSONL : {state['metrics_jsonl']}")
 
     rebuild_dataset(state["level"], cfg, gold_version, state)
 
@@ -644,11 +573,11 @@ def main():
     # Log architecture cascade
     if use_svo_cascade:
         rc_warmup = sc.get("role_coarse_warmup_lambda", cfg["lambdas"]["role_coarse"] * 0.15)
-        log(f"🏗️  Architecture : CASCADE SVO-FIRST")
+        log(f"️  Architecture : CASCADE SVO-FIRST")
         log(f"   Phase 1 : NER bnd + SVO bnd à plein régime + role_coarse warmup λ={rc_warmup}")
         log(f"   Phase 2 : role_coarse → λ plein + voice + verb_ptr → quand svo_bnd_f1 > {sc.get('role_thr_svo_bnd', '?')}")
         log(f"   Phase 3 : NER coarse + fine → quand ner_bnd > {bf.get('unlock_threshold', 'N/A (disabled)')}")
-        log(f"   Phase 4 : role_oblique + morpho → quand role_coarse_f1 > {sc.get('oblique_thr_role_crs', '?')}")
+        log(f"   Phase 4 : semantic_role + morpho → quand role_coarse_f1 > {sc.get('oblique_thr_role_crs', '?')}")
 
     # ─── BOUCLE PRINCIPALE ───────────────────────────────────────────
     while state["epoch"] <= max_epochs:
@@ -657,10 +586,10 @@ def main():
         lambdas = compute_lambdas(cfg, state)
 
         # Log cascade status
-        p2 = "🟢" if state["phase2_trigger_epoch"] is not None else "⏳"
-        p3 = "🟢" if state["coarse_fine_unlocked"] else "⏳"
-        p4 = "🟢" if state["phase4_trigger_epoch"] is not None else "⏳"
-        log(f"      Cascade : P1=🟢  P2(roles)={p2}  P3(ner_cls)={p3}  P4(oblique)={p4}")
+        p2 = "" if state["phase2_trigger_epoch"] is not None else "⏳"
+        p3 = "" if state["coarse_fine_unlocked"] else "⏳"
+        p4 = "" if state["phase4_trigger_epoch"] is not None else "⏳"
+        log(f"      Cascade : P1=  P2(roles)={p2}  P3(ner_cls)={p3}  P4(oblique)={p4}")
 
         # Lancer l'epoch
         output = run_epoch(cfg, hw, state, lambdas, gold_version, log_dir, epoch)
@@ -671,9 +600,7 @@ def main():
         coarse_f1    = extract_metric(output, "Coarse")
         voice_f1     = extract_metric(output, "Voice F1")
         svo_bnd_f1   = extract_metric(output, "SVO Bnd F1")
-        role_crs_f1  = extract_metric(output, "Role Coarse F1")
-        if role_crs_f1 is None:
-            role_crs_f1 = extract_metric(output, "Role Crs F1")
+        role_crs_f1  = extract_metric(output, "Role Crs F1")
 
         if val_score is None:
             log(f"⚠️  Impossible d'extraire le val score ep{epoch} — on continue")
@@ -683,7 +610,7 @@ def main():
 
         state["resume_arg"] = "checkpoint_best_multitask.pt" if Path("checkpoint_best_multitask.pt").exists() else ""
 
-        log(f"📊 Ep {epoch} — Score={val_score:.4f}  NER_Bnd={boundary_f1}  Coarse={coarse_f1}  "
+        log(f" Ep {epoch} — Score={val_score:.4f}  NER_Bnd={boundary_f1}  Coarse={coarse_f1}  "
             f"SVO_Bnd={svo_bnd_f1}  RoleCrs={role_crs_f1}  Voice={voice_f1}  (best={state['best_score']:.4f})")
 
         # ── Score stagnation ──────────────────────────────────────────────────
@@ -717,7 +644,7 @@ def main():
                 if boundary_f1 >= bf.get("unlock_threshold", 1.0):
                     state["coarse_fine_unlocked"] = True
                     state["coarse_fine_unlock_epoch"] = epoch
-                    log(f"🔓 PHASE 3 — NER Bnd {boundary_f1:.4f} ≥ {bf.get('unlock_threshold', 1.0)} "
+                    log(f" PHASE 3 — NER Bnd {boundary_f1:.4f} ≥ {bf.get('unlock_threshold', 1.0)} "
                         f"→ UNLOCK coarse+fine (ramp {bf.get('unlock_ramp_epochs', 1)}ep)")
 
             # ── Rescue regression boundary ──────────────────────────────────
@@ -731,7 +658,7 @@ def main():
                         cfg["lambdas"]["coarse"]  = round(cfg["lambdas"]["coarse"]  * br["factor_coarse"], 4)
                         state["l_verb_ptr"] = round(state["l_verb_ptr"] * br["factor_vptr_voice"], 4)
                         state["l_voice"]    = round(state["l_voice"]    * br["factor_vptr_voice"], 4)
-                        log(f"🚨 RESCUE ep{epoch} — bnd chute {bp['regression_window']}ep depuis {state['best_boundary']:.4f}"
+                        log(f" RESCUE ep{epoch} — bnd chute {bp['regression_window']}ep depuis {state['best_boundary']:.4f}"
                             f" → L_BND={state['l_boundary']} L_COARSE={cfg['lambdas']['coarse']:.4f}")
                         state["regression_count"] = 0
                 else:
@@ -749,7 +676,7 @@ def main():
                         cfg["lambdas"]["coarse"]  = round(cfg["lambdas"]["coarse"]  * br["factor_coarse"], 4)
                         state["l_verb_ptr"] = round(state["l_verb_ptr"] * br["factor_vptr_voice"], 4)
                         state["l_voice"]    = round(state["l_voice"]    * br["factor_vptr_voice"], 4)
-                        log(f"🚨 NER RESCUE ep{epoch} — boundary {boundary_f1:.4f}<{br['target']} "
+                        log(f" NER RESCUE ep{epoch} — boundary {boundary_f1:.4f}<{br['target']} "
                             f"stagne (+{gain:.4f}/{br['window']}ep)")
 
         # ── PHASE 2a : role_coarse ramp trigger (ner_bnd_f1 > seuil) ────────────
@@ -761,7 +688,7 @@ def main():
                 if boundary_f1 >= rc_thr:
                     state["rc_trigger_epoch"] = epoch
                     rc_warmup = sc.get("role_coarse_warmup_lambda", 0.40)
-                    log(f"🎯 PHASE 2a — NER Bnd {boundary_f1:.4f} ≥ {rc_thr} → ramp role_coarse "
+                    log(f" PHASE 2a — NER Bnd {boundary_f1:.4f} ≥ {rc_thr} → ramp role_coarse "
                         f"{rc_warmup}→{cfg['lambdas']['role_coarse']} ({sc.get('role_ramp_epochs', 2)}ep)")
 
         # ── PHASE 2 : voice/verb_ptr/certainty trigger (svo_bnd_f1 > seuil) ────
@@ -772,7 +699,7 @@ def main():
                 thr = sc["role_thr_svo_bnd"]
                 if svo_bnd_f1 >= thr:
                     state["phase2_trigger_epoch"] = epoch
-                    log(f"🎯 PHASE 2  — SVO Bnd {svo_bnd_f1:.4f} ≥ {thr} → UNLOCK voice + verb_ptr + certainty "
+                    log(f" PHASE 2  — SVO Bnd {svo_bnd_f1:.4f} ≥ {thr} → UNLOCK voice + verb_ptr + certainty "
                         f"(ramp {sc.get('phase2_ramp_epochs', sc.get('role_ramp_epochs', 4))}ep)")
 
         # ── PHASE 4 : SVO fine trigger (role_coarse_f1 > seuil) ──────────────
@@ -783,7 +710,7 @@ def main():
                 thr = sc["oblique_thr_role_crs"]
                 if role_crs_f1 >= thr:
                     state["phase4_trigger_epoch"] = epoch
-                    log(f"🎯 PHASE 4 — Role Crs {role_crs_f1:.4f} ≥ {thr} → UNLOCK role_oblique + morpho "
+                    log(f" PHASE 4 — Role Crs {role_crs_f1:.4f} ≥ {thr} → UNLOCK semantic_role + morpho "
                         f"(ramp {sc['oblique_ramp_epochs']}ep)")
 
         # ── Changement de niveau de difficulté ───────────────────────────────
@@ -806,7 +733,7 @@ def main():
             log(f"⬆️  Passage au niveau {state['level_name']} (level {state['level']})")
             rebuild_dataset(state["level"], cfg, gold_version, state)
         elif es_active and state["stagnation"] >= es["patience"] and state["level"] >= len(levels["names"]) - 1:
-            log(f"🛑 Early stopping — plus aucune amélioration au niveau max")
+            log(f" Early stopping — plus aucune amélioration au niveau max")
             break
 
         state["epoch"] += 1

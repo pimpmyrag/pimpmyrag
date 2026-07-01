@@ -20,7 +20,7 @@ Qui lui-même lance run_adaptive_training.sh.
 import runpod, os, json, time, argparse
 
 # ── Config par défaut ─────────────────────────────────────────────────────────
-DEFAULT_GOLD_VERSION = "v8.21_verbfam_bio"  # ← seul endroit à mettre à jour entre versions
+DEFAULT_GOLD_VERSION = "v8.22_semrole"  # ← seul endroit à mettre à jour entre versions
 DEFAULT_BRANCH       = "main"   # branche ou SHA à cloner (surcharge avec --sha)
 DEFAULT_GPU_PRIORITY = [
     # Classé par ratio qualité/prix pour ce training (DeBERTa-v3-base, ~31K phrases, 90ep)

@@ -27,7 +27,7 @@
     "svo_boundary": 0.0,
     "svo":          0.0,
     "role_coarse":  2.0,
-    "role_oblique": 0.0,
+    "semantic_role": 0.0,
     "voice":        0.0,
     "certainty":    0.0,
     "morpho":       0.0,

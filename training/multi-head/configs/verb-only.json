@@ -1,51 +1,44 @@
 {
-  "_comment": "Config pour validation famille coarse BIO - 5% dataset, CPU, 3 epochs",
-  "_version": "bio-validation-5pct",
+  "_comment": "Config local CPU pour validation famille coarse BIO - 5% dataset",
+  "_version": "bio-local-cpu",
 
   "run": {
-    "name_suffix": "bio-validation-5pct",
-    "max_epochs": 3,
+    "name_suffix": "bio-local-cpu",
+    "max_epochs": 20,
     "model": "microsoft/deberta-v3-base",
     "loss_weighting": "fixed",
     "ner_only_bench": false
   },
 
-  "data": {
-    "train": "data/train_v8.21_verbfam_5pct_bio_multitask.jsonl",
-    "val": "data/val_v8.21_verbfam_5pct_bio_multitask.jsonl",
-    "test": "data/test_v8.21_verbfam_5pct_bio_multitask.jsonl"
-  },
-
   "optimizer": {
-    "lr": 8e-6,
+    "lr": 1e-5,
     "head_lr_multiplier": 4.0,
     "warmup_epochs": 0,
     "max_grad_norm": 1.0,
     "layer_lr_decay": 0.9,
-    "ema_decay": 0.999,
+    "ema_decay": 0.0,
     "class_weight_power": 0.5
   },
 
   "lambdas": {
-    "_comment": "Lambdas pour validation BIO - cohérents avec mini-local-5pct mais avec verb family désactivé",
-    "boundary":         5.0,
-    "coarse":           0.75,
-    "fine":             1.8,
-    "svo_boundary":     0.35,
-    "svo":              0.70,
-    "role":             0.70,
-    "role_coarse":      0.0,
-    "semantic_role":     0.0,
-    "voice":            0.15,
-    "certainty":        0.30,
-    "morpho":           0.10,
-    "verb_ptr":         0.60,
-    "verb_family":      0.0,
-    "verb_family_fine": 0.0,
-    "verb_polarity":    0.0,
-    "verb_aspect":      0.0,
-    "verb_source":      0.0,
-    "compat":           0.2
+    "boundary": 0,
+    "coarse": 0,
+    "fine": 0,
+    "svo_boundary": 1.35,
+    "svo": 0.60,
+    "role": 0,
+    "role_coarse": 0.8,
+    "semantic_role": 0.8,
+    "voice": 0.40,
+    "certainty": 0.40,
+    "morpho": 0.20,
+    "verb_ptr": 0.80,
+    "verb_family": 2,
+    "verb_family_fine": 3,
+    "verb_polarity": 1.0,
+    "verb_aspect": 0.8,
+    "verb_source": 0.8,
+    "compat": 0.4
   },
 
   "focal": {
@@ -99,7 +92,6 @@
   },
 
   "difficulty_levels": {
-    "_comment": "Pas de curriculum - full difficulty",
     "names":         ["full"],
     "hard_per_gold": [6],
     "soft_factors":  [2.0],
@@ -114,7 +106,6 @@
   },
 
   "hardware": {
-    "_comment": "Local CPU/MAC - batch size réduit pour éviter OOM",
     "h100_80gb":  {"bs": 160, "accum": 1, "workers": 8},
     "l40s_48gb":  {"bs": 128, "accum": 1, "workers": 6},
     "a100_40gb":  {"bs":  96, "accum": 1, "workers": 6},

@@ -7,9 +7,7 @@ import torch.nn.functional as F
 from transformers import AutoModel
 from labels import (
     NUM_FINE, NUM_SYN, NUM_VOICE, NUM_CERTAINTY,
-    NUM_ROLE, ROLE_NONE_ID,
     NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID, ROLE_COARSE_OTHER_ID,
-    NUM_ROLE_OBLIQUE, ROLE_OBLIQUE_NONE_ID,
     NUM_GENDER, NUM_NUMBER, NUM_PERSON,
     SYN_NONE_ID, VOICE_NONE_ID, CERTAINTY_NONE_ID,
     COARSE_NONE_ID,
@@ -17,6 +15,8 @@ from labels import (
     ROLE_DERIVED_SUBJ_IDS, ROLE_DERIVED_OBJ_IDS,
     ROLE_DERIVED_OBLIQ_IDS, ROLE_DERIVED_APPOS_IDS,
     NUM_SVO,
+    # Semantic role (remplace role_oblique)
+    NUM_SEMANTIC_ROLE, SEMANTIC_ROLE_NONE_ID, SEMANTIC_ROLE_SKIP_ID,
     # VerbFam
     NUM_VERB_FAMILY, VERB_FAMILY_NONE_ID,
     NUM_VERB_FAMILY_FINE, VERB_FAMILY_FINE_NONE_ID,
@@ -24,6 +24,8 @@ from labels import (
     NUM_VERB_ASPECT, VERB_ASPECT_NONE_ID,
     NUM_VERB_SOURCE, VERB_SOURCE_NONE_ID,
     VERB_FAMILY_FINE_MASK,
+    # Compat legacy (role_head gardé pour chargement de checkpoints anciens)
+    NUM_ROLE, ROLE_NONE_ID,
 )
 from labels import FINE_LABELS
 
@@ -96,15 +98,16 @@ class SpanMultiTaskModel(nn.Module):
         # Training : position GOLD (gov_verb_labels du batch). Inférence : verb_ptr prédit.
         # bias=False : le signal positionnel est déjà directionnel, pas besoin de biais.
         self.role_pos_proj = nn.Linear(1, span_hidden_dim, bias=False)
-        self.role_head         = nn.Linear(span_hidden_dim, NUM_ROLE)        # ancienne tête rôle (12 labels)
-        # Tête oblique fine : classifie les sous-types d'oblique (uniquement si role_coarse=OBLIQ)
-        # Reçoit span_h + projection du FINE NER (38 labels) — plus discriminant que coarse (7 familles)
-        # Ex: hint_time_date/clock/duration → OBLIQUE_TIME ; hint_gpe/loc_generic/fac → OBLIQUE_LOC
-        # hint_doctrine/notion/field vs hint_org_name → OBLIQUE_DOMAIN vs OBLIQUE_AGENT
-        # Cohérent avec le dataset builder qui infère OBLIQUE_TIME/LOC depuis les labels NER fine.
-        # Timing OK : L_ROLE_OBLIQUE_NOW=0 jusqu'à ep26 (ramp role_progress) → bruit early epochs sans coût.
-        self.ner_fine_to_oblique = nn.Linear(num_fine, span_hidden_dim, bias=False)
-        self.role_oblique_head = nn.Linear(span_hidden_dim, NUM_ROLE_OBLIQUE)
+        # ── Semantic role head (remplace role_oblique + role) ──────────────────
+        # 19 labels : AGENT/PATIENT/CONTENT/SOURCE/LOCATION/TEMPORAL/CAUSE/PURPOSE/MEASURE/
+        #             BENEFICIARY/COMITATIVE/ADVERSARY/DOMAIN/INSTRUMENT/PART_OF/MEMBER_OF/OWNER/IDENTITY/NONE
+        # Conditionné sur role_coarse (même cascade que l'ancien role_oblique_head).
+        # Supervisé sur TOUS les spans NER (pas seulement OBLIQ) sauf SEMANTIC_ROLE_SKIP_ID.
+        self.semantic_role_head = nn.Linear(span_hidden_dim, NUM_SEMANTIC_ROLE)
+        # Legacy : role_head (12 labels) conservé pour compatibilité chargement checkpoints anciens
+        # lambda_role=0.0 → aucun gradient, pas d'impact sur l'entraînement
+        self.role_head = nn.Linear(span_hidden_dim, NUM_ROLE)
+        num_fine = NUM_FINE  # gardé pour compatibilité
         self.voice_head        = nn.Linear(span_hidden_dim, NUM_VOICE)
         self.certainty_head    = nn.Linear(span_hidden_dim, NUM_CERTAINTY)
 
@@ -393,23 +396,11 @@ class SpanMultiTaskModel(nn.Module):
             "syn_logits":           self.syn_head(span_h),
             # role_coarse conditionné sur le verbe (soft-attention verb_ptr)
             "role_coarse_logits":   rc_logits,
-            "role_logits":          role_logits,                        # ancienne tête (12 labels)
+            "role_logits":          role_logits,                        # legacy (lambda=0)
             "role_coarse_from_role_logits": role_coarse_from_role_logits,  # coarse drive (diagnostic)
-            # Tête oblique fine : span_h_role enrichi du signal NER fine détaché (38 labels)
-            # + cascade role_coarse → role_oblique (même pattern que verbfam_fine)
-            # softmax(rc_logits)[:, 2] = P(OBLIQ) ; OBLIQ_ID=2 (0=SUBJ,1=OBJ,2=OBLIQ,3=APPOS)
-            # Quand role_coarse prédit OBLIQ fortement → subtypes boostés
-            # Quand role_coarse prédit SUBJ/OBJ/APPOS → subtypes pénalisés (log→-∞)
-            "role_oblique_logits": (
-                self.role_oblique_head(
-                    span_h_role + self.ner_fine_to_oblique(
-                        torch.softmax(fine_logits_raw.detach(), dim=-1)
-                    )
-                ) + torch.log(
-                    F.softmax(rc_logits.detach(), dim=-1)[:, 2:3].clamp(min=1e-9)
-                )
-                if N > 0 else self.role_oblique_head(span_h_role)
-            ),
+            # Semantic role head : remplace role_oblique_head
+            # Supervisé sur TOUS les spans NER (AGENT/PATIENT/etc.) ; skip si SEMANTIC_ROLE_SKIP_ID
+            "semantic_role_logits": self.semantic_role_head(span_h_role),
             "voice_logits":        self.voice_head(span_h),
             "certainty_logits":    self.certainty_head(span_h),
             "gender_logits":       self.gender_head(span_h),
@@ -447,7 +438,7 @@ class SpanMultiTaskModel(nn.Module):
             svo_boundary_labels,
             syn_labels,
             role_coarse_labels,
-            role_oblique_labels,
+            semantic_role_labels,
             role_labels,
             voice_labels,
             certainty_labels,
@@ -466,7 +457,8 @@ class SpanMultiTaskModel(nn.Module):
             coarse_class_weights=None,
             fine_class_weights=None,
             certainty_class_weights=None,
-            oblique_class_weights=None,
+            oblique_class_weights=None,       # deprecated — conservé pour compat appels existants
+            semantic_role_class_weights=None,
             role_coarse_class_weights=None,
             # class weights verbfam (None = pas de pondération)
             verb_family_class_weights=None,
@@ -479,8 +471,8 @@ class SpanMultiTaskModel(nn.Module):
             lambda_svo_boundary=0.7,
             lambda_svo=0.5,
             lambda_role_coarse=0.1,
-            lambda_role_oblique=0.15,
-            lambda_role=0.0,
+            lambda_semantic_role=0.3,  # remplace lambda_role_oblique
+            lambda_role=0.0,           # legacy (désactivé)
             lambda_voice=0.5,
             lambda_certainty=0.4,
             lambda_morpho=0.3,
@@ -506,9 +498,9 @@ class SpanMultiTaskModel(nn.Module):
         f_logits       = outputs["fine_logits"]
         svo_b_logits   = outputs["svo_boundary_logits"]
         syn_logits          = outputs["syn_logits"]
-        role_coarse_logits  = outputs["role_coarse_logits"]
-        role_logits         = outputs["role_logits"]          # ancienne tête
-        role_oblique_logits = outputs["role_oblique_logits"]
+        role_coarse_logits    = outputs["role_coarse_logits"]
+        role_logits           = outputs["role_logits"]          # legacy
+        semantic_role_logits  = outputs["semantic_role_logits"]
         voice_logits   = outputs["voice_logits"]
         cert_logits    = outputs["certainty_logits"]
         g_logits       = outputs["gender_logits"]
@@ -521,9 +513,9 @@ class SpanMultiTaskModel(nn.Module):
         fine_labels         = fine_labels.to(device=device, dtype=torch.long)
         svo_boundary_labels = svo_boundary_labels.to(device=device, dtype=torch.long)
         syn_labels          = syn_labels.to(device=device, dtype=torch.long)
-        role_coarse_labels  = role_coarse_labels.to(device=device, dtype=torch.long)
-        role_oblique_labels = role_oblique_labels.to(device=device, dtype=torch.long)
-        role_labels         = role_labels.to(device=device, dtype=torch.long)
+        role_coarse_labels    = role_coarse_labels.to(device=device, dtype=torch.long)
+        semantic_role_labels  = semantic_role_labels.to(device=device, dtype=torch.long)
+        role_labels           = role_labels.to(device=device, dtype=torch.long)
         voice_labels        = voice_labels.to(device=device, dtype=torch.long)
         certainty_labels    = certainty_labels.to(device=device, dtype=torch.long)
         gender_labels       = gender_labels.to(device=device, dtype=torch.long)
@@ -618,9 +610,7 @@ class SpanMultiTaskModel(nn.Module):
         else:
             loss_role_coarse = torch.tensor(0.0, device=device)
 
-        # ── 6b) Role fin unifié — ancienne tête (12 labels, SUBJ/OBJ/OBLIQUE/OBLIQUE_*) ──
-        # Masque : spans avec un vrai rôle != NONE (NONE_ID=6 est AU MILIEU, pas en fin !)
-        # < ROLE_NONE_ID exclut incorrectement les labels 7-11 (OBLIQUE_ADVERSARY/BENEFICIARY/etc.)
+        # ── 6b) Role fin legacy (12 labels, lambda=0 → pas de gradient) ──────────
         role_mask = (role_labels >= 0) & (role_labels != ROLE_NONE_ID)
         if role_mask.any():
             loss_role = (F.cross_entropy(role_logits[role_mask], role_labels[role_mask], reduction="none")
@@ -628,20 +618,22 @@ class SpanMultiTaskModel(nn.Module):
         else:
             loss_role = torch.tensor(0.0, device=device)
 
-        # ── 6c) Role oblique fin (conditionné role_coarse==OBLIQ, OBLIQUE_GENERIC inclus) ──
-        _OBLIQ_RC_ID = 2  # ROLE_COARSE_LABELS.index("OBLIQ")
-        ro_mask = (
-            (role_coarse_labels == _OBLIQ_RC_ID)
-            & (role_oblique_labels >= 0)
-            & (role_oblique_labels < role_oblique_logits.size(-1))
+        # ── 6c) Semantic role (remplace role_oblique) ──────────────────────────
+        # Masque : tous spans avec un semantic_role supervisé (≠ SKIP_ID)
+        # Inclut SUBJ→AGENT, OBJ→PATIENT, OBLIQUE→* — couverture maximale
+        sr_mask = (
+            (semantic_role_labels >= 0)
+            & (semantic_role_labels < semantic_role_logits.size(-1))
+            & (semantic_role_labels != SEMANTIC_ROLE_SKIP_ID)
         )
-        if ro_mask.any():
-            _obl_w = oblique_class_weights if oblique_class_weights is not None else None
-            loss_role_oblique = (F.cross_entropy(role_oblique_logits[ro_mask], role_oblique_labels[ro_mask],
-                                                 weight=_obl_w, reduction="none")
-                                 * sample_weights[ro_mask]).mean()
+        if sr_mask.any():
+            _sr_w = semantic_role_class_weights.to(device) if semantic_role_class_weights is not None else None
+            loss_semantic_role = (F.cross_entropy(
+                semantic_role_logits[sr_mask], semantic_role_labels[sr_mask],
+                weight=_sr_w, reduction="none"
+            ) * sample_weights[sr_mask]).mean()
         else:
-            loss_role_oblique = torch.tensor(0.0, device=device)
+            loss_semantic_role = torch.tensor(0.0, device=device)
 
         # ── 7) Voice (sur verb_trigger uniquement) ─────────────────────────
         voice_mask = (voice_labels >= 0) & (voice_labels < voice_logits.size(-1))
@@ -742,7 +734,7 @@ class SpanMultiTaskModel(nn.Module):
             "svo_boundary":      loss_svo_b,
             "svo":               loss_syn,
             "role_coarse":       loss_role_coarse,
-            "role_oblique":      loss_role_oblique,
+            "semantic_role":     loss_semantic_role,
             "role":              loss_role,
             "voice":             loss_voice,
             "certainty":         loss_cert,
@@ -765,7 +757,7 @@ class SpanMultiTaskModel(nn.Module):
                 "svo_boundary":     lambda_svo_boundary,
                 "svo":              lambda_svo,
                 "role_coarse":      lambda_role_coarse,
-                "role_oblique":     lambda_role_oblique,
+                "semantic_role":    lambda_semantic_role,
                 "role":             lambda_role,
                 "voice":            lambda_voice,
                 "certainty":        lambda_certainty,
@@ -787,8 +779,8 @@ class SpanMultiTaskModel(nn.Module):
                 + lambda_svo_boundary     * loss_svo_b
                 + lambda_svo              * loss_syn
                 + lambda_role_coarse      * loss_role_coarse
-                + lambda_role_oblique     * loss_role_oblique
-                + lambda_role             * loss_role
+                + lambda_semantic_role   * loss_semantic_role
+                + lambda_role            * loss_role
                 + lambda_voice            * loss_voice
                 + lambda_certainty        * loss_cert
                 + lambda_morpho           * (loss_gender + loss_number + loss_person)
@@ -811,7 +803,7 @@ class SpanMultiTaskModel(nn.Module):
             "loss_svo_boundary":    loss_svo_b.detach(),
             "loss_syn":             loss_syn.detach(),
             "num_positive_spans":   int(pos_mask.sum().item()),
-            "num_syn_spans":        int(syn_mask.sum().item()),
-            "num_oblique_spans":    int(ro_mask.sum().item()),
-            "num_vt_spans":         int(vt_mask.sum().item()),
+            "num_syn_spans":              int(syn_mask.sum().item()),
+            "num_semantic_role_spans":    int(sr_mask.sum().item()),
+            "num_vt_spans":               int(vt_mask.sum().item()),
         }

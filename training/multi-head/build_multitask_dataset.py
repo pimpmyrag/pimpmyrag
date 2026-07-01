@@ -17,7 +17,6 @@ from labels import (
     SYN2ID, SYN_NONE_ID, ALL_SYN_LABELS,
     ROLE2ID, ROLE_NONE_ID,
     ROLE_FINE_TO_COARSE_ID, ROLE_COARSE_NONE_ID, ROLE_COARSE_OTHER_ID,
-    ROLE_TO_OBLIQUE_ID, ROLE_OBLIQUE2ID, ROLE_OBLIQUE_NONE_ID,
     NER_TIME_LABELS, NER_LOC_LABELS,
     VOICE2ID, VOICE_NONE_ID,
     CERTAINTY2ID, CERTAINTY_NONE_ID,
@@ -32,9 +31,99 @@ from labels import (
     VERB_SOURCE2ID, VERB_SOURCE_NONE_ID,
     # Nominal parent pointer (v8.22)
     NOMINAL_RELATION2ID, NOMINAL_RELATION_NONE_ID,
+    # Semantic role (v8.22+)
+    SEMANTIC_ROLE2ID, SEMANTIC_ROLE_NONE_ID, SEMANTIC_ROLE_SKIP_ID,
     # compat aliases
     SVO2ID, SVO_NONE_ID, ALL_SVO_LABELS,
 )
+
+# ─── Mapper sémantique f(svo_role, hint, verb_family, voice) → semantic_role_id ──
+# Dérivé de semantic_role_mapper_v1.py Phase 2.
+_NER_TIME       = {"hint_time_date","hint_time_clock","hint_time_duration"}
+_NER_LOC        = {"hint_gpe","hint_fac_name","hint_loc_generic","hint_infra"}
+_NER_MEASURE    = {"hint_measure","hint_percentage","hint_count","hint_money","hint_rate"}
+_NER_DOMAIN     = {"hint_field","hint_doctrine","hint_notion","hint_language"}
+_NER_WORK       = {"hint_work_of_art","hint_law","hint_document","hint_work_generic"}
+_NER_EVENT      = {"hint_event_nominal","hint_event_named","hint_state"}
+_NER_INSTRUMENT = {"hint_tool","hint_weapon","hint_vehicle"}
+_NER_MATERIAL   = {"hint_substance","hint_food"}
+_NER_OBJECT_GEN = {"hint_object_generic","hint_object_name"}
+_NER_BIO        = {"hint_animal","hint_vegetal","hint_disease"}
+_NER_ORG        = {"hint_org_name","hint_inst_name","hint_inst_role"}
+_NER_HUMAN      = {"hint_person_name","hint_person_role","hint_norp","hint_group_role",
+                   "hint_inst_name","hint_inst_role","hint_org_name"}
+_CC = {"Communication","Cognition"}
+_CA = {"Causality","State_Change","Conflict"}
+
+def _map_semantic_role_id(svo_role: str | None, hint: str | None,
+                          verb_family: str | None, voice: str | None) -> int:
+    """Retourne le SEMANTIC_ROLE label_id pour un span NER."""
+    if not svo_role or svo_role == "NONE":
+        return SEMANTIC_ROLE_NONE_ID
+    h, vf, vc = hint or "", verb_family or "", voice or "active"
+    TYPED = {
+        "OBLIQUE_AGENT": "AGENT", "OBLIQUE_CAUSE": "CAUSE",
+        "OBLIQUE_ADVERSARY": "ADVERSARY", "OBLIQUE_BENEFICIARY": "BENEFICIARY",
+        "OBLIQUE_COMITATIVE": "COMITATIVE", "OBLIQUE_DOMAIN": "DOMAIN",
+        "OBLIQUE_SOURCE": "SOURCE",
+    }
+    if svo_role in TYPED:
+        return SEMANTIC_ROLE2ID[TYPED[svo_role]]
+    if svo_role == "APPOS":
+        return SEMANTIC_ROLE2ID["IDENTITY"]
+    if svo_role == "SUBJECT":
+        if vc == "passive": return SEMANTIC_ROLE2ID["PATIENT"]
+        if h in _NER_TIME: return SEMANTIC_ROLE2ID["TEMPORAL"]
+        if h in _NER_EVENT and vf in _CA: return SEMANTIC_ROLE2ID["CAUSE"]
+        return SEMANTIC_ROLE2ID["AGENT"]
+    if svo_role == "OBJECT":
+        if h in _NER_TIME:    return SEMANTIC_ROLE2ID["TEMPORAL"]
+        if h in _NER_MEASURE: return SEMANTIC_ROLE2ID["MEASURE"]
+        if h in _NER_LOC:     return SEMANTIC_ROLE2ID["LOCATION"]
+        if vf in _CC:
+            if h in _NER_EVENT | _NER_WORK | _NER_DOMAIN: return SEMANTIC_ROLE2ID["CONTENT"]
+            if h in _NER_HUMAN: return SEMANTIC_ROLE2ID["PATIENT"]
+            return SEMANTIC_ROLE2ID["CONTENT"]
+        return SEMANTIC_ROLE2ID["PATIENT"]
+    if svo_role == "OBLIQUE":
+        if h in _NER_TIME:    return SEMANTIC_ROLE2ID["TEMPORAL"]
+        if h in _NER_LOC:     return SEMANTIC_ROLE2ID["LOCATION"]
+        if h in _NER_MEASURE: return SEMANTIC_ROLE2ID["MEASURE"]
+        if h in _NER_DOMAIN:  return SEMANTIC_ROLE2ID["DOMAIN"]
+        if h in _NER_WORK:    return SEMANTIC_ROLE2ID["CONTENT"] if vf in _CC else SEMANTIC_ROLE2ID["SOURCE"]
+        if h in _NER_EVENT:
+            if vf in _CA | {"Conflict"}: return SEMANTIC_ROLE2ID["CAUSE"]
+            if vf in _CC: return SEMANTIC_ROLE2ID["CONTENT"]
+            return SEMANTIC_ROLE2ID["CAUSE"]
+        if h in _NER_INSTRUMENT:
+            if vf in {"Possession"}: return SEMANTIC_ROLE2ID["PATIENT"]
+            if vf in _CC: return SEMANTIC_ROLE2ID["DOMAIN"]
+            return SEMANTIC_ROLE2ID["INSTRUMENT"]
+        if h in _NER_MATERIAL:
+            return SEMANTIC_ROLE2ID["DOMAIN"] if vf in _CC else SEMANTIC_ROLE2ID["PATIENT"]
+        if h in _NER_OBJECT_GEN:
+            return SEMANTIC_ROLE2ID["DOMAIN"] if vf in _CC else SEMANTIC_ROLE2ID["PATIENT"]
+        if h in _NER_BIO:
+            return SEMANTIC_ROLE2ID["DOMAIN"] if vf in _CC else SEMANTIC_ROLE2ID["PATIENT"]
+        if h == "hint_norp":
+            return SEMANTIC_ROLE2ID["DOMAIN"] if vf in {"Relation","OTHER"} else \
+                   SEMANTIC_ROLE2ID["BENEFICIARY"] if vf == "Social" else SEMANTIC_ROLE2ID["PATIENT"]
+        if h in _NER_ORG:
+            if vf == "Relation": return SEMANTIC_ROLE2ID["PART_OF"]
+            if vf == "Social":   return SEMANTIC_ROLE2ID["BENEFICIARY"]
+            if h == "hint_inst_name" and vf in _CA | {"State_Change"}: return SEMANTIC_ROLE2ID["LOCATION"]
+            if vf in _CC: return SEMANTIC_ROLE2ID["BENEFICIARY"]
+            return SEMANTIC_ROLE2ID["PATIENT"]
+        if h in _NER_HUMAN:
+            if vf == "Social":     return SEMANTIC_ROLE2ID["BENEFICIARY"]
+            if vf == "Possession": return SEMANTIC_ROLE2ID["OWNER"]
+            if vf in _CC:          return SEMANTIC_ROLE2ID["BENEFICIARY"]
+            if vf == "Relation":   return SEMANTIC_ROLE2ID["PART_OF"]
+            if vf in _CA | {"Perception","State_Change","Conflict","OTHER"}:
+                return SEMANTIC_ROLE2ID["PATIENT"]
+            return SEMANTIC_ROLE_SKIP_ID   # OBLIQUE_UNRESOLVED → non supervisé
+        return SEMANTIC_ROLE_SKIP_ID       # tout le reste → non supervisé
+    return SEMANTIC_ROLE_NONE_ID
 
 def load_jsonl(path: str):
     with open(path, "r", encoding="utf-8") as f:
@@ -216,7 +305,7 @@ def build_gold_candidates(row, tokenizer):
                 "syn_label_id":        syn_id,
                 "role_label_id":       role_id,
                 "role_coarse_label_id": role_coarse_id,
-                "role_oblique_label_id": ROLE_OBLIQUE_NONE_ID,  # syn spans = non-oblique
+                "semantic_role_label_id": SEMANTIC_ROLE_SKIP_ID,  # syn spans = non-oblique
                 "voice_label_id":      voice_id,
                 "certainty_label_id":  certainty_id,
                 "gender_label_id":     GENDER2ID.get(sp.get("gender"), GENDER_NONE_ID),
@@ -256,21 +345,23 @@ def build_gold_candidates(row, tokenizer):
         # ROLE_FINE_TO_COARSE_ID mappe NONE→OTHER pour les spans NER gold
         role_coarse_id = ROLE_FINE_TO_COARSE_ID.get(role_id, ROLE_COARSE_NONE_ID)
 
-        # Rôle oblique fin (tête hiérarchique, maskée aux spans OBLIQ coarse)
-        # Auto-inférence depuis le label NER quand svo_role=OBLIQUE générique
+        # Rôle sémantique fin (Phase 2 mapper, remplace role_oblique)
         svo_role_str = sp.get("svo_role", "NONE") or "NONE"
-        if role_id in ROLE_TO_OBLIQUE_ID:
-            role_oblique_id = ROLE_TO_OBLIQUE_ID[role_id]
-            # Fix : OBLIQUE générique (id=2) est dans ROLE_TO_OBLIQUE_ID → affinement NER ici
-            # (le elif précédent était mort car OBLIQUE est déjà intercepté par le if)
-            if role_id == ROLE2ID["OBLIQUE"]:
-                if label in NER_TIME_LABELS:
-                    role_oblique_id = ROLE_OBLIQUE2ID["OBLIQUE_TIME"]
-                elif label in NER_LOC_LABELS:
-                    role_oblique_id = ROLE_OBLIQUE2ID["OBLIQUE_LOC"]
-                # else : garde OBLIQUE générique (id=0)
-        else:
-            role_oblique_id = ROLE_OBLIQUE_NONE_ID  # non-oblique
+        # Pour dériver le semantic_role, on a besoin du verb_family du verbe gouverneur.
+        # Il sera disponible si le dataset contient des verb_trigger annotés avec verb_family.
+        # Sinon → SEMANTIC_ROLE_SKIP_ID (non supervisé, résolu au preprocessing)
+        gov_verb_family = sp.get("gov_verb_family")   # champ ajouté par build_v822_semrole.py
+        gov_verb_voice  = None  # rempli ci-dessous depuis le verb_trigger parent si disponible
+        semantic_role_id = _map_semantic_role_id(svo_role_str, label, gov_verb_family, gov_verb_voice)
+        # Si le dataset porte déjà semantic_role (v8.22+), l'utiliser directement
+        if "semantic_role" in sp:
+            sr_str = sp["semantic_role"]
+            if sr_str == "OBLIQUE_UNRESOLVED":
+                semantic_role_id = SEMANTIC_ROLE_SKIP_ID
+            elif sr_str in SEMANTIC_ROLE2ID:
+                semantic_role_id = SEMANTIC_ROLE2ID[sr_str]
+            else:
+                semantic_role_id = SEMANTIC_ROLE_NONE_ID
 
         # Pointeur vers le verbe gouverneur
         gov_verb_tok_start = -1
@@ -319,7 +410,7 @@ def build_gold_candidates(row, tokenizer):
             "syn_label_id":        SYN_NONE_ID,
             "role_label_id":       role_id,
             "role_coarse_label_id": role_coarse_id,
-            "role_oblique_label_id": role_oblique_id,
+            "semantic_role_label_id": semantic_role_id,
             "voice_label_id":      VOICE_NONE_ID,
             "certainty_label_id":  CERTAINTY_NONE_ID,
             "gender_label_id":     GENDER2ID.get(sp.get("gender"), GENDER_NONE_ID),
@@ -369,7 +460,7 @@ def build_gold_candidates(row, tokenizer):
             # Ce span perd son rôle SVO → devient OTHER (entité NER sans rôle annoté)
             gold_candidates[idx]["role_label_id"]        = ROLE_NONE_ID
             gold_candidates[idx]["role_coarse_label_id"] = ROLE_COARSE_OTHER_ID
-            gold_candidates[idx]["role_oblique_label_id"] = ROLE_OBLIQUE_NONE_ID
+            gold_candidates[idx]["semantic_role_label_id"] = SEMANTIC_ROLE_SKIP_ID
         else:
             claimed.append((ts, te))
     # ────────────────────────────────────────────────────────────────────────
@@ -391,7 +482,7 @@ def _make_negative(neg_type: str, char_start: int, char_end: int,
         "syn_label_id":        SYN_NONE_ID,
         "role_label_id":       ROLE_NONE_ID,
         "role_coarse_label_id": ROLE_COARSE_NONE_ID,
-        "role_oblique_label_id": ROLE_OBLIQUE_NONE_ID,
+        "semantic_role_label_id": SEMANTIC_ROLE_SKIP_ID,
         "voice_label_id":      VOICE_NONE_ID,
         "certainty_label_id":  CERTAINTY_NONE_ID,
         "gender_label_id":     GENDER_NONE_ID,
@@ -526,7 +617,7 @@ def generate_svo_hard_negatives(offsets, gold_candidates, gold_char_spans, max_p
                 "syn_label_id": SYN_NONE_ID,
                 "role_label_id": ROLE_NONE_ID,
                 "role_coarse_label_id": ROLE_COARSE_NONE_ID,
-                "role_oblique_label_id": ROLE_OBLIQUE_NONE_ID,
+                "semantic_role_label_id": SEMANTIC_ROLE_SKIP_ID,
                 "voice_label_id": VOICE_NONE_ID,
                 "certainty_label_id": CERTAINTY_NONE_ID,
                 "gender_label_id": GENDER_NONE_ID,

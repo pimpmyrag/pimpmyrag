@@ -32,7 +32,7 @@ from labels import (
     SYN_LABELS, NUM_SYN,
     NUM_VOICE, NUM_CERTAINTY, CERTAINTY_LABELS, NUM_GENDER, NUM_NUMBER, NUM_PERSON,
     ROLE_COARSE_LABELS, NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID, ROLE_COARSE_OTHER_ID,
-    ROLE_OBLIQUE_LABELS, NUM_ROLE_OBLIQUE, ROLE_OBLIQUE_NONE_ID,
+    ROLE_OBLIQUE_LABELS, NUM_ROLE_OBLIQUE, SEMANTIC_ROLE_SKIP_ID,
     ROLE_LABELS, NUM_ROLE, ROLE_NONE_ID,    # ancienne tête (12 labels)
     ROLE_COARSE2ID,
     PERSON_LABELS,
@@ -59,8 +59,8 @@ _JSONL_SCALAR_METRICS = {
     "role_macro_f1": "role_f1",
     "role_coarse_macro_f1": "role_coarse_f1",
     "role_coarse_from_role_macro_f1": "role_coarse_from_role_f1",
-    "role_oblique_macro_f1": "role_oblique_f1",
-    "role_oblique_cascaded_macro_f1": "role_oblique_cascaded_f1",
+    "semantic_role_macro_f1": "semantic_role_f1",
+    "semantic_role_cascaded_macro_f1": "semantic_role_cascaded_f1",
     "voice_macro_f1": "voice_f1",
     "certainty_macro_f1": "certainty_f1",
     "gender_macro_f1": "gender_f1",
@@ -344,7 +344,7 @@ def get_layerwise_param_groups(model, base_lr: float, head_lr: float, decay: flo
 def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
     """
     Calcule des poids de classes à partir du dataset multitask enrichi.
-    Retourne weights pour boundary, coarse, fine, certainty, role_oblique, role_coarse.
+    Retourne weights pour boundary, coarse, fine, certainty, semantic_role, role_coarse.
     """
     boundary_counts = Counter()
     coarse_counts = Counter()
@@ -367,8 +367,8 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
                 cert_id = c.get("certainty_label_id", -1)
                 if cert_id >= 0:
                     certainty_counts[cert_id] += 1
-                obl_id = c.get("role_oblique_label_id", ROLE_OBLIQUE_NONE_ID)
-                if obl_id < ROLE_OBLIQUE_NONE_ID:
+                obl_id = c.get("semantic_role_label_id", SEMANTIC_ROLE_SKIP_ID)
+                if obl_id < SEMANTIC_ROLE_SKIP_ID:
                     oblique_counts[obl_id] += 1
                 # role_coarse : compter seulement les vrais rôles (SUBJ/OBJ/OBLIQ/APPOS)
                 # OTHER(4) et NONE_ID(5) exclus du gradient → pas dans les weights
@@ -494,7 +494,7 @@ def run_epoch(
         lambda_svo_boundary=0.5,
         lambda_svo=0.5,
         lambda_role_coarse=0.0,
-        lambda_role_oblique=0.3,
+        lambda_semantic_role=0.3,
         lambda_role=0.5,
         lambda_voice=0.15,
         lambda_certainty=0.4,
@@ -621,9 +621,9 @@ def run_epoch(
     all_rc_true, all_rc_pred = [], []
     # role_coarse dérivée depuis role_head (même mask — diagnostic comparatif)
     all_rc_from_role_true, all_rc_from_role_pred = [], []
-    # role_oblique positive-only (spans avec role_oblique < ROLE_OBLIQUE_NONE_ID)
+    # semantic_role positive-only (spans avec semantic_role < SEMANTIC_ROLE_SKIP_ID)
     all_ro_true, all_ro_pred = [], []
-    # role_oblique CASCADE — gate = role_coarse_from_role prédit OBLIQ (mode inférence réelle)
+    # semantic_role CASCADE — gate = role_coarse_from_role prédit OBLIQ (mode inférence réelle)
     all_ro_cascaded_true, all_ro_cascaded_pred = [], []
     # role fin (12 labels) : spans avec rôle annoté (< ROLE_NONE_ID)
     all_role_true, all_role_pred = [], []
@@ -674,11 +674,11 @@ def run_epoch(
             role_coarse_labels = role_coarse_labels.to(device)
         else:
             role_coarse_labels = torch.full_like(syn_labels, ROLE_COARSE_NONE_ID)
-        role_oblique_labels = batch.get("role_oblique_labels")
-        if role_oblique_labels is not None:
-            role_oblique_labels = role_oblique_labels.to(device)
+        semantic_role_labels = batch.get("semantic_role_labels")
+        if semantic_role_labels is not None:
+            semantic_role_labels = semantic_role_labels.to(device)
         else:
-            role_oblique_labels = torch.full_like(syn_labels, ROLE_OBLIQUE_NONE_ID)
+            semantic_role_labels = torch.full_like(syn_labels, SEMANTIC_ROLE_SKIP_ID)
         role_labels = batch.get("role_labels")
         if role_labels is not None:
             role_labels = role_labels.to(device)
@@ -759,7 +759,7 @@ def run_epoch(
                     svo_boundary_labels_loss = svo_boundary_labels[si]
                     syn_labels_loss          = syn_labels[si]
                     role_coarse_labels_loss  = role_coarse_labels[si]
-                    role_oblique_labels_loss = role_oblique_labels[si]
+                    semantic_role_labels_loss = semantic_role_labels[si]
                     role_labels_loss         = role_labels[si]
                     voice_labels_loss        = voice_labels[si]
                     certainty_labels_loss    = certainty_labels[si]
@@ -780,7 +780,7 @@ def run_epoch(
                     svo_boundary_labels_loss = svo_boundary_labels
                     syn_labels_loss          = syn_labels
                     role_coarse_labels_loss  = role_coarse_labels
-                    role_oblique_labels_loss = role_oblique_labels
+                    semantic_role_labels_loss = semantic_role_labels
                     role_labels_loss         = role_labels
                     voice_labels_loss        = voice_labels
                     certainty_labels_loss    = certainty_labels
@@ -822,7 +822,7 @@ def run_epoch(
                     svo_boundary_labels=svo_boundary_labels_loss,
                     syn_labels=syn_labels_loss,
                     role_coarse_labels=role_coarse_labels_loss,
-                    role_oblique_labels=role_oblique_labels_loss,
+                    semantic_role_labels=semantic_role_labels_loss,
                     role_labels=role_labels_loss,
                     voice_labels=voice_labels_loss,
                     certainty_labels=certainty_labels_loss,
@@ -853,7 +853,7 @@ def run_epoch(
                     lambda_svo_boundary=lambda_svo_boundary,
                     lambda_svo=lambda_svo,
                     lambda_role_coarse=lambda_role_coarse,
-                    lambda_role_oblique=lambda_role_oblique,
+                    lambda_semantic_role=lambda_semantic_role,
                     lambda_role=lambda_role,
                     lambda_voice=lambda_voice,
                     lambda_certainty=lambda_certainty,
@@ -890,7 +890,7 @@ def run_epoch(
                             "fine": lambda_fine, "svo_boundary": lambda_svo_boundary,
                             "svo": lambda_svo,
                             "role_coarse": lambda_role_coarse,
-                            "role_oblique": lambda_role_oblique,
+                            "semantic_role": lambda_semantic_role,
                             "role": lambda_role,
                             "voice": lambda_voice, "certainty": lambda_certainty,
                             "morpho": lambda_morpho, "verb_ptr": lambda_verb_ptr,
@@ -961,7 +961,7 @@ def run_epoch(
         svob_pred    = outputs["svo_boundary_logits"].argmax(dim=-1).detach().cpu().tolist()
         role_coarse_pred_raw = outputs["role_coarse_logits"].argmax(dim=-1).detach().cpu().tolist()
         role_coarse_from_role_pred_raw = outputs["role_coarse_from_role_logits"].argmax(dim=-1).detach().cpu().tolist()
-        role_oblique_pred_raw = outputs["role_oblique_logits"].argmax(dim=-1).detach().cpu().tolist()
+        semantic_role_pred_raw = outputs["semantic_role_logits"].argmax(dim=-1).detach().cpu().tolist()
         role_pred_raw = outputs["role_logits"].argmax(dim=-1).detach().cpu().tolist()
         voice_pred_raw = outputs["voice_logits"].argmax(dim=-1).detach().cpu().tolist()
         certainty_pred_raw = outputs["certainty_logits"].argmax(dim=-1).detach().cpu().tolist()
@@ -986,7 +986,7 @@ def run_epoch(
             f_true    = fine_labels.detach().cpu()[si_cpu].tolist()
             svob_true = svo_boundary_labels.detach().cpu()[si_cpu].tolist()
             role_coarse_true = role_coarse_labels.detach().cpu()[si_cpu].tolist()
-            role_oblique_true = role_oblique_labels.detach().cpu()[si_cpu].tolist()
+            semantic_role_true = semantic_role_labels.detach().cpu()[si_cpu].tolist()
             role_true    = role_labels.detach().cpu()[si_cpu].tolist()
             voice_true   = voice_labels.detach().cpu()[si_cpu].tolist()
             certainty_true = certainty_labels.detach().cpu()[si_cpu].tolist()
@@ -1005,7 +1005,7 @@ def run_epoch(
             f_true    = fine_labels.detach().cpu().tolist()
             svob_true = svo_boundary_labels.detach().cpu().tolist()
             role_coarse_true = role_coarse_labels.detach().cpu().tolist()
-            role_oblique_true = role_oblique_labels.detach().cpu().tolist()
+            semantic_role_true = semantic_role_labels.detach().cpu().tolist()
             role_true    = role_labels.detach().cpu().tolist()
             voice_true   = voice_labels.detach().cpu().tolist()
             certainty_true = certainty_labels.detach().cpu().tolist()
@@ -1049,18 +1049,18 @@ def run_epoch(
 
         # Role oblique metrics = spans COARSE-OBLIQ annotés (role_coarse_true==OBLIQ),
         # tous sous-types inclus (OBLIQUE_GENERIC id=0 inclus — cohérence avec la loss).
-        # Conditionner sur role_coarse gold (pas sur role_oblique_true>0) évite le biais
+        # Conditionner sur role_coarse gold (pas sur semantic_role_true>0) évite le biais
         # d'évaluation qui masquait 77.7% des données d'obligues.
         _OBLIQ_RC = ROLE_COARSE2ID["OBLIQ"]
-        for rot, rop, rct in zip(role_oblique_true, role_oblique_pred_raw, role_coarse_true):
-            if rct == _OBLIQ_RC and rot >= 0 and rot < ROLE_OBLIQUE_NONE_ID:
+        for rot, rop, rct in zip(semantic_role_true, semantic_role_pred_raw, role_coarse_true):
+            if rct == _OBLIQ_RC and rot >= 0 and rot < SEMANTIC_ROLE_SKIP_ID:
                 all_ro_true.append(rot)
                 all_ro_pred.append(rop)
 
         # Role oblique CASCADE — gate = role_coarse_from_role prédit OBLIQ
-        # Simule l'inférence réelle : un span reçoit role_oblique seulement si prédit OBLIQ par la dérivée
-        for rot, rop, rcfr in zip(role_oblique_true, role_oblique_pred_raw, role_coarse_from_role_pred_raw):
-            if rcfr == _OBLIQ_RC and rot >= 0 and rot < ROLE_OBLIQUE_NONE_ID:
+        # Simule l'inférence réelle : un span reçoit semantic_role seulement si prédit OBLIQ par la dérivée
+        for rot, rop, rcfr in zip(semantic_role_true, semantic_role_pred_raw, role_coarse_from_role_pred_raw):
+            if rcfr == _OBLIQ_RC and rot >= 0 and rot < SEMANTIC_ROLE_SKIP_ID:
                 all_ro_cascaded_true.append(rot)
                 all_ro_cascaded_pred.append(rop)
 
@@ -1243,13 +1243,13 @@ def run_epoch(
             all_rc_from_role_true, all_rc_from_role_pred,
             labels=[l for l in range(4) if l in set(all_rc_from_role_true)]
         ) if all_rc_from_role_true else 0.0,
-        "role_oblique_macro_f1": safe_macro_f1_local(
+        "semantic_role_macro_f1": safe_macro_f1_local(
             all_ro_true, all_ro_pred,
             labels=[l for l in range(NUM_ROLE_OBLIQUE) if l in set(all_ro_true)]
         ) if all_ro_true else 0.0,
-        # role_oblique CASCADE — gate = role_coarse_from_role prédit OBLIQ (mode inférence réelle)
-        # Mesure la précision de role_oblique_head sur les spans correctement gatés par la dérivée
-        "role_oblique_cascaded_macro_f1": safe_macro_f1_local(
+        # semantic_role CASCADE — gate = role_coarse_from_role prédit OBLIQ (mode inférence réelle)
+        # Mesure la précision de semantic_role_head sur les spans correctement gatés par la dérivée
+        "semantic_role_cascaded_macro_f1": safe_macro_f1_local(
             all_ro_cascaded_true, all_ro_cascaded_pred,
             labels=[l for l in range(NUM_ROLE_OBLIQUE) if l in set(all_ro_cascaded_true)]
         ) if all_ro_cascaded_true else 0.0,
@@ -1331,11 +1331,11 @@ def run_epoch(
             target_names=[ROLE_COARSE_LABELS[l] for l in range(NUM_ROLE_COARSE) if l != ROLE_COARSE_NONE_ID and l in set(all_rc_true)],
             digits=3, zero_division=0
         ) if all_rc_true else "N/A",
-        # role_oblique : sous-types OBLIQUE (NONE exclu)
-        "role_oblique_report": classification_report(
+        # semantic_role : sous-types OBLIQUE (NONE exclu)
+        "semantic_role_report": classification_report(
             all_ro_true, all_ro_pred,
-            labels=[l for l in range(NUM_ROLE_OBLIQUE) if l != ROLE_OBLIQUE_NONE_ID and l in set(all_ro_true)],
-            target_names=[ROLE_OBLIQUE_LABELS[l] for l in range(NUM_ROLE_OBLIQUE) if l != ROLE_OBLIQUE_NONE_ID and l in set(all_ro_true)],
+            labels=[l for l in range(NUM_ROLE_OBLIQUE) if l != SEMANTIC_ROLE_SKIP_ID and l in set(all_ro_true)],
+            target_names=[ROLE_OBLIQUE_LABELS[l] for l in range(NUM_ROLE_OBLIQUE) if l != SEMANTIC_ROLE_SKIP_ID and l in set(all_ro_true)],
             digits=3, zero_division=0
         ) if all_ro_true else "N/A",
         # role fin (12 labels) : SUBJECT/OBJECT/OBLIQUE_* (NONE exclu)
@@ -1484,8 +1484,10 @@ def main():
                         help="Pondération de la loss SVO (défaut=0.8)")
     parser.add_argument("--lambda-role-coarse", type=float, default=0.1,
                         help="Pondération de la loss rôle SVO coarse SUBJ/OBJ/OBLIQ/OTHER (défaut=0.1)")
-    parser.add_argument("--lambda-role-oblique", type=float, default=0.15,
-                        help="Pondération de la loss rôle oblique fin 10 sous-types (défaut=0.15)")
+    parser.add_argument("--lambda-semantic-role", type=float, default=0.3,
+                        help="Pondération de la loss semantic_role (19 labels AGENT/PATIENT/… défaut=0.3)")
+    parser.add_argument("--lambda-role-oblique", type=float, default=0.0,
+                        help="[LEGACY] Ancienne loss oblique (remplacée par --lambda-semantic-role, défaut=0 = désactivée)")
     parser.add_argument("--lambda-role", type=float, default=0.0,
                         help="Ancienne tête rôle unifiée 12 labels (défaut=0 = désactivée)")
     parser.add_argument("--lambda-voice", type=float, default=0.15,
@@ -1706,7 +1708,7 @@ def main():
                     "lambda_svo_boundary": args.lambda_svo_boundary,
                     "lambda_svo":        args.lambda_svo,
                     "lambda_role_coarse": args.lambda_role_coarse,
-                    "lambda_role_oblique": args.lambda_role_oblique,
+                    "lambda_semantic_role": args.lambda_semantic_role,
                     "lambda_role":       args.lambda_role,
                     "lambda_voice":      args.lambda_voice,
                     "lambda_certainty":  args.lambda_certainty,
@@ -1855,7 +1857,7 @@ def main():
         "fine": args.lambda_fine, "svo_boundary": args.lambda_svo_boundary,
         "svo": args.lambda_svo,
         "role_coarse": args.lambda_role_coarse,
-        "role_oblique": args.lambda_role_oblique,
+        "semantic_role": args.lambda_semantic_role,
         "role": args.lambda_role,
         "voice": args.lambda_voice, "certainty": args.lambda_certainty,
         "morpho": args.lambda_morpho, "verb_ptr": args.lambda_verb_ptr,
@@ -2107,7 +2109,7 @@ def main():
             lambda_svo_boundary=args.lambda_svo_boundary,
             lambda_svo=args.lambda_svo,
             lambda_role_coarse=args.lambda_role_coarse,
-            lambda_role_oblique=args.lambda_role_oblique,
+            lambda_semantic_role=args.lambda_semantic_role,
             lambda_role=args.lambda_role,
             lambda_voice=args.lambda_voice,
             lambda_certainty=args.lambda_certainty,
@@ -2176,7 +2178,7 @@ def main():
             lambda_svo_boundary=args.lambda_svo_boundary,
             lambda_svo=args.lambda_svo,
             lambda_role_coarse=args.lambda_role_coarse,
-            lambda_role_oblique=args.lambda_role_oblique,
+            lambda_semantic_role=args.lambda_semantic_role,
             lambda_role=args.lambda_role,
             lambda_voice=args.lambda_voice,
             lambda_certainty=args.lambda_certainty,
@@ -2217,13 +2219,13 @@ def main():
         else:
             # Score composite NER + SVO roles (coarse dérivée + oblique cascade)
             # role_coarse_from_role : F1 sur SUBJ/OBJ/OBLIQ/APPOS via logsumexp (gate fiable)
-            # role_oblique_cascaded : F1 sous-types oblique en mode inférence réelle
+            # semantic_role_cascaded : F1 sous-types oblique en mode inférence réelle
             score = (
                 val_metrics["boundary_f1"]                                      * 1.5
                 + val_metrics["coarse_macro_f1"]                                * 1.0
                 + val_metrics["fine_macro_f1"]                                  * 2.0
                 + val_metrics.get("role_coarse_from_role_macro_f1", 0.0)        * 1.0
-                + val_metrics.get("role_oblique_cascaded_macro_f1", 0.0)        * 0.5
+                + val_metrics.get("semantic_role_cascaded_macro_f1", 0.0)        * 0.5
             ) / 6.0
 
         print(f"\n📅 Epoch {epoch}")
@@ -2286,7 +2288,7 @@ def main():
                 "val/svo_boundary_f1":  val_metrics["svo_boundary_f1"],
                 "val/role_f1":          val_metrics["role_macro_f1"],
                 "val/role_coarse_f1":   val_metrics.get("role_coarse_macro_f1", 0.0),
-                "val/role_oblique_f1":  val_metrics.get("role_oblique_macro_f1", 0.0),
+                "val/semantic_role_f1":  val_metrics.get("semantic_role_macro_f1", 0.0),
                 "val/voice_f1":         val_metrics["voice_macro_f1"],
                 "val/certainty_f1":     val_metrics["certainty_macro_f1"],
                 "val/gender_f1":        val_metrics["gender_macro_f1"],
@@ -2309,7 +2311,7 @@ def main():
                 ("coarse_report",        "val/coarse"),
                 ("role_report",          "val/role"),
                 ("role_coarse_report",   "val/role_coarse"),
-                ("role_oblique_report",  "val/role_oblique"),
+                ("semantic_role_report",  "val/semantic_role"),
                 ("svo_boundary_report",  "val/svo_bnd"),
                 ("verb_family_report",   "val/verb_family"),
                 ("verb_polarity_report", "val/verb_polarity"),
@@ -2348,7 +2350,7 @@ def main():
                     "fine": args.lambda_fine, "svo_boundary": args.lambda_svo_boundary,
                     "svo": args.lambda_svo,
                     "role_coarse": args.lambda_role_coarse,
-                    "role_oblique": args.lambda_role_oblique,
+                    "semantic_role": args.lambda_semantic_role,
                     "role": args.lambda_role,
                     "voice": args.lambda_voice, "certainty": args.lambda_certainty,
                     "morpho": args.lambda_morpho, "verb_ptr": args.lambda_verb_ptr,
@@ -2399,7 +2401,7 @@ def main():
                 "svo_boundary": args.lambda_svo_boundary,
                 "svo": args.lambda_svo,
                 "role_coarse": args.lambda_role_coarse,
-                "role_oblique": args.lambda_role_oblique,
+                "semantic_role": args.lambda_semantic_role,
                 "role": args.lambda_role,
                 "voice": args.lambda_voice,
                 "certainty": args.lambda_certainty,
@@ -2441,8 +2443,8 @@ def main():
         print(f"Val Role F1={val_metrics.get('role_macro_f1', 0.0):.4f}")
         print(f"Val Role Coarse F1={val_metrics.get('role_coarse_macro_f1', 0.0):.4f}")
         print(f"Val Role Coarse FromRole F1={val_metrics.get('role_coarse_from_role_macro_f1', 0.0):.4f}")
-        print(f"Val Role Oblique F1={val_metrics.get('role_oblique_macro_f1', 0.0):.4f}")
-        print(f"Val Role Oblique Cascaded F1={val_metrics.get('role_oblique_cascaded_macro_f1', 0.0):.4f}")
+        print(f"Val Role Oblique F1={val_metrics.get('semantic_role_macro_f1', 0.0):.4f}")
+        print(f"Val Role Oblique Cascaded F1={val_metrics.get('semantic_role_cascaded_macro_f1', 0.0):.4f}")
         # Compat anciens parsers: désormais Role Crs = vraie tête role_coarse native.
         print(f"Val Role Crs F1={val_metrics.get('role_coarse_macro_f1', 0.0):.4f}")
         if val_metrics.get("role_report") and val_metrics["role_report"] != "N/A":
@@ -2550,7 +2552,7 @@ def main():
         lambda_svo_boundary=args.lambda_svo_boundary,
         lambda_svo=args.lambda_svo,
         lambda_role_coarse=args.lambda_role_coarse,
-        lambda_role_oblique=args.lambda_role_oblique,
+        lambda_semantic_role=args.lambda_semantic_role,
         lambda_role=args.lambda_role,
         lambda_voice=args.lambda_voice,
         lambda_certainty=args.lambda_certainty,

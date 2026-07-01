@@ -592,3 +592,50 @@ ID2NOMINAL_RELATION      = {i: x for x, i in NOMINAL_RELATION2ID.items()}
 NUM_NOMINAL_RELATION     = len(NOMINAL_RELATION_LABELS)   # = 10
 NOMINAL_RELATION_NONE_ID = NUM_NOMINAL_RELATION           # = 10 (sentinel NO_PARENT / non-supervisé)
 
+
+# ─────────────────────────────────────────────────────────────
+# SEMANTIC ROLE LABELS  (rôle sémantique fin — Phase 3)
+# Prédit sur chaque span NER + pronoms, conditionné sur svo_role.
+# Dérivé du mapper f(svo_role, hint_*, verb_family, voice).
+# ─────────────────────────────────────────────────────────────
+SEMANTIC_ROLE_LABELS = [
+    "AGENT",        # 0   initiateur de l'action (sujet actif)
+    "PATIENT",      # 1   entité affectée / objet de l'action
+    "CONTENT",      # 2   contenu propositionnel (ce qui est dit / pensé)
+    "SOURCE",       # 3   source épistémique ("selon X", "d'après X")
+    "LOCATION",     # 4   lieu de l'action / destination
+    "TEMPORAL",     # 5   ancrage temporel
+    "CAUSE",        # 6   cause / déclencheur de l'événement
+    "PURPOSE",      # 7   but / intention ("pour X", "afin de X")
+    "MEASURE",      # 8   quantité / valeur numérique
+    "BENEFICIARY",  # 9   bénéficiaire ("pour X", "en faveur de X")
+    "COMITATIVE",   # 10  co-participant ("avec X", "aux côtés de X")
+    "ADVERSARY",    # 11  opposant ("contre X", "face à X")
+    "DOMAIN",       # 12  domaine / thème ("sur X", "en matière de X")
+    "INSTRUMENT",   # 13  moyen / outil ("avec X", "via X", "à l'aide de X")
+    "PART_OF",      # 14  inclusion / appartenance ("appartient à X")
+    "MEMBER_OF",    # 15  membre d'un ensemble ("fait partie de X")
+    "OWNER",        # 16  possesseur ("détenu par X", "propriété de X")
+    "IDENTITY",     # 17  apposition identitaire (X = Y)
+    "NONE",         # 18  pas de rôle sémantique (span sans gouverneur verbal)
+]
+SEMANTIC_ROLE2ID      = {x: i for i, x in enumerate(SEMANTIC_ROLE_LABELS)}
+ID2SEMANTIC_ROLE      = {i: x for x, i in SEMANTIC_ROLE2ID.items()}
+NUM_SEMANTIC_ROLE     = len(SEMANTIC_ROLE_LABELS)   # = 19
+SEMANTIC_ROLE_NONE_ID = SEMANTIC_ROLE2ID["NONE"]    # = 18
+
+# Sentinel pour les spans non supervisés (OBLIQUE_UNRESOLVED ou spans syntaxiques)
+SEMANTIC_ROLE_SKIP_ID = NUM_SEMANTIC_ROLE           # = 19  (hors range actif)
+
+# Sous-groupes utiles pour le scoring et le masquage de loss
+SEMANTIC_ROLE_CORE_IDS = [
+    SEMANTIC_ROLE2ID["AGENT"],
+    SEMANTIC_ROLE2ID["PATIENT"],
+    SEMANTIC_ROLE2ID["CONTENT"],
+    SEMANTIC_ROLE2ID["CAUSE"],
+    SEMANTIC_ROLE2ID["BENEFICIARY"],
+    SEMANTIC_ROLE2ID["LOCATION"],
+    SEMANTIC_ROLE2ID["TEMPORAL"],
+]
+
+
