@@ -107,3 +107,6 @@
 /train_v8.22_semrole.jsonl
 /val_v8.22_semrole.jsonl
 /test_v8.22_semrole.jsonl
+/train_v8.22_semrole_10pct.jsonl
+/val_v8.22_semrole_10pct.jsonl
+/test_v8.22_semrole_10pct.jsonl
