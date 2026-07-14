@@ -18,7 +18,7 @@ REPO_ROOT="$(cd ../.. && pwd)"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🔑  SEUL ENDROIT À CHANGER POUR UPGRADER LE DATASET
-GOLD_VERSION="${GOLD_VERSION:-v8.22_semrole}"
+GOLD_VERSION="${GOLD_VERSION:-v8.24b_deps}"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 echo "📦 Setup RunPod ${GOLD_VERSION} — $(date)"
