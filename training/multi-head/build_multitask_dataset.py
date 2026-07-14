@@ -54,6 +54,12 @@ _NER_HUMAN      = {"hint_person_name","hint_person_role","hint_norp","hint_group
                    "hint_inst_name","hint_inst_role","hint_org_name"}
 _CC = {"Communication","Cognition"}
 _CA = {"Causality","State_Change","Conflict"}
+# Extension causale pour SUBJECT : au-delà des event_nominal/named/state, une loi,
+# une infrastructure ou une maladie peut aussi être la CAUSE grammaticale d'un
+# verbe causatif ("la loi a mis fin à...", "l'échangeur a provoqué...",
+# "l'ostéoporose fragilise..."). Sans cette extension, ces sujets inanimés
+# retombaient par défaut sur AGENT malgré un verb_family clairement causal.
+_NER_CAUSAL_SUBJ = _NER_EVENT | {"hint_law", "hint_infra", "hint_disease", "hint_doctrine"}
 
 def _map_semantic_role_id(svo_role: str | None, hint: str | None,
                           verb_family: str | None, voice: str | None) -> int:
@@ -74,7 +80,7 @@ def _map_semantic_role_id(svo_role: str | None, hint: str | None,
     if svo_role == "SUBJECT":
         if vc == "passive": return SEMANTIC_ROLE2ID["PATIENT"]
         if h in _NER_TIME: return SEMANTIC_ROLE2ID["TEMPORAL"]
-        if h in _NER_EVENT and vf in _CA: return SEMANTIC_ROLE2ID["CAUSE"]
+        if h in _NER_CAUSAL_SUBJ and vf in _CA: return SEMANTIC_ROLE2ID["CAUSE"]
         return SEMANTIC_ROLE2ID["AGENT"]
     if svo_role == "OBJECT":
         if h in _NER_TIME:    return SEMANTIC_ROLE2ID["TEMPORAL"]
@@ -92,6 +98,7 @@ def _map_semantic_role_id(svo_role: str | None, hint: str | None,
         if h in _NER_DOMAIN:  return SEMANTIC_ROLE2ID["DOMAIN"]
         if h in _NER_WORK:    return SEMANTIC_ROLE2ID["CONTENT"] if vf in _CC else SEMANTIC_ROLE2ID["SOURCE"]
         if h in _NER_EVENT:
+            if vf == "Temporal": return SEMANTIC_ROLE2ID["TEMPORAL"]
             if vf in _CA | {"Conflict"}: return SEMANTIC_ROLE2ID["CAUSE"]
             if vf in _CC: return SEMANTIC_ROLE2ID["CONTENT"]
             return SEMANTIC_ROLE2ID["CAUSE"]
@@ -124,6 +131,57 @@ def _map_semantic_role_id(svo_role: str | None, hint: str | None,
             return SEMANTIC_ROLE_SKIP_ID   # OBLIQUE_UNRESOLVED → non supervisé
         return SEMANTIC_ROLE_SKIP_ID       # tout le reste → non supervisé
     return SEMANTIC_ROLE_NONE_ID
+
+# ─── Fallback nominal : spans sans gouverneur verbal, régis par une relation ──
+# nominale (nominal_parent_start / nominal_relation, v8.22). Exemple : dans
+# "le budget de la santé", "santé" n'a pas de svo_role/gov_verb (pas de verbe),
+# seulement une relation NMOD vers "budget" → sans ce fallback il retombait
+# systématiquement à SEMANTIC_ROLE_NONE_ID au lieu d'un rôle exploitable.
+_NOMINAL_RELATION_TO_SEMANTIC = {
+    "APPOS":  "IDENTITY",
+    "POSS":   "OWNER",
+    "SOURCE": "SOURCE",
+    "MEDIUM": "SOURCE",
+    "LOC":    "LOCATION",
+    "TIME":   "TEMPORAL",
+}
+
+def _map_semantic_role_from_nominal(nominal_relation: str | None, hint: str | None,
+                                     parent_label: str | None = None,
+                                     parent_end: int | None = None,
+                                     child_end: int | None = None) -> int:
+    """Rôle sémantique dérivé de la relation nominale parent→enfant (pas de verbe).
+    Ne s'applique qu'en fallback, quand le mapper SVO principal n'a rien trouvé
+    (span sans gov_verb_start, donc pas d'AGENT/PATIENT/etc. dérivable d'un verbe).
+    """
+    if not nominal_relation:
+        return SEMANTIC_ROLE_NONE_ID
+    if nominal_relation in _NOMINAL_RELATION_TO_SEMANTIC:
+        return SEMANTIC_ROLE2ID[_NOMINAL_RELATION_TO_SEMANTIC[nominal_relation]]
+    if nominal_relation == "NMOD":
+        h = hint or ""
+        if h in _NER_TIME:   return SEMANTIC_ROLE2ID["TEMPORAL"]
+        if h in _NER_LOC:    return SEMANTIC_ROLE2ID["LOCATION"]
+        if h in _NER_DOMAIN: return SEMANTIC_ROLE2ID["DOMAIN"]
+        if h in _NER_ORG:
+            # PART_OF suppose deux entités DISTINCTES (ex: "la filiale de Google").
+            # Mais si parent/enfant partagent le même label, ou si l'enfant se
+            # termine exactement là où finit le parent (suffixe d'un nom composé,
+            # ex: "ministère des Transports" / "Transports"), il s'agit très
+            # probablement de la MÊME entité redécoupée en granularités
+            # différentes → DOMAIN (son domaine de compétence) plutôt que PART_OF.
+            same_label = parent_label is not None and parent_label == h
+            same_end   = (
+                parent_end is not None and child_end is not None
+                and parent_end == child_end
+            )
+            if same_label or same_end:
+                return SEMANTIC_ROLE2ID["DOMAIN"]
+            return SEMANTIC_ROLE2ID["PART_OF"]
+        return SEMANTIC_ROLE2ID["DOMAIN"]   # complément du nom générique
+    # AMOD (adjectif), COMPOUND (même entité éclatée), MISC : pas de rôle
+    # sémantique propre à superviser ici → laisse SKIP (non supervisé).
+    return SEMANTIC_ROLE_SKIP_ID
 
 def load_jsonl(path: str):
     with open(path, "r", encoding="utf-8") as f:
@@ -245,6 +303,22 @@ def build_gold_candidates(row, tokenizer):
     gold_token_spans = []
     gold_char_spans = set()
 
+    # Index verb_trigger.start -> voice — permet de résoudre gov_verb_voice pour
+    # le mapper sémantique (cf. _map_semantic_role_id, règle SUBJECT+passive→PATIENT).
+    # Sans cet index, gov_verb_voice restait toujours None et cette règle ne se
+    # déclenchait jamais (bug constaté empiriquement sur des sujets passifs mappés AGENT).
+    verb_voice_by_start = {
+        s["start"]: s.get("voice")
+        for s in row.get("spans", [])
+        if s.get("label") == "verb_trigger"
+    }
+
+    # Index start -> span, pour résoudre le label/end du parent nominal
+    # (cf. _map_semantic_role_from_nominal, distinction PART_OF vs DOMAIN).
+    span_by_start: dict[int, dict] = {}
+    for s in row.get("spans", []):
+        span_by_start.setdefault(s["start"], s)
+
     for sp in row.get("spans", []):
         label = sp["label"]
         start = sp["start"]
@@ -351,8 +425,28 @@ def build_gold_candidates(row, tokenizer):
         # Il sera disponible si le dataset contient des verb_trigger annotés avec verb_family.
         # Sinon → SEMANTIC_ROLE_SKIP_ID (non supervisé, résolu au preprocessing)
         gov_verb_family = sp.get("gov_verb_family")   # champ ajouté par build_v822_semrole.py
-        gov_verb_voice  = None  # rempli ci-dessous depuis le verb_trigger parent si disponible
+        gvs_lookup = sp.get("gov_verb_start")
+        # Résolu via l'index verb_voice_by_start construit en tête de fonction
+        # (avant ce fix : toujours None → règle SUBJECT+passive→PATIENT jamais déclenchée)
+        gov_verb_voice = verb_voice_by_start.get(gvs_lookup) if gvs_lookup is not None else None
         semantic_role_id = _map_semantic_role_id(svo_role_str, label, gov_verb_family, gov_verb_voice)
+        # Fallback/override nominal : un span emboîté dans un span parent nominal
+        # annoté (nominal_parent_start/nominal_relation, v8.22) hérite souvent d'un
+        # svo_role de son parent (SUBJECT/OBJECT...) qui ne reflète PAS son propre
+        # rôle sémantique — ex: "santé" dans "le budget de la santé" (NMOD de
+        # "budget", pas de verbe propre). La relation nominale PRIME donc sur le
+        # rôle verbal hérité dès qu'elle est annotée (cohérent avec
+        # annotate_nominal_parents.py, qui applique la même priorité en amont).
+        nom_rel_str = sp.get("nominal_relation")
+        if nom_rel_str:
+            nps_lookup = sp.get("nominal_parent_start")
+            parent_sp = span_by_start.get(nps_lookup) if nps_lookup is not None else None
+            semantic_role_id = _map_semantic_role_from_nominal(
+                nom_rel_str, label,
+                parent_label=parent_sp.get("label") if parent_sp else None,
+                parent_end=parent_sp.get("end") if parent_sp else None,
+                child_end=sp.get("end"),
+            )
         # Si le dataset porte déjà semantic_role (v8.22+), l'utiliser directement
         if "semantic_role" in sp:
             sr_str = sp["semantic_role"]

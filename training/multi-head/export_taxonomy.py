@@ -370,7 +370,7 @@ When changing taxonomy:
 2. Run:
 
 ```zsh
-cd pimpmyrag
+cd /Users/simon_longuet/IdeaProjects/pimpmyrag
 source training/multi-head/venv/bin/activate
 python3 training/multi-head/export_taxonomy.py
 ```

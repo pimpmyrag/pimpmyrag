@@ -32,7 +32,9 @@ from labels import (
     SYN_LABELS, NUM_SYN,
     NUM_VOICE, NUM_CERTAINTY, CERTAINTY_LABELS, NUM_GENDER, NUM_NUMBER, NUM_PERSON,
     ROLE_COARSE_LABELS, NUM_ROLE_COARSE, ROLE_COARSE_NONE_ID, ROLE_COARSE_OTHER_ID,
-    ROLE_OBLIQUE_LABELS, NUM_ROLE_OBLIQUE, SEMANTIC_ROLE_SKIP_ID,
+    SEMANTIC_ROLE_LABELS, NUM_SEMANTIC_ROLE, SEMANTIC_ROLE_NONE_ID,
+    SEMANTIC_ROLE_SKIP_ID,
+    # ROLE_OBLIQUE_LABELS / NUM_ROLE_OBLIQUE non importés ici — seule la tête heads/semantic_role.py les utilise
     ROLE_LABELS, NUM_ROLE, ROLE_NONE_ID,    # ancienne tête (12 labels)
     ROLE_COARSE2ID,
     PERSON_LABELS,
@@ -48,26 +50,12 @@ from labels import (
 )
 
 
-_JSONL_SCALAR_METRICS = {
+_GENERIC_JSONL_METRICS = {
+    # Métriques génériques d'epoch (pas propres à une tête particulière).
+    # Les métriques PAR TÊTE (F1, acc...) sont dumpées via `head.dump_metrics()`
+    # (cf. package `heads/`, un fichier par tête, chacune implémentant l'interface
+    # `Head.dump_metrics`).
     "loss": "loss",
-    "boundary_f1": "boundary_f1",
-    "coarse_macro_f1": "coarse_f1",
-    "fine_macro_f1": "fine_f1",
-    "fine_concrete_f1": "fine_concrete_f1",
-    "fine_abstract_f1": "fine_abstract_f1",
-    "svo_boundary_f1": "svo_boundary_f1",
-    "role_macro_f1": "role_f1",
-    "role_coarse_macro_f1": "role_coarse_f1",
-    "role_coarse_from_role_macro_f1": "role_coarse_from_role_f1",
-    "semantic_role_macro_f1": "semantic_role_f1",
-    "semantic_role_cascaded_macro_f1": "semantic_role_cascaded_f1",
-    "voice_macro_f1": "voice_f1",
-    "certainty_macro_f1": "certainty_f1",
-    "gender_macro_f1": "gender_f1",
-    "number_macro_f1": "number_f1",
-    "person_macro_f1": "person_f1",
-    "verb_ptr_acc": "verb_ptr_acc",
-    "verb_ptr_n": "verb_ptr_n",
     "num_batches": "num_batches",
     "num_samples": "num_samples",
     "num_candidates": "num_candidates",
@@ -75,11 +63,6 @@ _JSONL_SCALAR_METRICS = {
     "samples_per_s": "samples_per_s",
     "candidates_per_s": "candidates_per_s",
     "tokens_per_s": "tokens_per_s",
-    "verb_family_macro_f1": "verb_family_f1",
-    "verb_family_fine_macro_f1": "verb_family_fine_f1",
-    "verb_polarity_macro_f1": "verb_polarity_f1",
-    "verb_aspect_macro_f1": "verb_aspect_f1",
-    "verb_source_macro_f1": "verb_source_f1",
 }
 
 
@@ -93,12 +76,19 @@ def _json_safe_scalar(value):
     return value
 
 
-def _compact_metrics(metrics: dict) -> dict:
-    """Ne garde que les scalaires utiles : pas de reports texte, pas de confusions détaillées."""
+def _compact_metrics(metrics: dict, heads: dict | None = None) -> dict:
+    """Ne garde que les scalaires utiles : pas de reports texte, pas de confusions détaillées.
+
+    Combine les métriques génériques (`_GENERIC_JSONL_METRICS`) avec le dump JSONL
+    de chaque tête (`Head.dump_metrics`, cf. package `heads/`)."""
     compact = {}
-    for src_key, dst_key in _JSONL_SCALAR_METRICS.items():
+    for src_key, dst_key in _GENERIC_JSONL_METRICS.items():
         if src_key in metrics:
             compact[dst_key] = _json_safe_scalar(metrics[src_key])
+    if heads:
+        for head in heads.values():
+            for dst_key, value in head.dump_metrics(metrics).items():
+                compact[dst_key] = _json_safe_scalar(value)
     return compact
 
 
@@ -182,101 +172,8 @@ class ModelEMA:
         return self.shadow
 
 
-def build_fine_diagnostics(y_true, y_pred, split_name: str | None = None) -> dict:
-    """Construit des diagnostics fins légers et exportables.
-
-    - inclut un bucket `INVALID_COARSE` pour les prédictions fine = -1
-    - exporte une matrice sparse CSV et un résumé JSON si `split_name` est fourni
-    """
-    if not y_true:
-        return {
-            "fine_support_positive": 0,
-            "fine_top_confusions": [],
-            "fine_hard_labels": [],
-        }
-
-    label_names = list(FINE_LABELS) + ["INVALID_COARSE"]
-    label_ids = list(range(len(FINE_LABELS))) + [-1]
-    label_to_name = {i: n for i, n in zip(label_ids, label_names)}
-
-    conf = {(t, p): 0 for t in label_ids for p in label_ids}
-    support = Counter(y_true)
-    for yt, yp in zip(y_true, y_pred):
-        if yt not in label_to_name:
-            continue
-        pred_key = yp if yp in label_to_name else -1
-        conf[(yt, pred_key)] += 1
-
-    top_confusions = []
-    for (yt, yp), count in conf.items():
-        if count <= 0 or yt == yp:
-            continue
-        row_total = sum(conf[(yt, p)] for p in label_ids)
-        top_confusions.append({
-            "true_id": yt,
-            "true_label": label_to_name[yt],
-            "pred_id": yp,
-            "pred_label": label_to_name[yp],
-            "count": count,
-            "row_pct": round(count / max(1, row_total), 4),
-            "support": row_total,
-        })
-    top_confusions.sort(key=lambda x: (-x["count"], -x["row_pct"], x["true_label"], x["pred_label"]))
-
-    hard_labels = []
-    for label_id, label_name in enumerate(FINE_LABELS):
-        row_total = sum(conf[(label_id, p)] for p in label_ids)
-        if row_total <= 0:
-            continue
-        best_offdiag = max((conf[(label_id, p)], label_to_name[p]) for p in label_ids if p != label_id)
-        tp = conf[(label_id, label_id)]
-        recall = tp / row_total
-        hard_labels.append({
-            "label": label_name,
-            "support": row_total,
-            "recall": round(recall, 4),
-            "top_confused_with": best_offdiag[1],
-            "top_confused_count": best_offdiag[0],
-        })
-    hard_labels.sort(key=lambda x: (x["recall"], -x["support"], x["label"]))
-
-    if split_name:
-        sparse_rows = [
-            {
-                "true_label": label_to_name[yt],
-                "pred_label": label_to_name[yp],
-                "count": count,
-            }
-            for (yt, yp), count in conf.items() if count > 0
-        ]
-        csv_path = f"fine_confusion_{split_name}.csv"
-        json_path = f"fine_diagnostics_{split_name}.json"
-        with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["true_label", "pred_label", "count"])
-            writer.writeheader()
-            writer.writerows(sparse_rows)
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "split": split_name,
-                    "top_confusions": top_confusions[:30],
-                    "hard_labels": hard_labels[:20],
-                },
-                f,
-                ensure_ascii=False,
-                indent=2,
-            )
-    else:
-        csv_path = None
-        json_path = None
-
-    return {
-        "fine_support_positive": len(y_true),
-        "fine_top_confusions": top_confusions[:20],
-        "fine_hard_labels": hard_labels[:12],
-        "fine_confusion_csv": csv_path,
-        "fine_diagnostics_json": json_path,
-    }
+# NOTE : `build_fine_diagnostics` a été déplacé dans `heads/fine.py`
+# (FineHead encapsule désormais sa propre logique de métriques/diagnostics).
 
 
 # ──────────────────────────────────────────────────────────
@@ -344,13 +241,13 @@ def get_layerwise_param_groups(model, base_lr: float, head_lr: float, decay: flo
 def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
     """
     Calcule des poids de classes à partir du dataset multitask enrichi.
-    Retourne weights pour boundary, coarse, fine, certainty, semantic_role, role_coarse.
+    Retourne weights pour boundary, coarse, fine, certainty, semantic_role (19 labels), role_coarse.
     """
     boundary_counts = Counter()
     coarse_counts = Counter()
     fine_counts = Counter()
     certainty_counts = Counter()
-    oblique_counts = Counter()
+    semantic_role_counts = Counter()   # 19 labels AGENT/PATIENT/… (remplace oblique_counts)
     role_coarse_counts = Counter()
     verb_family_counts = Counter()
     verb_polarity_counts = Counter()
@@ -367,9 +264,10 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
                 cert_id = c.get("certainty_label_id", -1)
                 if cert_id >= 0:
                     certainty_counts[cert_id] += 1
-                obl_id = c.get("semantic_role_label_id", SEMANTIC_ROLE_SKIP_ID)
-                if obl_id < SEMANTIC_ROLE_SKIP_ID:
-                    oblique_counts[obl_id] += 1
+                # semantic_role : 19 labels (AGENT/PATIENT/… NONE=18, SKIP=19)
+                sr_id = c.get("semantic_role_label_id", SEMANTIC_ROLE_SKIP_ID)
+                if sr_id < SEMANTIC_ROLE_SKIP_ID:
+                    semantic_role_counts[sr_id] += 1
                 # role_coarse : compter seulement les vrais rôles (SUBJ/OBJ/OBLIQ/APPOS)
                 # OTHER(4) et NONE_ID(5) exclus du gradient → pas dans les weights
                 rc_id = c.get("role_coarse_label_id", ROLE_COARSE_NONE_ID)
@@ -399,8 +297,6 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
             if n_i > 0:
                 inv_freq = total / (num_classes * n_i)
                 w = float(inv_freq) ** float(power)
-                # Plafond avant normalisation : évite que classes ultra-rares gonflent
-                # la moyenne et écrasent les classes fréquentes (OBL_TIME/OBL_LOC)
                 if max_weight is not None:
                     w = min(w, float(max_weight))
                 weights[i] = w
@@ -410,32 +306,22 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
         return weights
 
     # role_coarse : inverse-frequency weights (power=0.5) pour SUBJ/OBJ/OBLIQ/APPOS.
-    # Raisonnement précédent (power=0.0 "égaux") était INCORRECT :
-    #   → OBLIQ est majoritaire (~60%), SUBJ minoritaire (~15%)
-    #   → avec power=0 : même poids mais beaucoup plus d'exemples OBLIQ → gradients OBLIQ dominent
-    #   → SUBJ s'effondre à F1=0.000 dès ep2 (observé sur run lq2bhpko)
-    # Avec power=0.5 : SUBJ reçoit un poids plus élevé → signal équilibré → SUBJ apprend.
-    # max_weight=5.0 : plus permissif que verbfam car 4 classes seulement (moins de risque de déséquilibre)
-    # OTHER(4) reçoit poids=1.0 (neutre, présent dans softmax mais exclu du gradient)
     rc_w = make_weights(role_coarse_counts, ROLE_COARSE_OTHER_ID, power=min(power, 0.5), max_weight=5.0)
     rc_w_full = torch.ones(NUM_ROLE_COARSE, dtype=torch.float32)
     rc_w_full[:ROLE_COARSE_OTHER_ID] = rc_w  # indices 0-3 = SUBJ/OBJ/OBLIQ/APPOS
-    # index 4 (OTHER) = 1.0 neutre (exclu du gradient de toute façon)
+
+    # semantic_role : 19 labels — max_weight=3.0 pour éviter que les rôles rares
+    # (COMITATIVE, ADVERSARY, INSTRUMENT ~0.5-1%) écrasent les rôles fréquents
+    # (AGENT ~30%, PATIENT ~20%) après normalisation.
+    semantic_role_w = make_weights(semantic_role_counts, NUM_SEMANTIC_ROLE, power=power, max_weight=3.0)
 
     return (
         make_weights(boundary_counts, 2, power=power),
         make_weights(coarse_counts, len(COARSE_LABELS), power=0.0),
         make_weights(fine_counts, len(FINE_LABELS), power=power),
         make_weights(certainty_counts, NUM_CERTAINTY, power=power),
-        # max_weight=3.0 : plafonne les classes ultra-rares (OBL_COMITATIVE ~0.7%, weight brut ~15x)
-        # avant normalisation par la moyenne — sans ce plafond, OBL_TIME/OBL_LOC (16%/25%)
-        # obtiennent weight_final < 0.1 (quasi éliminés) car la moyenne est gonflée par les rares.
-        make_weights(oblique_counts, NUM_ROLE_OBLIQUE, power=power, max_weight=3.0),
+        semantic_role_w,   # remplace oblique_w
         rc_w_full,
-        # verbfam class weights — power=0.5 + max_weight=5.0
-        # span_h SANS detach() désormais → DeBERTa s'adapte → class weights plus critiques.
-        # max_weight=5.0 (vs 3.0 avant) pour mieux compenser classes ultra-rares (Conflict ~2%)
-        # sans écraser les classes fréquentes (State_Change ~26%).
         make_weights(verb_family_counts, NUM_VERB_FAMILY, power=min(power, 0.5), max_weight=5.0),
         make_weights(verb_polarity_counts, NUM_VERB_POLARITY, power=power),
         make_weights(verb_aspect_counts, NUM_VERB_ASPECT, power=min(power * 1.2, 0.7)),
@@ -444,13 +330,14 @@ def compute_class_weights_from_multitask_jsonl(path: str, power: float = 0.5):
         coarse_counts,
         fine_counts,
         certainty_counts,
-        oblique_counts,
+        semantic_role_counts,   # remplace oblique_counts
         role_coarse_counts,
         verb_family_counts,
         verb_polarity_counts,
         verb_aspect_counts,
         verb_source_counts,
     )
+
 
 
 def apply_class_weight_floor(weights: torch.Tensor, class_idx: int, min_value: float) -> torch.Tensor:
@@ -483,7 +370,7 @@ def run_epoch(
         fine_class_weights=None,
         certainty_class_weights=None,
         role_coarse_class_weights=None,
-        oblique_class_weights=None,
+        semantic_role_class_weights=None,   # 19 labels AGENT/PATIENT/u2026
         verb_family_class_weights=None,
         verb_polarity_class_weights=None,
         verb_aspect_class_weights=None,
@@ -606,44 +493,20 @@ def run_epoch(
     num_candidates_seen = 0
     num_tokens_seen = 0
 
-    all_b_true, all_b_pred = [], []
-    all_c_true, all_c_pred = [], []
-
-    # fine positive-only
-    all_f_true_pos, all_f_pred_pos = [], []
-
-    # coarse positive-only (boundary=1 uniquement pour les métriques)
-    all_c_true_pos, all_c_pred_pos = [], []
-
-    # svo_boundary
-    all_svob_true, all_svob_pred = [], []
-    # role_coarse positive-only (spans avec role_coarse != ROLE_COARSE_NONE_ID)
-    all_rc_true, all_rc_pred = [], []
-    # role_coarse dérivée depuis role_head (même mask — diagnostic comparatif)
-    all_rc_from_role_true, all_rc_from_role_pred = [], []
-    # semantic_role positive-only (spans avec semantic_role < SEMANTIC_ROLE_SKIP_ID)
-    all_ro_true, all_ro_pred = [], []
-    # semantic_role CASCADE — gate = role_coarse_from_role prédit OBLIQ (mode inférence réelle)
-    all_ro_cascaded_true, all_ro_cascaded_pred = [], []
-    # role fin (12 labels) : spans avec rôle annoté (< ROLE_NONE_ID)
-    all_role_true, all_role_pred = [], []
-    # voice positive-only (spans avec voice_label != VOICE_NONE_ID)
-    all_voice_true, all_voice_pred = [], []
-    # certainty positive-only (spans avec certainty_label != CERTAINTY_NONE_ID)
-    all_certainty_true, all_certainty_pred = [], []
-    # morpho positive-only (spans SVO actifs)
-    all_gender_true, all_gender_pred = [], []
-    all_number_true, all_number_pred = [], []
-    all_person_true, all_person_pred = [], []
-    # verb pointer : accuracy sur spans avec gov_verb_labels >= 0
-    all_ptr_true, all_ptr_pred = [], []
-
-    # VerbFam (verb_trigger uniquement)
-    all_vfam_true,      all_vfam_pred      = [], []
-    all_vfam_fine_true, all_vfam_fine_pred = [], []
-    all_vpol_true,      all_vpol_pred      = [], []
-    all_vasp_true,      all_vasp_pred      = [], []
-    all_vsrc_true,      all_vsrc_pred      = [], []
+    # ── Registre des têtes : accumulation générique (Head.collect / compute_metrics) ──
+    # Chaque tête (cf. package `heads/`) sait extraire (y_true, y_pred) d'un batch
+    # et calculer ses propres métriques finales — plus de listes all_xxx_true/pred
+    # codées en dur ici.
+    model_heads = getattr(model, "heads", None)
+    if model_heads is None:
+        raise ValueError(
+            "Le modèle n'expose pas `heads`. "
+            "Assure-toi d'utiliser la version modifiée de multi_task_model.py (package heads/)."
+        )
+    accum_true: dict = {key: [] for key in model_heads}
+    accum_pred: dict = {key: [] for key in model_heads}
+    for _h in model_heads.values():
+        _h.reset_epoch()
 
     # inline HN mining : id → list[(err_type|None, pred_coarse, pred_fine)]
     hn_results_by_id: dict[str, list] = {} if collect_hn else None
@@ -841,7 +704,7 @@ def run_epoch(
                     coarse_class_weights=coarse_class_weights,
                     fine_class_weights=fine_class_weights,
                     certainty_class_weights=certainty_class_weights,
-                    oblique_class_weights=oblique_class_weights,
+                    semantic_role_class_weights=semantic_role_class_weights,
                     role_coarse_class_weights=role_coarse_class_weights,
                     verb_family_class_weights=verb_family_class_weights,
                     verb_polarity_class_weights=verb_polarity_class_weights,
@@ -1021,117 +884,38 @@ def run_epoch(
             vsrc_true      = verb_source_labels.detach().cpu().tolist()      if verb_source_labels is not None else [VERB_SOURCE_NONE_ID] * n_all
 
 
-        # Accumulate boundary / coarse
-        all_b_true.extend(b_true)
-        all_b_pred.extend(b_pred)
-
-        all_c_true.extend(c_true)
-        all_c_pred.extend(c_pred)
-
-
-        # Coarse metrics = POSITIVE ONLY (boundary=1)
-        for bt, ct, cp in zip(b_true, c_true, c_pred):
-            if bt == 1:
-                all_c_true_pos.append(ct)
-                all_c_pred_pos.append(cp)
-
-        all_svob_true.extend(svob_true)
-        all_svob_pred.extend(svob_pred)
-
-        # Role coarse metrics = spans avec vrai rôle SVO (< ROLE_COARSE_NONE_ID, != OTHER)
-        # OTHER est dans le softmax pour cascade inférence mais exclu du training + métriques
-        for rct, rcp, rcfr in zip(role_coarse_true, role_coarse_pred_raw, role_coarse_from_role_pred_raw):
-            if 0 <= rct < ROLE_COARSE_NONE_ID and rct != ROLE_COARSE_OTHER_ID:
-                all_rc_true.append(rct)
-                all_rc_pred.append(rcp)
-                all_rc_from_role_true.append(rct)
-                all_rc_from_role_pred.append(rcfr)
-
-        # Role oblique metrics = spans COARSE-OBLIQ annotés (role_coarse_true==OBLIQ),
-        # tous sous-types inclus (OBLIQUE_GENERIC id=0 inclus — cohérence avec la loss).
-        # Conditionner sur role_coarse gold (pas sur semantic_role_true>0) évite le biais
-        # d'évaluation qui masquait 77.7% des données d'obligues.
-        _OBLIQ_RC = ROLE_COARSE2ID["OBLIQ"]
-        for rot, rop, rct in zip(semantic_role_true, semantic_role_pred_raw, role_coarse_true):
-            if rct == _OBLIQ_RC and rot >= 0 and rot < SEMANTIC_ROLE_SKIP_ID:
-                all_ro_true.append(rot)
-                all_ro_pred.append(rop)
-
-        # Role oblique CASCADE — gate = role_coarse_from_role prédit OBLIQ
-        # Simule l'inférence réelle : un span reçoit semantic_role seulement si prédit OBLIQ par la dérivée
-        for rot, rop, rcfr in zip(semantic_role_true, semantic_role_pred_raw, role_coarse_from_role_pred_raw):
-            if rcfr == _OBLIQ_RC and rot >= 0 and rot < SEMANTIC_ROLE_SKIP_ID:
-                all_ro_cascaded_true.append(rot)
-                all_ro_cascaded_pred.append(rop)
-
-        # Role fin (12 labels) : spans avec rôle annoté (!= NONE = 6)
-        # NOTE : NONE est à l'index 6 (pas en fin) → on ne peut pas utiliser < ROLE_NONE_ID
-        # car cela exclurait les obliques étendues 7-11
-        for rt, rp in zip(role_true, role_pred_raw):
-            if rt >= 0 and rt != ROLE_NONE_ID:
-                all_role_true.append(rt)
-                all_role_pred.append(rp)
-
-        # Fine metrics = POSITIVE ONLY
-        for bt, ft, fp in zip(b_true, f_true, f_pred):
-            if bt == 1:
-                all_f_true_pos.append(ft)
-                all_f_pred_pos.append(fp)
-
-        # SVO role metrics = spans avec rôle annoté (role != NONE, inclut obliques étendus 7-11)
-        for vt, vp in zip(voice_true, voice_pred_raw):
-            if vt < NUM_VOICE:
-                all_voice_true.append(vt)
-                all_voice_pred.append(vp)
-        # Certainty : spans avec certainty annoté (label != CERTAINTY_NONE_ID)
-        for ct, cp in zip(certainty_true, certainty_pred_raw):
-            if ct < NUM_CERTAINTY:
-                all_certainty_true.append(ct)
-                all_certainty_pred.append(cp)
-        # Morpho : sur spans avec gender/number/person annotés
-        for rt, gt, gp, nt, np_, pt, pp in zip(
-            role_coarse_true, gender_true, gender_pred_raw,
-            number_true, number_pred_raw,
-            person_true, person_pred_raw
-        ):
-            if gt < NUM_GENDER:
-                all_gender_true.append(gt)
-                all_gender_pred.append(gp)
-            if nt < NUM_NUMBER:
-                all_number_true.append(nt)
-                all_number_pred.append(np_)
-            if pt < NUM_PERSON:
-                all_person_true.append(pt)
-                all_person_pred.append(pp)
-
-        # verb pointer accuracy : spans avec gov_verb_labels >= 0
-        seq_len_ptr = vptr_logits_cpu.size(1)
-        for gvt, gvp in zip(gov_verb_true, ptr_pred_raw):
-            if gvt >= 0 and gvt < seq_len_ptr:
-                all_ptr_true.append(gvt)
-                all_ptr_pred.append(gvp)
-
-        # VerbFam : seulement les verb_trigger annotés (label < sentinel)
-        for vft, vfp in zip(vfam_true, vfam_pred_raw):
-            if vft < VERB_FAMILY_NONE_ID:
-                all_vfam_true.append(vft)
-                all_vfam_pred.append(vfp)
-        for vft, vfp in zip(vfam_fine_true, vfam_fine_pred_raw):
-            if vft < VERB_FAMILY_FINE_NONE_ID:
-                all_vfam_fine_true.append(vft)
-                all_vfam_fine_pred.append(vfp)
-        for vpt, vpp in zip(vpol_true, vpol_pred_raw):
-            if vpt < VERB_POLARITY_NONE_ID:
-                all_vpol_true.append(vpt)
-                all_vpol_pred.append(vpp)
-        for vat, vap in zip(vasp_true, vasp_pred_raw):
-            if vat < VERB_ASPECT_NONE_ID:
-                all_vasp_true.append(vat)
-                all_vasp_pred.append(vap)
-        for vst, vsp in zip(vsrc_true, vsrc_pred_raw):
-            if vst < VERB_SOURCE_NONE_ID:
-                all_vsrc_true.append(vst)
-                all_vsrc_pred.append(vsp)
+        # ── Accumulation générique via le registre des têtes ─────────────────
+        # Chaque tête (heads/*.py) sait extraire ses propres (y_true, y_pred)
+        # à partir de `outputs` + labels du batch (cf. Head.collect).
+        batch_labels = {
+            "boundary_labels":          boundary_labels,
+            "coarse_labels":            coarse_labels,
+            "fine_labels":              fine_labels,
+            "svo_boundary_labels":      svo_boundary_labels,
+            "syn_labels":               syn_labels,
+            "role_coarse_labels":       role_coarse_labels,
+            "semantic_role_labels":     semantic_role_labels,
+            "role_labels":              role_labels,
+            "voice_labels":             voice_labels,
+            "certainty_labels":         certainty_labels,
+            "gender_labels":            gender_labels,
+            "number_labels":            number_labels,
+            "person_labels":            person_labels,
+            "gov_verb_labels":          gov_verb_labels,
+            "verb_family_labels":       verb_family_labels,
+            "verb_family_fine_labels":  verb_family_fine_labels,
+            "verb_polarity_labels":     verb_polarity_labels,
+            "verb_aspect_labels":       verb_aspect_labels,
+            "verb_source_labels":       verb_source_labels,
+        }
+        _head_context: dict = {}
+        for _key, _head in model_heads.items():
+            _t, _p = _head.collect(outputs, batch_labels, span_indices, context=_head_context)
+            accum_true[_key].extend(_t)
+            accum_pred[_key].extend(_p)
+            if _key == "boundary":
+                # boundary_true est nécessaire aux têtes coarse/fine (métriques positive-only)
+                _head_context["boundary_true"] = _t
 
         # ── Inline HN mining : collecter erreurs par candidat ────────────────
         if collect_hn:
@@ -1206,183 +990,24 @@ def run_epoch(
         "samples_per_s": num_samples / elapsed_s,
         "candidates_per_s": num_candidates_seen / elapsed_s,
         "tokens_per_s": num_tokens_seen / elapsed_s,
-        "boundary_f1": safe_macro_f1_local(all_b_true, all_b_pred),
-        "coarse_macro_f1": safe_macro_f1_local(
-            all_c_true_pos,
-            all_c_pred_pos,
-            labels=list(range(len(COARSE_LABELS) - 1))  # excl. NONE
-        ),
-        # Fine : macro sur classes PRÉSENTES seulement (v8.1 a retiré des labels rares
-        # comme hint_measure/-1901, hint_object_generic/-321 → leur absence ferait F1=0
-        # et diluerait le macro sur 38 classes)
-        "fine_macro_f1": safe_macro_f1_local(
-            all_f_true_pos,
-            all_f_pred_pos,
-            labels=[l for l in range(len(FINE_LABELS)) if l in set(all_f_true_pos)]
-        ),
-        # Fine split : CONCRETE (entités nommées prototypiques) vs ABSTRACT (génériques/notions)
-        # Permet de diagnostiquer : le modèle maîtrise-t-il les NER classiques mais peine sur
-        # les labels abstraits (doctrine, state, notion, group_role, loc_generic…) ?
-        "fine_concrete_f1": safe_macro_f1_local(
-            [l for l in all_f_true_pos if l in FINE_CONCRETE_IDS],
-            [p for l, p in zip(all_f_true_pos, all_f_pred_pos) if l in FINE_CONCRETE_IDS],
-            labels=[l for l in FINE_CONCRETE_IDS if l in set(all_f_true_pos)]
-        ) if any(l in FINE_CONCRETE_IDS for l in all_f_true_pos) else 0.0,
-        "fine_abstract_f1": safe_macro_f1_local(
-            [l for l in all_f_true_pos if l in FINE_ABSTRACT_IDS],
-            [p for l, p in zip(all_f_true_pos, all_f_pred_pos) if l in FINE_ABSTRACT_IDS],
-            labels=[l for l in FINE_ABSTRACT_IDS if l in set(all_f_true_pos)]
-        ) if any(l in FINE_ABSTRACT_IDS for l in all_f_true_pos) else 0.0,
-        "svo_boundary_f1": safe_macro_f1_local(all_svob_true, all_svob_pred),
-        "role_coarse_macro_f1": safe_macro_f1_local(
-            all_rc_true, all_rc_pred,
-            labels=[l for l in range(NUM_ROLE_COARSE) if l in set(all_rc_true)]
-        ) if all_rc_true else 0.0,
-        # coarse dérivée depuis role_head — même mask, diagnostic comparatif
-        "role_coarse_from_role_macro_f1": safe_macro_f1_local(
-            all_rc_from_role_true, all_rc_from_role_pred,
-            labels=[l for l in range(4) if l in set(all_rc_from_role_true)]
-        ) if all_rc_from_role_true else 0.0,
-        "semantic_role_macro_f1": safe_macro_f1_local(
-            all_ro_true, all_ro_pred,
-            labels=[l for l in range(NUM_ROLE_OBLIQUE) if l in set(all_ro_true)]
-        ) if all_ro_true else 0.0,
-        # semantic_role CASCADE — gate = role_coarse_from_role prédit OBLIQ (mode inférence réelle)
-        # Mesure la précision de semantic_role_head sur les spans correctement gatés par la dérivée
-        "semantic_role_cascaded_macro_f1": safe_macro_f1_local(
-            all_ro_cascaded_true, all_ro_cascaded_pred,
-            labels=[l for l in range(NUM_ROLE_OBLIQUE) if l in set(all_ro_cascaded_true)]
-        ) if all_ro_cascaded_true else 0.0,
-        # role fin (12 labels) : spans avec rôle annoté (< ROLE_NONE_ID)
-        "role_macro_f1": safe_macro_f1_local(
-            all_role_true, all_role_pred,
-            labels=[l for l in range(NUM_ROLE) if l in set(all_role_true)]
-        ) if all_role_true else 0.0,
-        "voice_macro_f1": safe_macro_f1_local(all_voice_true, all_voice_pred) if all_voice_true else 0.0,
-        "certainty_macro_f1": safe_macro_f1_local(
-            all_certainty_true, all_certainty_pred,
-            labels=[l for l in range(NUM_CERTAINTY) if l in set(all_certainty_true)]
-        ) if all_certainty_true else 0.0,
-        # Morpho : seulement les classes PRÉSENTES dans les vrais labels
-        # (ex: N/neutre n'existe jamais dans les données → l'inclure donnerait F1_N=0
-        #  et diluerait le macro de 1/3)
-        "gender_macro_f1": safe_macro_f1_local(
-            all_gender_true, all_gender_pred,
-            labels=[l for l in range(NUM_GENDER) if l in set(all_gender_true)]
-        ) if all_gender_true else 0.0,
-        "number_macro_f1": safe_macro_f1_local(
-            all_number_true, all_number_pred,
-            labels=[l for l in range(NUM_NUMBER) if l in set(all_number_true)]
-        ) if all_number_true else 0.0,
-        "person_macro_f1": safe_macro_f1_local(
-            all_person_true, all_person_pred,
-            labels=[l for l in range(NUM_PERSON) if l in set(all_person_true)]
-        ) if all_person_true else 0.0,
-        # verb pointer : accuracy (exact token match)
-        "verb_ptr_acc": (
-            sum(t == p for t, p in zip(all_ptr_true, all_ptr_pred)) / len(all_ptr_true)
-            if all_ptr_true else 0.0
-        ),
-        "verb_ptr_n": len(all_ptr_true),
-        # VerbFam heads (verb_trigger uniquement)
-        "verb_family_macro_f1": safe_macro_f1_local(
-            all_vfam_true, all_vfam_pred,
-            labels=[l for l in range(NUM_VERB_FAMILY) if l in set(all_vfam_true)]
-        ) if all_vfam_true else 0.0,
-        "verb_family_fine_macro_f1": safe_macro_f1_local(
-            all_vfam_fine_true, all_vfam_fine_pred,
-            labels=[l for l in range(NUM_VERB_FAMILY_FINE) if l in set(all_vfam_fine_true)]
-        ) if all_vfam_fine_true else 0.0,
-        "verb_polarity_macro_f1": safe_macro_f1_local(
-            all_vpol_true, all_vpol_pred,
-            labels=[l for l in range(NUM_VERB_POLARITY) if l in set(all_vpol_true)]
-        ) if all_vpol_true else 0.0,
-        "verb_aspect_macro_f1": safe_macro_f1_local(
-            all_vasp_true, all_vasp_pred,
-            labels=[l for l in range(NUM_VERB_ASPECT) if l in set(all_vasp_true)]
-        ) if all_vasp_true else 0.0,
-        "verb_source_macro_f1": safe_macro_f1_local(
-            all_vsrc_true, all_vsrc_pred,
-            labels=[l for l in range(NUM_VERB_SOURCE) if l in set(all_vsrc_true)]
-        ) if all_vsrc_true else 0.0,
-        "boundary_report": classification_report(
-            all_b_true, all_b_pred, digits=3, zero_division=0
-        ) if all_b_true else "N/A",
-        "coarse_report": classification_report(
-            all_c_true_pos, all_c_pred_pos,
-            labels=list(range(len(COARSE_LABELS) - 1)),
-            target_names=COARSE_LABELS[:-1], digits=3, zero_division=0
-        ) if all_c_true_pos else "N/A",
-        "fine_report": classification_report(
-            all_f_true_pos, all_f_pred_pos,
-            labels=list(range(len(FINE_LABELS))),
-            target_names=FINE_LABELS, digits=3, zero_division=0
-        ) if all_f_true_pos else "N/A",
-        # svo_boundary : tête binaire VERB / non-VERB (verb_trigger + pron vs tout le reste)
-        "svo_boundary_report": classification_report(
-            all_svob_true, all_svob_pred,
-            labels=[0, 1], target_names=["non_verb", "verb_trigger"],
-            digits=3, zero_division=0
-        ) if all_svob_true else "N/A",
-        # role_coarse : SUBJ/OBJ/OBLIQ/APPOS
-        "role_coarse_report": classification_report(
-            all_rc_true, all_rc_pred,
-            labels=[l for l in range(NUM_ROLE_COARSE) if l != ROLE_COARSE_NONE_ID and l in set(all_rc_true)],
-            target_names=[ROLE_COARSE_LABELS[l] for l in range(NUM_ROLE_COARSE) if l != ROLE_COARSE_NONE_ID and l in set(all_rc_true)],
-            digits=3, zero_division=0
-        ) if all_rc_true else "N/A",
-        # semantic_role : sous-types OBLIQUE (NONE exclu)
-        "semantic_role_report": classification_report(
-            all_ro_true, all_ro_pred,
-            labels=[l for l in range(NUM_ROLE_OBLIQUE) if l != SEMANTIC_ROLE_SKIP_ID and l in set(all_ro_true)],
-            target_names=[ROLE_OBLIQUE_LABELS[l] for l in range(NUM_ROLE_OBLIQUE) if l != SEMANTIC_ROLE_SKIP_ID and l in set(all_ro_true)],
-            digits=3, zero_division=0
-        ) if all_ro_true else "N/A",
-        # role fin (12 labels) : SUBJECT/OBJECT/OBLIQUE_* (NONE exclu)
-        "role_report": classification_report(
-            all_role_true, all_role_pred,
-            labels=[l for l in range(NUM_ROLE) if l != ROLE_NONE_ID and l in set(all_role_true)],
-            target_names=[ROLE_LABELS[l] for l in range(NUM_ROLE) if l != ROLE_NONE_ID and l in set(all_role_true)],
-            digits=3, zero_division=0
-        ) if all_role_true else "N/A",
-        # VerbFam reports
-        "verb_family_report": classification_report(
-            all_vfam_true, all_vfam_pred,
-            labels=[l for l in range(NUM_VERB_FAMILY) if l in set(all_vfam_true)],
-            target_names=[VERB_FAMILY_LABELS[l] for l in range(NUM_VERB_FAMILY) if l in set(all_vfam_true)],
-            digits=3, zero_division=0
-        ) if all_vfam_true else "N/A",
-        "verb_family_fine_report": classification_report(
-            all_vfam_fine_true, all_vfam_fine_pred,
-            labels=[l for l in range(NUM_VERB_FAMILY_FINE) if l in set(all_vfam_fine_true)],
-            target_names=[VERB_FAMILY_FINE_LABELS[l] for l in range(NUM_VERB_FAMILY_FINE) if l in set(all_vfam_fine_true)],
-            digits=3, zero_division=0
-        ) if all_vfam_fine_true else "N/A",
-        "verb_polarity_report": classification_report(
-            all_vpol_true, all_vpol_pred,
-            labels=[l for l in range(NUM_VERB_POLARITY) if l in set(all_vpol_true)],
-            target_names=[VERB_POLARITY_LABELS[l] for l in range(NUM_VERB_POLARITY) if l in set(all_vpol_true)],
-            digits=3, zero_division=0
-        ) if all_vpol_true else "N/A",
-        "verb_aspect_report": classification_report(
-            all_vasp_true, all_vasp_pred,
-            labels=[l for l in range(NUM_VERB_ASPECT) if l in set(all_vasp_true)],
-            target_names=[VERB_ASPECT_LABELS[l] for l in range(NUM_VERB_ASPECT) if l in set(all_vasp_true)],
-            digits=3, zero_division=0
-        ) if all_vasp_true else "N/A",
-        "verb_source_report": classification_report(
-            all_vsrc_true, all_vsrc_pred,
-            labels=[l for l in range(NUM_VERB_SOURCE) if l in set(all_vsrc_true)],
-            target_names=[VERB_SOURCE_LABELS[l] for l in range(NUM_VERB_SOURCE) if l in set(all_vsrc_true)],
-            digits=3, zero_division=0
-        ) if all_vsrc_true else "N/A",
         "hn_results_by_id": hn_results_by_id,
     }
 
-    if not train:
-        metrics.update(build_fine_diagnostics(all_f_true_pos, all_f_pred_pos, split_name=eval_split))
+    # ── Métriques finales par tête (Head.compute_metrics, cf. package heads/) ──
+    for _key, _head in model_heads.items():
+        if _key == "fine":
+            # include_diagnostics=False pendant le training : évite le coût CPU
+            # (confusions détaillées, export CSV/JSON) — calculé seulement en eval.
+            _m = _head.compute_metrics(
+                accum_true[_key], accum_pred[_key],
+                split_name=eval_split, include_diagnostics=not train,
+            )
+        else:
+            _m = _head.compute_metrics(accum_true[_key], accum_pred[_key], split_name=eval_split)
+        metrics.update(_m)
 
     return metrics
+
 
 
 def apply_inline_hn(
@@ -1890,7 +1515,7 @@ def main():
         print(f"   {g.get('name', '?'):<20} lr={g['lr']:.2e}")
     print(f"📐 Focal gamma: {args.focal_gamma}")
 
-    boundary_w = coarse_w = fine_w = certainty_w = oblique_w = None
+    boundary_w = coarse_w = fine_w = certainty_w = semantic_role_w = None
     verb_family_w = verb_polarity_w = verb_aspect_w = verb_source_w = None
     if args.class_weights == "auto":
         (
@@ -1898,7 +1523,7 @@ def main():
             coarse_w,
             fine_w,
             certainty_w,
-            oblique_w,
+            semantic_role_w,
             role_coarse_w,
             verb_family_w,
             verb_polarity_w,
@@ -1908,7 +1533,7 @@ def main():
             coarse_counts,
             fine_counts,
             certainty_counts,
-            oblique_counts,
+            semantic_role_counts,
             role_coarse_counts,
             verb_family_counts,
             verb_polarity_counts,
@@ -1955,9 +1580,9 @@ def main():
         for i, name in enumerate(CERTAINTY_LABELS):
             print(f"  {name:<15} count={certainty_counts.get(i, 0):>8} weight={certainty_w[i].item():.6f}")
 
-        print("\n[oblique fine counts / weights]  (CWP compense rareté ADVERSARY/SOURCE...)")
-        for i, name in enumerate(ROLE_OBLIQUE_LABELS):
-            print(f"  {name:<25} count={oblique_counts.get(i, 0):>6} weight={oblique_w[i].item():.6f}")
+        print("\n[semantic_role counts / weights]  (19 labels AGENT/PATIENT/…)")
+        for i, name in enumerate(SEMANTIC_ROLE_LABELS):
+            print(f"  {name:<15} count={semantic_role_counts.get(i, 0):>6} weight={semantic_role_w[i].item():.6f}")
 
         print("\n[verb family counts / weights]")
         for i, name in enumerate(VERB_FAMILY_LABELS):
@@ -1985,7 +1610,7 @@ def main():
         coarse_w = None
         fine_w = None
         certainty_w = None
-        oblique_w = None
+        semantic_role_w = None
         role_coarse_w = None
 
     best_score = -1.0
@@ -2097,7 +1722,7 @@ def main():
             coarse_class_weights=coarse_w,
             fine_class_weights=fine_w,
             certainty_class_weights=certainty_w,
-            oblique_class_weights=oblique_w,
+            semantic_role_class_weights=semantic_role_w,
             role_coarse_class_weights=role_coarse_w,
             verb_family_class_weights=verb_family_w,
             verb_polarity_class_weights=verb_polarity_w,
@@ -2166,7 +1791,7 @@ def main():
             coarse_class_weights=coarse_w,
             fine_class_weights=fine_w,
             certainty_class_weights=certainty_w,
-            oblique_class_weights=oblique_w,
+            semantic_role_class_weights=semantic_role_w,
             role_coarse_class_weights=role_coarse_w,
             verb_family_class_weights=verb_family_w,
             verb_polarity_class_weights=verb_polarity_w,
@@ -2414,8 +2039,8 @@ def main():
                 "verb_aspect": args.lambda_verb_aspect,
                 "verb_source": args.lambda_verb_source,
             },
-            "train": _compact_metrics(train_metrics),
-            "val": _compact_metrics(val_metrics),
+            "train": _compact_metrics(train_metrics, model.heads),
+            "val": _compact_metrics(val_metrics, model.heads),
         }
         _write_metrics_record(args.metrics_jsonl, epoch_record, args.metrics_latest_json)
         print(f"⏱️  Epoch {epoch} timings: train={train_s:.1f}s val={val_s:.1f}s train+val={epoch_compute_s:.1f}s")
@@ -2450,6 +2075,12 @@ def main():
         if val_metrics.get("role_report") and val_metrics["role_report"] != "N/A":
             print("[VAL role (12 labels — SUBJECT/OBJECT/OBLIQUE_*)]")
             print(val_metrics["role_report"])
+        if val_metrics.get("role_coarse_report") and val_metrics["role_coarse_report"] != "N/A":
+            print("[VAL role_coarse (SUBJ/OBJ/OBLIQ/APPOS)]")
+            print(val_metrics["role_coarse_report"])
+        if val_metrics.get("semantic_role_report") and val_metrics["semantic_role_report"] != "N/A":
+            print("[VAL semantic_role (AGENT/PATIENT/CONTENT/SOURCE/LOCATION/…)]")
+            print(val_metrics["semantic_role_report"])
         if val_metrics.get("verb_family_macro_f1", 0) > 0:
             print(f"[VAL verbfam]  Family F1={val_metrics['verb_family_macro_f1']:.4f}  "
                   f"FamilyFine F1={val_metrics['verb_family_fine_macro_f1']:.4f}  "
@@ -2540,7 +2171,7 @@ def main():
         coarse_class_weights=coarse_w,
         fine_class_weights=fine_w,
         certainty_class_weights=certainty_w,
-        oblique_class_weights=oblique_w,
+        semantic_role_class_weights=semantic_role_w,
         role_coarse_class_weights=role_coarse_w,
         verb_family_class_weights=verb_family_w,
         verb_polarity_class_weights=verb_polarity_w,
@@ -2616,6 +2247,12 @@ def main():
     if test_metrics.get("role_report") and test_metrics["role_report"] != "N/A":
         print("[TEST role (12 labels)]")
         print(test_metrics["role_report"])
+    if test_metrics.get("role_coarse_report") and test_metrics["role_coarse_report"] != "N/A":
+        print("[TEST role_coarse (SUBJ/OBJ/OBLIQ/APPOS)]")
+        print(test_metrics["role_coarse_report"])
+    if test_metrics.get("semantic_role_report") and test_metrics["semantic_role_report"] != "N/A":
+        print("[TEST semantic_role (AGENT/PATIENT/CONTENT/SOURCE/LOCATION/…)]")
+        print(test_metrics["semantic_role_report"])
     if test_metrics.get("verb_family_report") and test_metrics["verb_family_report"] != "N/A":
         print("[TEST verb_family]")
         print(test_metrics["verb_family_report"])
@@ -2627,7 +2264,7 @@ def main():
             "type": "test",
             "epoch": best_ckpt_epoch,
             "best_score": _json_safe_scalar(best_score),
-            "test": _compact_metrics(test_metrics),
+            "test": _compact_metrics(test_metrics, model.heads),
         }
         _write_metrics_record(args.metrics_jsonl, test_record)
 

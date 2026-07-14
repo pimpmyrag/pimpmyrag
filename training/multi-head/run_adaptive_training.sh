@@ -6,7 +6,7 @@ set -e
 cd /workspace/pimpmyrag/training/multi-head
 
 CONFIG="${CONFIG:-configs/bnd-fine-balanced.json}"
-GOLD_VERSION="${GOLD_VERSION:-v8.22_semrole}"
+GOLD_VERSION="${GOLD_VERSION:-v8.24b_deps}"
 export TOKENIZERS_PARALLELISM="false"
 export AUTO_BS="${AUTO_BS:-0}"  # AUTO_BS=1 pour benchmarker le batch size avant run long
 

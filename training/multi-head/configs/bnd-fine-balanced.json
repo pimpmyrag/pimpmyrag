@@ -40,7 +40,7 @@
     "morpho": 0.20,
     "verb_ptr": 0.80,
     "verb_family": 2,
-    "verb_family_fine": 3.0,
+    "verb_family_fine": 0.0,
     "verb_polarity": 1.0,
     "verb_aspect": 0.5,
     "verb_source": 0.4,

@@ -1,24 +1,23 @@
 {
-  "_comment": "Config validation 10% dataset v8.22_semrole — run court RunPod pour valider semantic_role_head avant full training. Val/Test = complets pour métriques comparables prod.",
-  "_version": "semrole-10pct-v822",
-  "_changelog": [
-    "Base : svo-v819-rc2.json (même cascade, même lambdas)",
-    "Différences vs prod :",
-    "  - dataset : v8.22_semrole_10pct (2783 train, val/test complets)",
-    "  - max_epochs : 25 (convergence attendue ~12-15 ep sur 10%)",
-    "  - semantic_role : 0.3 (vs 0.2 rc2 — nouvelle valeur cible semantic_role_head)",
-    "  - difficulty_levels : curriculum raccourci (max 3 ep/level vs 6)",
-    "  - Objectif : vérifier que semantic_role_head apprend sans dégrader bnd/fine"
+  "_comment": "Dérivée de bnd-fine-balanced, adaptée aux têtes/dataset actuels (v8.24b_deps).",
+  "_version": "bnd-fine-balanced-v824",
+  "_rationale": [
+    "Base : bnd-fine-balanced.json (boundary_first OFF, fine warmup fort, EMA off).",
+    "Dataset : v8.24b_deps — couverture rôle nominal ~37% (vs ~8-15% avant) via rattachement",
+    "  par dépendances Stanza (frères inclus) + PART_OF→DOMAIN natif.",
+    "Adaptations têtes actuelles :",
+    "  - semantic_role 0.8 conservé : signal nominal désormais dense (24185 NMOD→DOMAIN train).",
+    "  - verb_family_fine 0.0 → 0.4 : tête réelle avec labels, ne plus la laisser inerte.",
+    "  - verb_family 2 → 1.5 : rééquilibrage avec verb_family_fine réactivé.",
+    "Attendu : bnd~0.92+ ep5, fine~0.84+ ep15-20, semantic_role exploité pleinement."
   ],
-
   "run": {
-    "name_suffix": "semrole-10pct-v822",
-    "max_epochs": 25,
+    "name_suffix": "bnd-fine-balanced-v824",
+    "max_epochs": 30,
     "model": "microsoft/deberta-v3-base",
     "loss_weighting": "fixed",
     "ner_only_bench": false
   },
-
   "optimizer": {
     "lr": 1e-5,
     "head_lr_multiplier": 4.0,
@@ -28,43 +27,39 @@
     "ema_decay": 0.0,
     "class_weight_power": 0.5
   },
-
   "lambdas": {
-    "_comment": "Identique svo-v819-rc2 sauf semantic_role=0.3 (nouvelle cible).",
-    "boundary":         4.0,
-    "coarse":           0.75,
-    "fine":             1.8,
-    "svo_boundary":     1.55,
-    "svo":              0.70,
-    "role_coarse":      0.85,
-    "semantic_role":    0.70,
-    "voice":            0.15,
-    "certainty":        0.30,
-    "morpho":           0.10,
-    "verb_ptr":         0.60,
-    "compat":           0.20,
-    "verb_family":      0.80,
-    "verb_family_fine": 0.40,
-    "verb_polarity":    0.40,
-    "verb_aspect":      0.40,
-    "verb_source":      0.30
+    "boundary": 5,
+    "coarse": 2,
+    "fine": 2.5,
+    "svo_boundary": 2,
+    "svo": 0.70,
+    "role": 0,
+    "role_coarse": 0.8,
+    "semantic_role": 0.8,
+    "voice": 0.20,
+    "certainty": 0.30,
+    "morpho": 0.20,
+    "verb_ptr": 0.80,
+    "verb_family": 1.5,
+    "verb_family_fine": 0.4,
+    "verb_polarity": 1.0,
+    "verb_aspect": 0.5,
+    "verb_source": 0.4,
+    "compat": 0.2
   },
-
   "focal": {
-    "boundary_gamma":  0.5,
-    "fine_gamma":      1.5,
-    "coarse_gamma":    0.0
+    "boundary_gamma": 0.5,
+    "fine_gamma": 1.5,
+    "coarse_gamma": 0.0
   },
-
   "boundary_first": {
-    "_comment": "unlock à 0.88 au lieu de 0.92 → fine démarre ep4-5 au lieu de ep8-10",
+    "_comment": "OFF (stratégie balanced) — unlock/ramp neutralisés.",
     "enabled": false,
     "unlock_threshold": 0.90,
     "unlock_ramp_epochs": 5,
     "coarse_warmup_lambda": 0.3,
     "fine_warmup_lambda": 0.3
   },
-
   "svo_cascade": {
     "role_coarse_bnd_thr": 0.0,
     "role_coarse_warmup_lambda": 0.3,
@@ -74,7 +69,6 @@
     "oblique_thr_role_crs": 0.0,
     "oblique_ramp_epochs": 1
   },
-
   "boundary_rescue": {
     "window": 999,
     "target": 0.0,
@@ -83,16 +77,14 @@
     "factor_coarse": 1.0,
     "bnd_boost": 1.0
   },
-
   "boundary_plateau": {
     "window": 999,
     "min_delta": 0.0,
     "regression_window": 999,
     "regression_delta": 0.0
   },
-
   "hard_negatives": {
-    "_comment": "Mining orienté précision boundary : boost FP > FN pour réduire les faux positifs boundary.",
+    "_comment": "Mining orienté précision boundary : boost FP > FN.",
     "every_n_epochs": 3,
     "decay": 1.0,
     "max_weight": 4.0,
@@ -105,7 +97,6 @@
     "boost_fn_svo": 1.0,
     "boost_role_coarse": 1.0
   },
-
   "difficulty_levels": {
     "_comment": "Full data dès ep1 — pas de curriculum",
     "names": [
@@ -127,12 +118,10 @@
     "min_delta_for_progress": 0.0,
     "patience": 999
   },
-
   "early_stopping": {
     "patience": 999,
     "min_delta": 0.0
   },
-
   "hardware": {
     "h100_80gb": {
       "bs": 160,

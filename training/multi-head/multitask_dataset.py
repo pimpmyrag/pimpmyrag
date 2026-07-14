@@ -9,6 +9,7 @@ from torch.utils.data import Dataset
 
 from labels import (SVO_NONE_ID, SYN_NONE_ID, ROLE_NONE_ID, ROLE2ID, VOICE_NONE_ID, CERTAINTY_NONE_ID,
                     GENDER_NONE_ID, NUMBER_NONE_ID, PERSON_NONE_ID, ROLE_COARSE_NONE_ID, ROLE_OBLIQUE_NONE_ID,
+                    SEMANTIC_ROLE_SKIP_ID,
                     VERB_FAMILY_NONE_ID, VERB_FAMILY_FINE_NONE_ID, VERB_POLARITY_NONE_ID,
                     VERB_ASPECT_NONE_ID, VERB_SOURCE_NONE_ID,
                     NOMINAL_RELATION_NONE_ID)
@@ -90,6 +91,7 @@ class MultiTaskSpanDataset(Dataset):
                 "role_label_id":         c.get("role_label_id",
                                               ROLE2ID.get(c.get("svo_role", ""), ROLE_NONE_ID)),
                 "role_coarse_label_id":  c.get("role_coarse_label_id", ROLE_COARSE_NONE_ID),
+                "semantic_role_label_id": c.get("semantic_role_label_id", SEMANTIC_ROLE_SKIP_ID),
                 "role_oblique_label_id": c.get("role_oblique_label_id", ROLE_OBLIQUE_NONE_ID),
                 "voice_label_id":        c.get("voice_label_id", VOICE_NONE_ID),   # FIX: était absent → VOICE_NONE_ID forcé même si JSON l'avait
                 "certainty_label_id":    c.get("certainty_label_id", CERTAINTY_NONE_ID),
@@ -145,6 +147,7 @@ class CollateFn:
         syn_labels = []
         role_labels = []
         role_coarse_labels = []
+        semantic_role_labels = []
         role_oblique_labels = []
         voice_labels = []
         certainty_labels = []
@@ -198,6 +201,7 @@ class CollateFn:
                 syn_labels.append(c.get("syn_label_id", SYN_NONE_ID))
                 role_labels.append(c.get("role_label_id", ROLE_NONE_ID))
                 role_coarse_labels.append(c.get("role_coarse_label_id", ROLE_COARSE_NONE_ID))
+                semantic_role_labels.append(c.get("semantic_role_label_id", SEMANTIC_ROLE_SKIP_ID))
                 role_oblique_labels.append(c.get("role_oblique_label_id", ROLE_OBLIQUE_NONE_ID))
                 voice_labels.append(c.get("voice_label_id", VOICE_NONE_ID))
                 certainty_labels.append(c.get("certainty_label_id", CERTAINTY_NONE_ID))
@@ -228,6 +232,7 @@ class CollateFn:
             "syn_labels":           torch.tensor(syn_labels,          dtype=torch.long),
             "role_labels":          torch.tensor(role_labels,         dtype=torch.long),
             "role_coarse_labels":   torch.tensor(role_coarse_labels,  dtype=torch.long),
+            "semantic_role_labels": torch.tensor(semantic_role_labels, dtype=torch.long),
             "role_oblique_labels":  torch.tensor(role_oblique_labels, dtype=torch.long),
             "voice_labels":         torch.tensor(voice_labels,        dtype=torch.long),
             "certainty_labels":     torch.tensor(certainty_labels,    dtype=torch.long),

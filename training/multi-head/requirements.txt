@@ -23,7 +23,7 @@ dvc-s3>=3.0.0   # backend S3 pour dvc pull
 # RunPod SDK (lancement pods depuis le local)
 runpod>=1.9.0
 python-dotenv>=1.0.0
+stanza>=1.8.2
 
 # Optional: for ONNX export
 # onnxruntime>=1.17.0
-

@@ -28,6 +28,7 @@ from labels import (
     NUM_ROLE, ROLE_NONE_ID,
 )
 from labels import FINE_LABELS
+from heads import build_all_heads
 
 
 def _agg_group_logit(logits: torch.Tensor, ids: list) -> torch.Tensor:
@@ -157,6 +158,12 @@ class SpanMultiTaskModel(nn.Module):
 
         self.register_buffer("coarse_fine_mask", build_coarse_to_fine_mask())
 
+        # ── Registre des têtes (un fichier par tête, cf. package `heads/`) ────
+        # Les couches nn.Module ci-dessus restent la source de vérité pour le
+        # state_dict (compat checkpoints) ; chaque Head encapsule juste la
+        # logique (forward applicatif / loss / métriques / dump JSONL).
+        self.heads = build_all_heads(self)
+
     def _bucket_width(self, width: int) -> int:
         return min(width, self.max_width_bucket - 1)
 
@@ -238,7 +245,7 @@ class SpanMultiTaskModel(nn.Module):
         # Pour chaque span, calcule le score SVO max des spans qui le CONTIENNENT
         # (même phrase). Ce signal aide les têtes NER à savoir si le span est dans
         # une zone argumentale, sans concurrence de gradient (SVO heads gardent span_h brut).
-        svo_boundary_logits = self.svo_boundary_head(span_h)  # [N, 2]
+        svo_boundary_logits = self.heads["svo_boundary"].forward({"span_h": span_h})["svo_boundary_logits"]
 
         N = span_h.size(0)
         if N > 0:
@@ -269,46 +276,27 @@ class SpanMultiTaskModel(nn.Module):
             span_h_ner = span_h
 
         # ── Verb pointer : attention bilinéaire span_query · token_key ──────────
-        # ptr_queries : [N, 64]
-        # ptr_keys    : [B, seq, 64]  →  gather par batch index → [N, seq, 64]
-        # verb_ptr_logits : [N, seq]
-        ptr_queries = self.verb_ptr_query(span_h)          # [N, 64]
-        ptr_keys    = self.verb_ptr_key(hidden)             # [B, seq, 64]
-        if span_h.size(0) > 0:
-            gathered_keys   = ptr_keys[span_batch_idx]     # [N, seq, 64]
-            verb_ptr_logits = torch.bmm(
-                gathered_keys,                             # [N, seq, 64]
-                ptr_queries.unsqueeze(-1)                  # [N, 64,  1]
-            ).squeeze(-1)                                  # [N, seq]
+        verb_ptr_logits = self.heads["verb_ptr"].forward({
+            "span_h": span_h, "hidden": hidden, "span_batch_idx": span_batch_idx,
+        })["verb_ptr_logits"]
 
-            # ── Verb context pour role conditioning ────────────────────────────
-            # Soft-attention sur l'encoder via verb_ptr_logits (détaché pour ne pas
-            # perturber le gradient du pointer). Early training : attention quasi-uniforme
-            # → contexte ≈ moyenne de la phrase. Late training : se concentre sur le verbe.
-            # Hard pointer: hidden du token verbe predit - O(N*H) vs O(N*seq*H)
-            # gathered_hidden [N,512,768] ~ 6GB avec BS=80 sur RTX 4090 -> OOM
-            # NOTE : verb conditioning sur role_coarse retiré — toutes les tentatives
-            # (verb_ctx seul, + rel_pos random, + rel_pos gold) ont causé des collapses.
-            # Sans verb conditioning, role_coarse atteignait 0.231 (svo-v819, mai 26).
-            # À réintroduire uniquement après stabilisation de role_coarse > 0.25.
-            span_h_role = span_h
-        else:
-            verb_ptr_logits = torch.zeros(
-                (0, hidden.size(1)), device=hidden.device
-            )
-            span_h_role = span_h
+        # NOTE : verb conditioning sur role_coarse retiré — toutes les tentatives
+        # (verb_ctx seul, + rel_pos random, + rel_pos gold) ont causé des collapses.
+        # Sans verb conditioning, role_coarse atteignait 0.231 (svo-v819, mai 26).
+        # À réintroduire uniquement après stabilisation de role_coarse > 0.25.
+        span_h_role = span_h
 
-        role_logits = self.role_head(span_h_role)
+        role_logits = self.heads["role"].forward({"span_h_role": span_h_role})["role_logits"]
         # Pré-calcul rc_logits pour la cascade role_coarse → role_oblique
         # Même pattern que verbfam_fine : softmax(role_coarse.detach())[:, OBLIQ] comme gate
-        rc_logits   = self.role_coarse_head(span_h_role)
+        rc_logits = self.heads["role_coarse"].forward({"span_h_role": span_h_role})["role_coarse_logits"]
 
         # ── NER heads ───────────────────────────────────────────────────────────
         # Boundary reste la tête primaire sur span_h_ner complet.
         # Coarse/fine voient les mêmes features au forward, mais leur gradient vers
         # encoder/span_mlp est réduit via _soft_detach. Cela évite que coarse/fine
         # reprennent tout le contrôle de la représentation et fassent régresser boundary.
-        boundary_logits_base = self.boundary_head(span_h_ner)  # [N, 2]
+        boundary_logits_base = self.heads["boundary"].forward({"span_h_ner": span_h_ner})["boundary_logits_base"]
 
         if self.detach_ner_classifier_backbone:
             # Compat historique : detach complet pour coarse/fine.
@@ -324,8 +312,8 @@ class SpanMultiTaskModel(nn.Module):
                 self.ner_fine_backbone_grad_scale,
             )
 
-        coarse_logits   = self.coarse_head(span_h_coarse)  # [N, num_coarse]
-        fine_logits_raw = self.fine_head(span_h_fine)      # [N, NUM_FINE]
+        coarse_logits   = self.heads["coarse"].forward({"span_h_coarse": span_h_coarse})["coarse_logits"]
+        fine_logits_raw = self.heads["fine"].forward({"span_h_fine": span_h_fine})["fine_logits"]
 
         if self.boundary_aux_from_ner and N > 0:
             ner_evidence = torch.cat(
@@ -371,6 +359,12 @@ class SpanMultiTaskModel(nn.Module):
         # Voice/certainty marchent sans detach car signal morphologique fort dès les poids DeBERTa
         # pré-entraînés ; verbfam nécessite une adaptation active (12 classes sémantiques).
         _span_h_vf = self.verb_family_mlp(span_h)  # [N, 256]
+        vf_features = {"span_h_vf": _span_h_vf}
+        verb_family_logits = self.heads["verb_family"].forward(vf_features)["verb_family_logits"]
+        verb_family_fine_logits_raw = self.heads["verb_family_fine"].forward(vf_features)["verb_family_fine_logits_raw"]
+
+        morpho_out = self.heads["morpho"].forward({"span_h": span_h})
+        svo_out = self.heads["svo"].forward({"span_h": span_h})
 
         return {
             "span_reps":           span_h,
@@ -393,40 +387,40 @@ class SpanMultiTaskModel(nn.Module):
             ),
             # ── SVO heads : span_h brut ────────────────────────────────────────
             "svo_boundary_logits":  svo_boundary_logits,  # déjà calculé plus haut, pas de double appel
-            "syn_logits":           self.syn_head(span_h),
+            "syn_logits":           svo_out["syn_logits"],
             # role_coarse conditionné sur le verbe (soft-attention verb_ptr)
             "role_coarse_logits":   rc_logits,
             "role_logits":          role_logits,                        # legacy (lambda=0)
             "role_coarse_from_role_logits": role_coarse_from_role_logits,  # coarse drive (diagnostic)
             # Semantic role head : remplace role_oblique_head
             # Supervisé sur TOUS les spans NER (AGENT/PATIENT/etc.) ; skip si SEMANTIC_ROLE_SKIP_ID
-            "semantic_role_logits": self.semantic_role_head(span_h_role),
-            "voice_logits":        self.voice_head(span_h),
-            "certainty_logits":    self.certainty_head(span_h),
-            "gender_logits":       self.gender_head(span_h),
-            "number_logits":       self.number_head(span_h),
-            "person_logits":       self.person_head(span_h),
+            "semantic_role_logits": self.heads["semantic_role"].forward({"span_h_role": span_h_role})["semantic_role_logits"],
+            "voice_logits":        self.heads["voice"].forward({"span_h": span_h})["voice_logits"],
+            "certainty_logits":    self.heads["certainty"].forward({"span_h": span_h})["certainty_logits"],
+            "gender_logits":       morpho_out["gender_logits"],
+            "number_logits":       morpho_out["number_logits"],
+            "person_logits":       morpho_out["person_logits"],
             "verb_ptr_logits":     verb_ptr_logits,
             # ── VerbFam (verb_trigger uniquement) ─────────────────────────────
             # span_reps.detach() → verb_family_mlp dédié (256 dims, 2 GELU)
             # Features DeBERTa BRUTES (avant span_mlp NER) + projection non-linéaire propre.
             # Aucune compétition gradient avec NER.
-            "verb_family_logits":          self.verb_family_head(_span_h_vf),
-            "verb_family_fine_logits_raw": self.verb_family_fine_head(_span_h_vf),
+            "verb_family_logits":          verb_family_logits,
+            "verb_family_fine_logits_raw": verb_family_fine_logits_raw,
             # verb_family_fine masqué par verb_family (soft mask)
             "verb_family_fine_logits": (
-                self.verb_family_fine_head(_span_h_vf) +
+                verb_family_fine_logits_raw +
                 torch.log(
-                    (F.softmax(self.verb_family_head(_span_h_vf).detach(), dim=-1)
+                    (F.softmax(verb_family_logits.detach(), dim=-1)
                      @ self.verb_family_fine_mask.float()).clamp(min=1e-9)
                 )
-                if N > 0 else self.verb_family_fine_head(_span_h_vf)
+                if N > 0 else verb_family_fine_logits_raw
             ),
-            "verb_polarity_logits": self.verb_polarity_head(_span_h_vf),
-            "verb_aspect_logits":   self.verb_aspect_head(_span_h_vf),
-            "verb_source_logits":   self.verb_source_head(_span_h_vf),
+            "verb_polarity_logits": self.heads["verb_polarity"].forward(vf_features)["verb_polarity_logits"],
+            "verb_aspect_logits":   self.heads["verb_aspect"].forward(vf_features)["verb_aspect_logits"],
+            "verb_source_logits":   self.heads["verb_source"].forward(vf_features)["verb_source_logits"],
             # compat alias
-            "svo_logits":          self.syn_head(span_h),
+            "svo_logits":          svo_out["svo_logits"],
         }
 
     def compute_loss(
@@ -493,21 +487,6 @@ class SpanMultiTaskModel(nn.Module):
     ):
         device = outputs["boundary_logits"].device
 
-        b_logits       = outputs["boundary_logits"]
-        c_logits       = outputs["coarse_logits"]
-        f_logits       = outputs["fine_logits"]
-        svo_b_logits   = outputs["svo_boundary_logits"]
-        syn_logits          = outputs["syn_logits"]
-        role_coarse_logits    = outputs["role_coarse_logits"]
-        role_logits           = outputs["role_logits"]          # legacy
-        semantic_role_logits  = outputs["semantic_role_logits"]
-        voice_logits   = outputs["voice_logits"]
-        cert_logits    = outputs["certainty_logits"]
-        g_logits       = outputs["gender_logits"]
-        n_logits       = outputs["number_logits"]
-        p_logits       = outputs["person_logits"]
-        vptr_logits    = outputs["verb_ptr_logits"]
-
         boundary_labels     = boundary_labels.to(device=device, dtype=torch.long)
         coarse_labels       = coarse_labels.to(device=device, dtype=torch.long)
         fine_labels         = fine_labels.to(device=device, dtype=torch.long)
@@ -535,196 +514,87 @@ class SpanMultiTaskModel(nn.Module):
         if oblique_class_weights is not None:
             oblique_class_weights = oblique_class_weights.to(device=device, dtype=torch.float32)
 
-        # ── 1) NER Boundary ────────────────────────────────────────────────
-        loss_b_per = F.cross_entropy(b_logits, boundary_labels,
-                                     weight=boundary_class_weights, reduction="none")
-        if focal_gamma > 0.0:
-            p_t = F.softmax(b_logits.detach(), dim=-1).gather(1, boundary_labels.unsqueeze(1)).squeeze(1)
-            loss_b_per = loss_b_per * (1.0 - p_t) ** focal_gamma
-        loss_b = (loss_b_per * sample_weights).mean()
+        # ── Labels regroupés — passés tels quels à chaque tête (Head.compute_loss) ──
+        labels = {
+            "boundary_labels":          boundary_labels,
+            "coarse_labels":            coarse_labels,
+            "fine_labels":              fine_labels,
+            "svo_boundary_labels":      svo_boundary_labels,
+            "syn_labels":               syn_labels,
+            "role_coarse_labels":       role_coarse_labels,
+            "semantic_role_labels":     semantic_role_labels,
+            "role_labels":              role_labels,
+            "voice_labels":             voice_labels,
+            "certainty_labels":         certainty_labels,
+            "gender_labels":            gender_labels,
+            "number_labels":            number_labels,
+            "person_labels":            person_labels,
+            "gov_verb_labels":          gov_verb_labels,
+            "verb_family_labels":       verb_family_labels,
+            "verb_family_fine_labels":  verb_family_fine_labels,
+            "verb_polarity_labels":     verb_polarity_labels,
+            "verb_aspect_labels":       verb_aspect_labels,
+            "verb_source_labels":       verb_source_labels,
+        }
 
-        # ── 2) Coarse ─────────────────────────────────────────────────────────────
-        # ignore_coarse_none=True : loss coarse calculée uniquement sur spans positifs.
-        # Recommandé quand boundary reste une tête dédiée : coarse ne réapprend pas NONE.
-        if ignore_coarse_none:
-            pos_mask_c = (coarse_labels != COARSE_NONE_ID)
-            if pos_mask_c.any():
-                loss_c_per_pos = F.cross_entropy(
-                    c_logits[pos_mask_c], coarse_labels[pos_mask_c],
-                    weight=coarse_class_weights, reduction="none")
-                if focal_coarse_gamma > 0.0:
-                    p_t_c = F.softmax(c_logits[pos_mask_c].detach(), dim=-1).gather(
-                        1, coarse_labels[pos_mask_c].unsqueeze(1)).squeeze(1)
-                    loss_c_per_pos = loss_c_per_pos * (1.0 - p_t_c) ** focal_coarse_gamma
-                loss_c = (loss_c_per_pos * sample_weights[pos_mask_c]).mean()
-            else:
-                loss_c = torch.tensor(0.0, device=device)
-        else:
-            loss_c_per = F.cross_entropy(c_logits, coarse_labels,
-                                         weight=coarse_class_weights, reduction="none")
-            if focal_coarse_gamma > 0.0:
-                pos_coarse_mask = (coarse_labels != COARSE_NONE_ID)
-                if pos_coarse_mask.any():
-                    p_t_c = F.softmax(c_logits[pos_coarse_mask].detach(), dim=-1).gather(
-                        1, coarse_labels[pos_coarse_mask].unsqueeze(1)).squeeze(1)
-                    loss_c_per = loss_c_per.clone()
-                    loss_c_per[pos_coarse_mask] = loss_c_per[pos_coarse_mask] * (1.0 - p_t_c) ** focal_coarse_gamma
-            loss_c = (loss_c_per * sample_weights).mean()
+        # ── Loss RAW par tête (chaque Head encapsule sa propre logique) ─────────
+        loss_b = self.heads["boundary"].compute_loss(
+            outputs, labels, sample_weights,
+            class_weights=boundary_class_weights, focal_gamma=focal_gamma,
+        )
+        loss_c = self.heads["coarse"].compute_loss(
+            outputs, labels, sample_weights,
+            class_weights=coarse_class_weights, focal_coarse_gamma=focal_coarse_gamma,
+            ignore_coarse_none=ignore_coarse_none,
+        )
+        loss_f = self.heads["fine"].compute_loss(
+            outputs, labels, sample_weights,
+            class_weights=fine_class_weights, focal_fine_gamma=focal_fine_gamma,
+        )
+        loss_svo_b = self.heads["svo_boundary"].compute_loss(outputs, labels, sample_weights)
+        loss_syn = self.heads["svo"].compute_loss(outputs, labels, sample_weights)
+        loss_role_coarse = self.heads["role_coarse"].compute_loss(
+            outputs, labels, sample_weights, class_weights=role_coarse_class_weights,
+        )
+        loss_role = self.heads["role"].compute_loss(outputs, labels, sample_weights)
+        loss_semantic_role = self.heads["semantic_role"].compute_loss(
+            outputs, labels, sample_weights, class_weights=semantic_role_class_weights,
+        )
+        loss_voice = self.heads["voice"].compute_loss(outputs, labels, sample_weights)
+        loss_cert = self.heads["certainty"].compute_loss(
+            outputs, labels, sample_weights, class_weights=certainty_class_weights,
+        )
+        loss_morpho = self.heads["morpho"].compute_loss(outputs, labels, sample_weights)
+        loss_verb_ptr = self.heads["verb_ptr"].compute_loss(outputs, labels, sample_weights)
+        loss_compat = self.heads["compat"].compute_loss(
+            outputs, labels, sample_weights, lambda_compat=lambda_compat,
+        )
+        loss_verb_family = self.heads["verb_family"].compute_loss(
+            outputs, labels, sample_weights, class_weights=verb_family_class_weights,
+        )
+        loss_verb_family_fine = self.heads["verb_family_fine"].compute_loss(outputs, labels, sample_weights)
+        loss_verb_polarity = self.heads["verb_polarity"].compute_loss(
+            outputs, labels, sample_weights, class_weights=verb_polarity_class_weights,
+        )
+        loss_verb_aspect = self.heads["verb_aspect"].compute_loss(
+            outputs, labels, sample_weights, class_weights=verb_aspect_class_weights,
+        )
+        loss_verb_source = self.heads["verb_source"].compute_loss(
+            outputs, labels, sample_weights, class_weights=verb_source_class_weights,
+        )
 
-        # ── 3) Fine (NER positifs) ─────────────────────────────────────────
+        # ── Diagnostics de comptage (conservés pour compat logs/monitoring) ─────
+        f_logits = outputs["fine_logits"]
+        syn_logits = outputs["syn_logits"]
+        semantic_role_logits = outputs["semantic_role_logits"]
         pos_mask = (boundary_labels == 1) & (fine_labels >= 0) & (fine_labels < f_logits.size(-1))
-        if pos_mask.any():
-            _fine_w = fine_class_weights if fine_class_weights is not None else None
-            loss_f_per = F.cross_entropy(f_logits[pos_mask], fine_labels[pos_mask],
-                                         weight=_fine_w, reduction="none")
-            if focal_fine_gamma > 0.0:
-                p_t_f = F.softmax(f_logits[pos_mask].detach(), dim=-1).gather(
-                    1, fine_labels[pos_mask].unsqueeze(1)).squeeze(1)
-                loss_f_per = loss_f_per * (1.0 - p_t_f) ** focal_fine_gamma
-            loss_f = (loss_f_per * sample_weights[pos_mask]).mean()
-        else:
-            loss_f = torch.tensor(0.0, device=device)
-
-        # ── 4) Syntactic boundary (verb_trigger / pron) ────────────────────
-        loss_svo_b = (F.cross_entropy(svo_b_logits, svo_boundary_labels, reduction="none")
-                      * sample_weights).mean()
-
-        # ── 5) Syn type (verb_trigger=0 / pron_subj=1 / pron_obj=2) ───────
         syn_mask = (syn_labels >= 0) & (syn_labels < syn_logits.size(-1))
-        if syn_mask.any():
-            loss_syn = (F.cross_entropy(syn_logits[syn_mask], syn_labels[syn_mask], reduction="none")
-                        * sample_weights[syn_mask]).mean()
-        else:
-            loss_syn = torch.tensor(0.0, device=device)
-
-        # ── 6) Role coarse (SUBJ/OBJ/OBLIQ/APPOS/OTHER) ─────────────────────
-        # OTHER (ID=4) est dans le softmax pour la cascade inférence, mais EXCLU
-        # de la loss — le gradient vient seulement des 4 vrais rôles.
-        # Le softmax apprend implicitement OTHER = "pas SUBJ/OBJ/OBLIQ/APPOS".
-        rc_mask = (role_coarse_labels >= 0) & (role_coarse_labels < role_coarse_logits.size(-1)) & (role_coarse_labels != ROLE_COARSE_OTHER_ID)
-        if rc_mask.any():
-            _rc_w = role_coarse_class_weights.to(device) if role_coarse_class_weights is not None else None
-            loss_role_coarse = (F.cross_entropy(role_coarse_logits[rc_mask], role_coarse_labels[rc_mask],
-                                                weight=_rc_w, reduction="none")
-                                * sample_weights[rc_mask]).mean()
-        else:
-            loss_role_coarse = torch.tensor(0.0, device=device)
-
-        # ── 6b) Role fin legacy (12 labels, lambda=0 → pas de gradient) ──────────
-        role_mask = (role_labels >= 0) & (role_labels != ROLE_NONE_ID)
-        if role_mask.any():
-            loss_role = (F.cross_entropy(role_logits[role_mask], role_labels[role_mask], reduction="none")
-                         * sample_weights[role_mask]).mean()
-        else:
-            loss_role = torch.tensor(0.0, device=device)
-
-        # ── 6c) Semantic role (remplace role_oblique) ──────────────────────────
-        # Masque : tous spans avec un semantic_role supervisé (≠ SKIP_ID)
-        # Inclut SUBJ→AGENT, OBJ→PATIENT, OBLIQUE→* — couverture maximale
         sr_mask = (
             (semantic_role_labels >= 0)
             & (semantic_role_labels < semantic_role_logits.size(-1))
             & (semantic_role_labels != SEMANTIC_ROLE_SKIP_ID)
         )
-        if sr_mask.any():
-            _sr_w = semantic_role_class_weights.to(device) if semantic_role_class_weights is not None else None
-            loss_semantic_role = (F.cross_entropy(
-                semantic_role_logits[sr_mask], semantic_role_labels[sr_mask],
-                weight=_sr_w, reduction="none"
-            ) * sample_weights[sr_mask]).mean()
-        else:
-            loss_semantic_role = torch.tensor(0.0, device=device)
-
-        # ── 7) Voice (sur verb_trigger uniquement) ─────────────────────────
-        voice_mask = (voice_labels >= 0) & (voice_labels < voice_logits.size(-1))
-        if voice_mask.any():
-            loss_voice = (F.cross_entropy(voice_logits[voice_mask], voice_labels[voice_mask], reduction="none")
-                          * sample_weights[voice_mask]).mean()
-        else:
-            loss_voice = torch.tensor(0.0, device=device)
-
-        # ── 8) Certainty (sur verb_trigger uniquement) ─────────────────────
-        cert_mask = (certainty_labels >= 0) & (certainty_labels < cert_logits.size(-1))
-        if cert_mask.any():
-            loss_cert = (F.cross_entropy(cert_logits[cert_mask], certainty_labels[cert_mask],
-                                         weight=certainty_class_weights, reduction="none")
-                         * sample_weights[cert_mask]).mean()
-        else:
-            loss_cert = torch.tensor(0.0, device=device)
-
-        # ── 9) Morpho : gender + number + person ───────────────────────────
-        gender_mask = (gender_labels >= 0) & (gender_labels < g_logits.size(-1))
-        number_mask = (number_labels >= 0) & (number_labels < n_logits.size(-1))
-        person_mask = (person_labels >= 0) & (person_labels < p_logits.size(-1))
-        loss_gender = (F.cross_entropy(g_logits[gender_mask], gender_labels[gender_mask], reduction="none")
-                       * sample_weights[gender_mask]).mean() if gender_mask.any() else torch.tensor(0.0, device=device)
-        loss_number = (F.cross_entropy(n_logits[number_mask], number_labels[number_mask], reduction="none")
-                       * sample_weights[number_mask]).mean() if number_mask.any() else torch.tensor(0.0, device=device)
-        loss_person = (F.cross_entropy(p_logits[person_mask], person_labels[person_mask], reduction="none")
-                       * sample_weights[person_mask]).mean() if person_mask.any() else torch.tensor(0.0, device=device)
-
-        # ── 10) Verb pointer — fires sur spans avec un rôle coarse annoté ────
-        seq_len  = vptr_logits.size(1)
-        ptr_mask = (gov_verb_labels >= 0) & (gov_verb_labels < seq_len) & (role_coarse_labels >= 0) & (role_coarse_labels < ROLE_COARSE_NONE_ID)
-        if ptr_mask.any() and vptr_logits.size(0) > 0:
-            loss_verb_ptr = (F.cross_entropy(vptr_logits[ptr_mask], gov_verb_labels[ptr_mask], reduction="none")
-                             * sample_weights[ptr_mask]).mean()
-        else:
-            loss_verb_ptr = torch.tensor(0.0, device=device)
-
-        # ── 11) Compat : cohérence inter-têtes pour les eventlets ──────────
-        # A) role → boundary : Un span participant est forcément un span NER.
-        role_active_mask = (role_coarse_labels >= 0) & (role_coarse_labels < ROLE_COARSE_NONE_ID)
-        if lambda_compat > 0.0 and role_active_mask.any():
-            forced_boundary = torch.ones(
-                role_active_mask.sum(), device=device, dtype=torch.long
-            )
-            loss_compat_rb = (
-                F.cross_entropy(b_logits[role_active_mask], forced_boundary, reduction="none")
-                * sample_weights[role_active_mask]
-            ).mean()
-        else:
-            loss_compat_rb = torch.tensor(0.0, device=device)
-
-        # B) boundary ↔ coarse soft alignment : P(boundary=1) doit s'aligner avec P(coarse≠NONE).
-        # On utilise boundary comme superviseur stable (detach) pour guider coarse.
-        if lambda_compat > 0.0 and b_logits.size(0) > 0:
-            p_boundary_pos  = torch.softmax(b_logits.detach(), dim=-1)[:, 1]          # [N]
-            p_coarse_entity = 1.0 - torch.softmax(c_logits, dim=-1)[:, COARSE_NONE_ID]  # [N]
-            loss_compat_bc  = F.mse_loss(p_coarse_entity, p_boundary_pos)
-        else:
-            loss_compat_bc = torch.tensor(0.0, device=device)
-
-        loss_compat = loss_compat_rb + loss_compat_bc
-
-        # ── VerbFam losses (verb_trigger spans uniquement) ────────────────────
-        vt_mask = (svo_boundary_labels == 1)  # [N] bool
-
-        def _verbfam_ce(logits, labels, none_id, weight=None):
-            """CE loss sur les spans verb_trigger avec label valide (≠ none_id)."""
-            if not vt_mask.any() or labels is None:
-                return torch.tensor(0.0, device=device)
-            labels = labels.to(device=device, dtype=torch.long)
-            m = vt_mask & (labels != none_id)
-            if not m.any():
-                return torch.tensor(0.0, device=device)
-            w = weight.to(device) if weight is not None else None
-            return F.cross_entropy(logits[m], labels[m], weight=w, reduction="mean")
-
-        loss_verb_family      = _verbfam_ce(
-            outputs["verb_family_logits"], verb_family_labels, VERB_FAMILY_NONE_ID,
-            weight=verb_family_class_weights)
-        loss_verb_family_fine = _verbfam_ce(
-            outputs["verb_family_fine_logits_raw"], verb_family_fine_labels, VERB_FAMILY_FINE_NONE_ID)
-        loss_verb_polarity    = _verbfam_ce(
-            outputs["verb_polarity_logits"], verb_polarity_labels, VERB_POLARITY_NONE_ID,
-            weight=verb_polarity_class_weights)
-        loss_verb_aspect      = _verbfam_ce(
-            outputs["verb_aspect_logits"], verb_aspect_labels, VERB_ASPECT_NONE_ID,
-            weight=verb_aspect_class_weights)
-        loss_verb_source      = _verbfam_ce(
-            outputs["verb_source_logits"], verb_source_labels, VERB_SOURCE_NONE_ID,
-            weight=verb_source_class_weights)
+        vt_mask = (svo_boundary_labels == 1)
 
         # ── Raw losses per task (for dynamic weighting) ─────────────────
         raw_losses = {
@@ -738,7 +608,7 @@ class SpanMultiTaskModel(nn.Module):
             "role":              loss_role,
             "voice":             loss_voice,
             "certainty":         loss_cert,
-            "morpho":            loss_gender + loss_number + loss_person,
+            "morpho":            loss_morpho,
             "verb_ptr":          loss_verb_ptr,
             "compat":            loss_compat,
             "verb_family":       loss_verb_family,
@@ -747,6 +617,7 @@ class SpanMultiTaskModel(nn.Module):
             "verb_aspect":       loss_verb_aspect,
             "verb_source":       loss_verb_source,
         }
+
 
         # ── Total (dynamic or fixed weighting) ────────────────────────────
         if weighting is not None:
@@ -783,7 +654,7 @@ class SpanMultiTaskModel(nn.Module):
                 + lambda_role            * loss_role
                 + lambda_voice            * loss_voice
                 + lambda_certainty        * loss_cert
-                + lambda_morpho           * (loss_gender + loss_number + loss_person)
+                + lambda_morpho           * loss_morpho
                 + lambda_verb_ptr         * loss_verb_ptr
                 + lambda_compat           * loss_compat
                 + lambda_verb_family      * loss_verb_family
