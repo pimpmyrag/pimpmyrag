@@ -45,6 +45,7 @@
     "verb_polarity": 1.0,
     "verb_aspect": 0.5,
     "verb_source": 0.4,
+    "attributes": 0.2,
     "compat": 0.2
   },
   "focal": {

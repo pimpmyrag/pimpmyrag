@@ -237,6 +237,8 @@ def compute_lambdas(cfg: dict, state: dict) -> dict:
 
     l_semantic_role = round(L["semantic_role"] * phase4_prog, 4)
     l_morpho       = round(L["morpho"]       * phase4_prog, 4)
+    # attributs transverses v9 (NER-side) : même ramp que morpho
+    l_attributes   = round(L.get("attributes", 0.0) * phase4_prog, 4)
 
     return {
         "boundary":     l_boundary,
@@ -257,6 +259,7 @@ def compute_lambdas(cfg: dict, state: dict) -> dict:
         "verb_polarity":     L.get("verb_polarity", 0.0),
         "verb_aspect":       L.get("verb_aspect", 0.0),
         "verb_source":       L.get("verb_source", 0.0),
+        "attributes":        l_attributes,
     }
 
 

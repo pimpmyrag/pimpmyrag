@@ -28,6 +28,9 @@ from labels import (
     NUM_ROLE, ROLE_NONE_ID,
 )
 from labels import FINE_LABELS
+from labels_v9 import (
+    NUM_ANIMACY, NUM_LIVING, NUM_ABSTRACT, NUM_DYNAMICITY, NUM_WORK,
+)
 from heads import build_all_heads
 
 
@@ -116,6 +119,16 @@ class SpanMultiTaskModel(nn.Module):
         self.gender_head  = nn.Linear(span_hidden_dim, NUM_GENDER)
         self.number_head  = nn.Linear(span_hidden_dim, NUM_NUMBER)
         self.person_head  = nn.Linear(span_hidden_dim, NUM_PERSON)
+
+        # ── Attributs transverses v9 (spans NER) : 5 têtes binaires ──────────
+        # animacy/living/abstract/work supervisés sur tous les spans NER ;
+        # dynamicity supervisé sur EVENT uniquement (NONE ailleurs).
+        # Gold dérivé du fine label (labels_v9.derive_attributes) → 0 annotation.
+        self.animacy_head    = nn.Linear(span_hidden_dim, NUM_ANIMACY)
+        self.living_head     = nn.Linear(span_hidden_dim, NUM_LIVING)
+        self.abstract_head   = nn.Linear(span_hidden_dim, NUM_ABSTRACT)
+        self.dynamicity_head = nn.Linear(span_hidden_dim, NUM_DYNAMICITY)
+        self.work_head       = nn.Linear(span_hidden_dim, NUM_WORK)
 
         # ── VerbFam heads (verb_trigger uniquement) ───────────────────────────
         # ARCHITECTURE : MLP dédié sur span_h.detach() (features post-NER MLP, 512d).
@@ -365,6 +378,7 @@ class SpanMultiTaskModel(nn.Module):
 
         morpho_out = self.heads["morpho"].forward({"span_h": span_h})
         svo_out = self.heads["svo"].forward({"span_h": span_h})
+        attributes_out = self.heads["attributes"].forward({"span_h": span_h})
 
         return {
             "span_reps":           span_h,
@@ -400,6 +414,12 @@ class SpanMultiTaskModel(nn.Module):
             "gender_logits":       morpho_out["gender_logits"],
             "number_logits":       morpho_out["number_logits"],
             "person_logits":       morpho_out["person_logits"],
+            # ── Attributs transverses v9 ──────────────────────────────────────
+            "animacy_logits":      attributes_out["animacy_logits"],
+            "living_logits":       attributes_out["living_logits"],
+            "abstract_logits":     attributes_out["abstract_logits"],
+            "dynamicity_logits":   attributes_out["dynamicity_logits"],
+            "work_logits":         attributes_out["work_logits"],
             "verb_ptr_logits":     verb_ptr_logits,
             # ── VerbFam (verb_trigger uniquement) ─────────────────────────────
             # span_reps.detach() → verb_family_mlp dédié (256 dims, 2 GELU)
@@ -447,6 +467,8 @@ class SpanMultiTaskModel(nn.Module):
             verb_polarity_labels=None,
             verb_aspect_labels=None,
             verb_source_labels=None,
+            # attributs transverses v9 (dict: animacy/living/abstract/dynamicity/work)
+            attribute_labels=None,
             boundary_class_weights=None,
             coarse_class_weights=None,
             fine_class_weights=None,
@@ -478,6 +500,7 @@ class SpanMultiTaskModel(nn.Module):
             lambda_verb_polarity=0.0,
             lambda_verb_aspect=0.0,
             lambda_verb_source=0.0,
+            lambda_attributes=0.0,
             focal_gamma=0.0,
             focal_coarse_gamma=0.0,
             focal_fine_gamma=0.0,
@@ -537,6 +560,23 @@ class SpanMultiTaskModel(nn.Module):
             "verb_source_labels":       verb_source_labels,
         }
 
+        # ── Attributs transverses v9 : fusion (ou sentinels NONE si absents) ────
+        from labels_v9 import (
+            ANIMACY_NONE_ID, LIVING_NONE_ID, ABSTRACT_NONE_ID,
+            DYNAMICITY_NONE_ID, WORK_NONE_ID,
+        )
+        _attr_none = {
+            "animacy_labels": ANIMACY_NONE_ID, "living_labels": LIVING_NONE_ID,
+            "abstract_labels": ABSTRACT_NONE_ID, "dynamicity_labels": DYNAMICITY_NONE_ID,
+            "work_labels": WORK_NONE_ID,
+        }
+        _n_spans = boundary_labels.size(0)
+        for _ak, _none_id in _attr_none.items():
+            if attribute_labels is not None and _ak in attribute_labels and attribute_labels[_ak] is not None:
+                labels[_ak] = attribute_labels[_ak].to(device=device, dtype=torch.long)
+            else:
+                labels[_ak] = torch.full((_n_spans,), _none_id, device=device, dtype=torch.long)
+
         # ── Loss RAW par tête (chaque Head encapsule sa propre logique) ─────────
         loss_b = self.heads["boundary"].compute_loss(
             outputs, labels, sample_weights,
@@ -582,6 +622,7 @@ class SpanMultiTaskModel(nn.Module):
         loss_verb_source = self.heads["verb_source"].compute_loss(
             outputs, labels, sample_weights, class_weights=verb_source_class_weights,
         )
+        loss_attributes = self.heads["attributes"].compute_loss(outputs, labels, sample_weights)
 
         # ── Diagnostics de comptage (conservés pour compat logs/monitoring) ─────
         f_logits = outputs["fine_logits"]
@@ -616,6 +657,7 @@ class SpanMultiTaskModel(nn.Module):
             "verb_polarity":     loss_verb_polarity,
             "verb_aspect":       loss_verb_aspect,
             "verb_source":       loss_verb_source,
+            "attributes":        loss_attributes,
         }
 
 
@@ -640,6 +682,7 @@ class SpanMultiTaskModel(nn.Module):
                 "verb_polarity":    lambda_verb_polarity,
                 "verb_aspect":      lambda_verb_aspect,
                 "verb_source":      lambda_verb_source,
+                "attributes":       lambda_attributes,
             }
             total_loss = weighting.combine(raw_losses, ramp_lambdas)
         else:
@@ -662,6 +705,7 @@ class SpanMultiTaskModel(nn.Module):
                 + lambda_verb_polarity    * loss_verb_polarity
                 + lambda_verb_aspect      * loss_verb_aspect
                 + lambda_verb_source      * loss_verb_source
+                + lambda_attributes       * loss_attributes
             )
 
         return {

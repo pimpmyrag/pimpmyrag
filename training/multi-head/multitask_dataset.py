@@ -13,6 +13,8 @@ from labels import (SVO_NONE_ID, SYN_NONE_ID, ROLE_NONE_ID, ROLE2ID, VOICE_NONE_
                     VERB_FAMILY_NONE_ID, VERB_FAMILY_FINE_NONE_ID, VERB_POLARITY_NONE_ID,
                     VERB_ASPECT_NONE_ID, VERB_SOURCE_NONE_ID,
                     NOMINAL_RELATION_NONE_ID)
+from labels_v9 import (ANIMACY_NONE_ID, LIVING_NONE_ID, ABSTRACT_NONE_ID,
+                       DYNAMICITY_NONE_ID, WORK_NONE_ID)
 
 
 class MultiTaskSpanDataset(Dataset):
@@ -162,6 +164,11 @@ class CollateFn:
         verb_polarity_labels    = []
         verb_aspect_labels      = []
         verb_source_labels      = []
+        animacy_labels    = []
+        living_labels     = []
+        abstract_labels   = []
+        dynamicity_labels = []
+        work_labels       = []
         sample_weights = []
 
         ids = []
@@ -216,6 +223,11 @@ class CollateFn:
                 verb_polarity_labels.append(c.get("verb_polarity_label_id", VERB_POLARITY_NONE_ID))
                 verb_aspect_labels.append(c.get("verb_aspect_label_id", VERB_ASPECT_NONE_ID))
                 verb_source_labels.append(c.get("verb_source_label_id", VERB_SOURCE_NONE_ID))
+                animacy_labels.append(c.get("animacy_label_id", ANIMACY_NONE_ID))
+                living_labels.append(c.get("living_label_id", LIVING_NONE_ID))
+                abstract_labels.append(c.get("abstract_label_id", ABSTRACT_NONE_ID))
+                dynamicity_labels.append(c.get("dynamicity_label_id", DYNAMICITY_NONE_ID))
+                work_labels.append(c.get("work_label_id", WORK_NONE_ID))
                 sample_weights.append(c.get("sample_weight", 1.0))
 
             spans.append(sample_spans)
@@ -247,6 +259,11 @@ class CollateFn:
             "verb_polarity_labels":    torch.tensor(verb_polarity_labels,    dtype=torch.long),
             "verb_aspect_labels":      torch.tensor(verb_aspect_labels,      dtype=torch.long),
             "verb_source_labels":      torch.tensor(verb_source_labels,      dtype=torch.long),
+            "animacy_labels":          torch.tensor(animacy_labels,    dtype=torch.long),
+            "living_labels":           torch.tensor(living_labels,     dtype=torch.long),
+            "abstract_labels":         torch.tensor(abstract_labels,   dtype=torch.long),
+            "dynamicity_labels":       torch.tensor(dynamicity_labels, dtype=torch.long),
+            "work_labels":             torch.tensor(work_labels,       dtype=torch.long),
             "sample_weights":       torch.tensor(sample_weights,      dtype=torch.float32),
             "invalid_candidate_count": invalid_candidate_count,
         }

@@ -393,6 +393,7 @@ def run_epoch(
         lambda_verb_polarity=0.0,
         lambda_verb_aspect=0.0,
         lambda_verb_source=0.0,
+        lambda_attributes=0.0,
         accum_steps=1,
         log_every=50,
         focal_gamma=0.0,
@@ -558,6 +559,12 @@ def run_epoch(
         number_labels = batch["number_labels"].to(device)
         person_labels = batch["person_labels"].to(device)
         gov_verb_labels = batch["gov_verb_labels"].to(device)
+        # Attributs transverses v9 (dict — présents si dataset rebuild v9)
+        _attr_keys = ["animacy_labels", "living_labels", "abstract_labels",
+                      "dynamicity_labels", "work_labels"]
+        attribute_labels = {
+            k: batch[k].to(device) for k in _attr_keys if k in batch
+        } or None
         sample_weights = batch["sample_weights"].to(device)
         # VerbFam labels (optionnels pour compat datasets anciens)
         verb_family_labels      = batch.get("verb_family_labels")
@@ -636,6 +643,10 @@ def run_epoch(
                     verb_polarity_labels_loss    = verb_polarity_labels[si]    if verb_polarity_labels is not None else None
                     verb_aspect_labels_loss      = verb_aspect_labels[si]      if verb_aspect_labels is not None else None
                     verb_source_labels_loss      = verb_source_labels[si]      if verb_source_labels is not None else None
+                    attribute_labels_loss = (
+                        {k: v[si] for k, v in attribute_labels.items()}
+                        if attribute_labels is not None else None
+                    )
                 else:
                     boundary_labels_loss     = boundary_labels
                     coarse_labels_loss       = coarse_labels
@@ -657,6 +668,7 @@ def run_epoch(
                     verb_polarity_labels_loss    = verb_polarity_labels
                     verb_aspect_labels_loss      = verb_aspect_labels
                     verb_source_labels_loss      = verb_source_labels
+                    attribute_labels_loss        = attribute_labels
 
                 # Sanity check apres forward / avant loss
                 num_logits = outputs["fine_logits"].size(0)
@@ -700,6 +712,7 @@ def run_epoch(
                     verb_polarity_labels=verb_polarity_labels_loss,
                     verb_aspect_labels=verb_aspect_labels_loss,
                     verb_source_labels=verb_source_labels_loss,
+                    attribute_labels=attribute_labels_loss,
                     boundary_class_weights=boundary_class_weights,
                     coarse_class_weights=coarse_class_weights,
                     fine_class_weights=fine_class_weights,
@@ -728,6 +741,7 @@ def run_epoch(
                     lambda_verb_polarity=lambda_verb_polarity,
                     lambda_verb_aspect=lambda_verb_aspect,
                     lambda_verb_source=lambda_verb_source,
+                    lambda_attributes=lambda_attributes,
                     focal_gamma=focal_gamma,
                     focal_coarse_gamma=focal_coarse_gamma,
                     focal_fine_gamma=focal_fine_gamma,
@@ -763,6 +777,7 @@ def run_epoch(
                             "verb_polarity": lambda_verb_polarity,
                             "verb_aspect": lambda_verb_aspect,
                             "verb_source": lambda_verb_source,
+                            "attributes": lambda_attributes,
                         }
                         raw = loss_dict.get("raw_losses")
                         if raw:
@@ -908,6 +923,9 @@ def run_epoch(
             "verb_aspect_labels":       verb_aspect_labels,
             "verb_source_labels":       verb_source_labels,
         }
+        # Attributs transverses v9 (si présents dans le batch)
+        if attribute_labels is not None:
+            batch_labels.update(attribute_labels)
         _head_context: dict = {}
         for _key, _head in model_heads.items():
             _t, _p = _head.collect(outputs, batch_labels, span_indices, context=_head_context)
@@ -1123,6 +1141,8 @@ def main():
                         help="Pondération de la loss svo_boundary (détection verbes/pronom, défaut=0.9)")
     parser.add_argument("--lambda-morpho", type=float, default=0.3,
                         help="Pondération de la loss morpho gender+number+person (défaut=0.3)")
+    parser.add_argument("--lambda-attributes", type=float, default=0.0,
+                        help="Pondération loss attributs v9 animacy/living/abstract/dynamicity/work (défaut=0.0)")
     parser.add_argument("--lambda-verb-ptr", type=float, default=0.5,
                         help="Pondération de la loss verb-pointer arg→verb (défaut=0.5)")
     parser.add_argument("--lambda-compat", type=float, default=0.2,
@@ -1345,6 +1365,7 @@ def main():
                     "lambda_verb_polarity":     args.lambda_verb_polarity,
                     "lambda_verb_aspect":       args.lambda_verb_aspect,
                     "lambda_verb_source":       args.lambda_verb_source,
+                    "lambda_attributes":        args.lambda_attributes,
                     "detach_ner_classifier_backbone": args.detach_ner_classifier_backbone,
                     "boundary_aux_from_ner": args.boundary_aux_from_ner,
                     "boundary_aux_scale": args.boundary_aux_scale,
@@ -1492,6 +1513,7 @@ def main():
         "verb_polarity": args.lambda_verb_polarity,
         "verb_aspect": args.lambda_verb_aspect,
         "verb_source": args.lambda_verb_source,
+        "attributes": args.lambda_attributes,
     }
     weighting = create_weighting(args.loss_weighting, initial_lambdas,
                                  alpha=args.gradnorm_alpha)
@@ -1746,6 +1768,7 @@ def main():
             lambda_verb_polarity=args.lambda_verb_polarity,
             lambda_verb_aspect=args.lambda_verb_aspect,
             lambda_verb_source=args.lambda_verb_source,
+            lambda_attributes=args.lambda_attributes,
             accum_steps=args.accum_steps,
             log_every=args.log_every,
             focal_gamma=args.focal_gamma,
@@ -1815,6 +1838,7 @@ def main():
             lambda_verb_polarity=args.lambda_verb_polarity,
             lambda_verb_aspect=args.lambda_verb_aspect,
             lambda_verb_source=args.lambda_verb_source,
+            lambda_attributes=args.lambda_attributes,
             accum_steps=args.accum_steps,
             log_every=args.log_every,
             focal_gamma=args.focal_gamma,
@@ -1880,6 +1904,14 @@ def main():
             f"VerbPtr Acc={val_metrics['verb_ptr_acc']:.4f} (n={val_metrics['verb_ptr_n']})"
             f"Score={score:.4f}"
         )
+        print(
+            "        Attrs | "
+            f"animacy={val_metrics.get('animacy_macro_f1', 0.0):.3f} | "
+            f"living={val_metrics.get('living_macro_f1', 0.0):.3f} | "
+            f"abstract={val_metrics.get('abstract_macro_f1', 0.0):.3f} | "
+            f"dynamicity={val_metrics.get('dynamicity_macro_f1', 0.0):.3f} | "
+            f"work={val_metrics.get('work_macro_f1', 0.0):.3f}"
+        )
 
         # ── W&B log epoch ────────────────────────────────────────────────────
         if _wandb_enabled:
@@ -1904,6 +1936,11 @@ def main():
                 "train/verb_polarity_f1":    train_metrics.get("verb_polarity_macro_f1", 0.0),
                 "train/verb_aspect_f1":      train_metrics.get("verb_aspect_macro_f1", 0.0),
                 "train/verb_source_f1":      train_metrics.get("verb_source_macro_f1", 0.0),
+                "train/attr_animacy_f1":     train_metrics.get("animacy_macro_f1", 0.0),
+                "train/attr_living_f1":      train_metrics.get("living_macro_f1", 0.0),
+                "train/attr_abstract_f1":    train_metrics.get("abstract_macro_f1", 0.0),
+                "train/attr_dynamicity_f1":  train_metrics.get("dynamicity_macro_f1", 0.0),
+                "train/attr_work_f1":        train_metrics.get("work_macro_f1", 0.0),
                 "val/loss":             val_metrics["loss"],
                 "val/boundary_f1":      val_metrics["boundary_f1"],
                 "val/coarse_f1":        val_metrics["coarse_macro_f1"],
@@ -1925,6 +1962,11 @@ def main():
                 "val/verb_polarity_f1":    val_metrics.get("verb_polarity_macro_f1", 0.0),
                 "val/verb_aspect_f1":      val_metrics.get("verb_aspect_macro_f1", 0.0),
                 "val/verb_source_f1":      val_metrics.get("verb_source_macro_f1", 0.0),
+                "val/attr_animacy_f1":     val_metrics.get("animacy_macro_f1", 0.0),
+                "val/attr_living_f1":      val_metrics.get("living_macro_f1", 0.0),
+                "val/attr_abstract_f1":    val_metrics.get("abstract_macro_f1", 0.0),
+                "val/attr_dynamicity_f1":  val_metrics.get("dynamicity_macro_f1", 0.0),
+                "val/attr_work_f1":        val_metrics.get("work_macro_f1", 0.0),
             }
             # Per-label F1 depuis le classification_report (val fine + coarse)
             import re as _re
@@ -1985,6 +2027,7 @@ def main():
                     "verb_polarity": args.lambda_verb_polarity,
                     "verb_aspect": args.lambda_verb_aspect,
                     "verb_source": args.lambda_verb_source,
+                    "attributes": args.lambda_attributes,
                 }
                 eff_weights = weighting.get_effective_weights(ramp_lambdas)
                 for k, v in eff_weights.items():
@@ -2038,6 +2081,7 @@ def main():
                 "verb_polarity": args.lambda_verb_polarity,
                 "verb_aspect": args.lambda_verb_aspect,
                 "verb_source": args.lambda_verb_source,
+                "attributes": args.lambda_attributes,
             },
             "train": _compact_metrics(train_metrics, model.heads),
             "val": _compact_metrics(val_metrics, model.heads),
@@ -2195,6 +2239,7 @@ def main():
         lambda_verb_polarity=args.lambda_verb_polarity,
         lambda_verb_aspect=args.lambda_verb_aspect,
         lambda_verb_source=args.lambda_verb_source,
+        lambda_attributes=args.lambda_attributes,
         accum_steps=args.accum_steps,
         log_every=args.log_every,
         focal_gamma=args.focal_gamma,

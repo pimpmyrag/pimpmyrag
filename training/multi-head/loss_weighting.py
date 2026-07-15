@@ -22,6 +22,7 @@ TASK_KEYS = [
     "verb_ptr", "compat",
     "verb_family", "verb_family_fine",
     "verb_polarity", "verb_aspect", "verb_source",
+    "attributes",
 ]
 
 

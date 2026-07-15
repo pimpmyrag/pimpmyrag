@@ -35,6 +35,7 @@
     "verb_ptr":         0.60,
     "verb_family":      0.20,
     "verb_family_fine": 0.10,
+    "attributes":       0.20,
     "compat":           0.2
   },
 

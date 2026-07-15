@@ -34,6 +34,7 @@ from .verb_family_fine import VerbFamilyFineHead
 from .verb_polarity import VerbPolarityHead
 from .verb_aspect import VerbAspectHead
 from .verb_source import VerbSourceHead
+from .attributes import AttributesHead
 from .compat import CompatHead
 
 # Ordre = ordre d'affichage / d'agrégation des métriques (aligné sur TASK_KEYS
@@ -56,6 +57,7 @@ HEAD_CLASSES = [
     VerbPolarityHead,
     VerbAspectHead,
     VerbSourceHead,
+    AttributesHead,
     CompatHead,
 ]
 

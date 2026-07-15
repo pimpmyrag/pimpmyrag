@@ -36,6 +36,11 @@ from labels import (
     # compat aliases
     SVO2ID, SVO_NONE_ID, ALL_SVO_LABELS,
 )
+# Attributs transverses v9 (dérivés du fine label — 0 annotation)
+from labels_v9 import (
+    derive_attributes,
+    ANIMACY_NONE_ID, LIVING_NONE_ID, ABSTRACT_NONE_ID, DYNAMICITY_NONE_ID, WORK_NONE_ID,
+)
 
 # ─── Mapper sémantique f(svo_role, hint, verb_family, voice) → semantic_role_id ──
 # Dérivé de semantic_role_mapper_v1.py Phase 2.
@@ -182,6 +187,86 @@ def _map_semantic_role_from_nominal(nominal_relation: str | None, hint: str | No
     # AMOD (adjectif), COMPOUND (même entité éclatée), MISC : pas de rôle
     # sémantique propre à superviser ici → laisse SKIP (non supervisé).
     return SEMANTIC_ROLE_SKIP_ID
+
+# ─── Override par indices de surface : PURPOSE / MEMBER_OF / OWNER ────────────
+# Le mapper principal ne voit ni la préposition ni le connecteur qui précède le
+# span. Or ces trois rôles sont quasi exclusivement portés par un marqueur lexical
+# de surface ("afin de", "membre de", "propriété de"...). Sans cette couche ils
+# restaient sous-dérivés (OWNER ~0.1% du gold, PURPOSE/MEMBER_OF = 0). On inspecte
+# les ~40 caractères précédant le span, gaté par le type NER de la cible.
+_PURPOSE_MARKERS = (
+    "afin de ", "afin d'", "dans le but de ", "dans le but d'",
+    "en vue de ", "en vue d'", "dans l'objectif de ", "dans l'optique de ",
+    "destiné à ", "destinée à ", "destinés à ", "destinées à ",
+    "visant à ", "de manière à ", "pour objectif de ",
+    "à des fins de ", "à des fins d'", "en prévision de ", "en prévision d'",
+    "en préparation de ", "en préparation d'", "dans une optique de ",
+    "dans une perspective de ", "en quête de ", "en quête d'",
+    "à la recherche de ", "à la recherche d'",
+)
+_MEMBER_MARKERS = (
+    "membre de ", "membres de ", "membre du ", "membres du ",
+    "membre des ", "membres des ", "fait partie de ", "font partie de ",
+    "faisait partie de ", "faisaient partie de ", "au sein de ", "au sein du ",
+    "au sein des ", "adhère à ", "adhèrent à ", "adhérent de ", "affilié à ",
+    "affiliée à ", "affiliés à ", "rattaché à ", "rattachée à ",
+)
+_OWNER_MARKERS = (
+    "propriété de ", "propriété du ", "propriété des ",
+    "détenu par ", "détenue par ", "détenus par ", "détenues par ",
+    "possédé par ", "possédée par ", "possédés par ",
+    "appartient à ", "appartiennent à ", "appartenant à ",
+    "aux mains de ", "aux mains du ", "aux mains des ", "dans les mains de ",
+)
+# Cibles PURPOSE : buts abstraits (jamais une personne/org → celles-ci = BENEFICIARY).
+_NER_PURPOSE_TARGETS = {
+    "hint_event_nominal", "hint_notion", "hint_state", "hint_field", "hint_doctrine",
+}
+# Cibles MEMBER_OF : l'ensemble d'appartenance est une org/collectif/lieu.
+_NER_MEMBER_TARGETS = _NER_ORG | {"hint_gpe", "hint_group_role", "hint_norp"}
+
+# Déterminants possibles entre le marqueur et le span (adjacence tolérante à l'article).
+_DETS = ("", "l'", "le ", "la ", "les ", "un ", "une ", "d'",
+         "son ", "sa ", "ses ", "leur ", "leurs ", "ce ", "cet ", "cette ", "ces ")
+
+
+def _ends_with_marker(prefix: str, markers: tuple[str, ...]) -> bool:
+    """True si le préfixe se termine par un marqueur suivi d'un déterminant optionnel,
+    c.-à-d. que le span suit IMMÉDIATEMENT le marqueur (évite qu'un marqueur lointain
+    gouvernant un autre nom ne contamine le span courant)."""
+    for m in markers:
+        for d in _DETS:
+            if prefix.endswith(m + d):
+                return True
+    return False
+
+
+def _surface_override_role(sentence_text: str | None, span: dict) -> int | None:
+    """Détecte PURPOSE / MEMBER_OF / OWNER via le préfixe lexical précédant le span.
+    Retourne un semantic_role_id, ou None si aucun marqueur fort ne s'applique.
+    Priorité forte : quand un marqueur match, il prime sur le mapper de base.
+
+    - MEMBER_OF / OWNER : le marqueur gouverne le nom qui suit → matching par
+      ADJACENCE (span juste après le marqueur, modulo un déterminant).
+    - PURPOSE : idem adjacence → ne capte que les buts NOMINAUX directs
+      ("en vue de la réforme"), pas l'objet d'un infinitif ("afin de RÉDUIRE X",
+      où X garde son rôle local patient/adversaire).
+    """
+    if not sentence_text:
+        return None
+    start = span.get("start")
+    if start is None:
+        return None
+    hint = span.get("label") or ""
+    prefix = sentence_text[max(0, start - 40):start].lower().replace("\u2019", "'")
+
+    if hint in _NER_MEMBER_TARGETS and _ends_with_marker(prefix, _MEMBER_MARKERS):
+        return SEMANTIC_ROLE2ID["MEMBER_OF"]
+    if hint in _NER_HUMAN and _ends_with_marker(prefix, _OWNER_MARKERS):
+        return SEMANTIC_ROLE2ID["OWNER"]
+    if hint in _NER_PURPOSE_TARGETS and _ends_with_marker(prefix, _PURPOSE_MARKERS):
+        return SEMANTIC_ROLE2ID["PURPOSE"]
+    return None
 
 def load_jsonl(path: str):
     with open(path, "r", encoding="utf-8") as f:
@@ -447,6 +532,11 @@ def build_gold_candidates(row, tokenizer):
                 parent_end=parent_sp.get("end") if parent_sp else None,
                 child_end=sp.get("end"),
             )
+        # Override par indices de surface (PURPOSE / MEMBER_OF / OWNER) : prime sur
+        # le mapper de base/nominal quand un marqueur lexical fort précède le span.
+        _surf = _surface_override_role(text, sp)
+        if _surf is not None:
+            semantic_role_id = _surf
         # Si le dataset porte déjà semantic_role (v8.22+), l'utiliser directement
         if "semantic_role" in sp:
             sr_str = sp["semantic_role"]
@@ -492,6 +582,9 @@ def build_gold_candidates(row, tokenizer):
         if nominal_parent_tok_start < 0:
             nominal_relation_label_id = NOMINAL_RELATION_NONE_ID
 
+        # Attributs transverses v9 dérivés du fine label d'origine (span NER positif)
+        _attrs_v9 = derive_attributes(label)
+
         cand = {
             "char_start":          start,
             "char_end":            end,
@@ -521,6 +614,12 @@ def build_gold_candidates(row, tokenizer):
             "verb_polarity_label_id":    VERB_POLARITY_NONE_ID,
             "verb_aspect_label_id":      VERB_ASPECT_NONE_ID,
             "verb_source_label_id":      VERB_SOURCE_NONE_ID,
+            # Attributs transverses v9 (dérivés du fine label d'origine)
+            "animacy_label_id":    _attrs_v9["animacy"],
+            "living_label_id":     _attrs_v9["living"],
+            "abstract_label_id":   _attrs_v9["abstract"],
+            "dynamicity_label_id": _attrs_v9["dynamicity"],
+            "work_label_id":       _attrs_v9["work"],
             "neg_type":            "gold",
             "sample_weight":       1.0,
             "text":                sp.get("text", text[start:end]),
