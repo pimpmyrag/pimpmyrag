@@ -207,24 +207,28 @@ def print_run_detail(r, max_epochs=None):
             ap_rc  = fmt(val(row, rc_rec_keys["APPOS"]))
             print(f"    {int(ep):>3}  {total:>7}  {s_f1:>8} {s_rc:>8}  {o_f1:>7} {o_rc:>7}  {ob_f1:>8} {ob_rc:>8}  {ap_f1:>8} {ap_rc:>8}")
 
-    # ── role_oblique ──────────────────────────────────────────────────────────
-    obl_classes = ["OBLIQUE", "OBLIQUE_AGENT", "OBLIQUE_TIME", "OBLIQUE_LOC",
-                   "OBLIQUE_DOMAIN", "OBLIQUE_SOURCE", "OBLIQUE_CAUSE",
-                   "OBLIQUE_COMITATIVE", "OBLIQUE_ADVERSARY"]
-    obl_f1_keys  = [f"val/role_oblique_f1_{c}" for c in obl_classes]
-    obl_present  = [(c, k) for c, k in zip(obl_classes, obl_f1_keys) if k in by_ep.columns]
-    obl_total_key = "val/role_oblique_f1"
-    if obl_present or obl_total_key in by_ep.columns:
-        short_names = [c.replace("OBLIQUE_","OBL_")[:9] for c, _ in obl_present]
-        print(f"\n  🌀 role_oblique (f1)")
-        header_parts = [f"{'total':>7}"] + [f"{n:>10}" for n in short_names]
-        print(f"    {'ep':>3}  " + "  ".join(header_parts))
-        sep = '─' * max(30, 6+9+12*len(obl_present))
+    # ── semantic_role ─────────────────────────────────────────────────────────
+    sr_core = ["AGENT", "PATIENT", "CONTENT", "CAUSE", "LOCATION", "TEMPORAL",
+               "BENEFICIARY", "COMITATIVE", "ADVERSARY", "DOMAIN",
+               "INSTRUMENT", "MEASURE", "SOURCE", "PURPOSE",
+               "PART_OF", "MEMBER_OF", "OWNER", "IDENTITY"]
+    sr_f1_keys   = [f"val/semantic_role_f1_{c}" for c in sr_core]
+    sr_present   = [(c, k) for c, k in zip(sr_core, sr_f1_keys) if k in by_ep.columns]
+    sr_total_key = "val/semantic_role_f1"
+    sr_casc_key  = "val/semantic_role_cascaded_f1"
+    if sr_present or sr_total_key in by_ep.columns:
+        short_names = [c[:10] for c, _ in sr_present]
+        print(f"\n  🌀 semantic_role (f1 val — tous spans supervisés)")
+        casc_hdr = f"  {'cascaded':>9}" if sr_casc_key in by_ep.columns else ""
+        per_lbl_hdr = "  ".join(f"{n:>10}" for n in short_names)
+        print(f"    {'ep':>3}  {'total':>7}{casc_hdr}  {per_lbl_hdr}")
+        sep = '─' * max(30, 6 + 9 + (11 if sr_casc_key in by_ep.columns else 0) + 12 * len(sr_present))
         print(f"    {sep}")
         for ep, row in by_ep.iterrows():
-            total = fmt(val(row, obl_total_key))
-            vals  = [fmt(val(row, k)) for _, k in obl_present]
-            print(f"    {int(ep):>3}  {total:>7}  " + "  ".join(f"{v:>10}" for v in vals))
+            total  = fmt(val(row, sr_total_key))
+            casc   = (f"  {fmt(val(row, sr_casc_key)):>9}" if sr_casc_key in by_ep.columns else "")
+            vals   = "  ".join(f"{fmt(val(row, k)):>10}" for _, k in sr_present)
+            print(f"    {int(ep):>3}  {total:>7}{casc}  {vals}")
 
     # ── Morpho + Certainty + Verb pointer ─────────────────────────────────────
     morpho_keys = [

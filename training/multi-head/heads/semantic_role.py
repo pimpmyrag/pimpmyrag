@@ -3,9 +3,12 @@
 Couche propre : `model.semantic_role_head`.
 Supervisée sur tous les spans NER (pas seulement OBLIQUE), sauf SKIP_ID.
 Deux jeux de métriques :
-  - `semantic_role` : conditionné sur role_coarse GOLD == OBLIQ (couverture training)
+  - `semantic_role` : TOUS les spans supervisés (rot valide, != SKIP), aligné sur la
+    supervision réelle (la tête est entraînée sur tous les spans, pas seulement OBLIQ).
+    ⚠️ Avant v8.24b ce score filtrait role_coarse GOLD == OBLIQ, ce qui excluait de fait
+    AGENT (SUBJ) et PATIENT (OBJ) → f1 artificiellement ~0.1 sur ces classes majeures.
   - `semantic_role_cascaded` : conditionné sur role_coarse_from_role PRÉDIT == OBLIQ
-    (simule l'inférence réelle en cascade) — diagnostic cross-head, stateful ici.
+    (diagnostic cascade legacy, sous-ensemble OBLIQ uniquement) — stateful ici.
 """
 from __future__ import annotations
 
@@ -71,15 +74,17 @@ class SemanticRoleHead(Head):
     def collect(self, outputs, labels, span_indices, context: Optional[dict] = None):
         ro_pred = outputs["semantic_role_logits"].argmax(dim=-1).detach().cpu().tolist()
         ro_true = gather_by_span_indices(labels["semantic_role_labels"], span_indices)
-        rc_true = gather_by_span_indices(labels["role_coarse_labels"], span_indices)
         rc_from_role_pred = outputs["role_coarse_from_role_logits"].argmax(dim=-1).detach().cpu().tolist()
 
         out_true, out_pred = [], []
-        for rot, rop, rct in zip(ro_true, ro_pred, rc_true):
-            if rct == _OBLIQ_RC and rot >= 0 and rot < SEMANTIC_ROLE_SKIP_ID:
+        # Métrique principale : TOUS les spans supervisés (rot valide, hors SKIP).
+        # PAS de filtre role_coarse == OBLIQ : sinon AGENT (SUBJ) / PATIENT (OBJ) sont exclus.
+        for rot, rop in zip(ro_true, ro_pred):
+            if rot >= 0 and rot < SEMANTIC_ROLE_SKIP_ID:
                 out_true.append(rot)
                 out_pred.append(rop)
 
+        # Diagnostic cascade legacy : conditionné sur role_coarse PRÉDIT == OBLIQ.
         for rot, rop, rcfr in zip(ro_true, ro_pred, rc_from_role_pred):
             if rcfr == _OBLIQ_RC and rot >= 0 and rot < SEMANTIC_ROLE_SKIP_ID:
                 self._cascaded_true.append(rot)
