@@ -58,7 +58,7 @@ ID2FINE = {i: x for x, i in FINE2ID.items()}
 NUM_FINE = len(FINE_LABELS)
 
 # Sentinel pour les spans négatifs (pas un vrai label fine)
-FINE_NONE_ID = NUM_FINE  # = 38, hors range [0..37]
+FINE_NONE_ID = NUM_FINE  # = 40, hors range [0..39]
 
 # ─────────────────────────────────────────────────────────────
 # GROUPES FINE LABELS : CONCRETE vs ABSTRACT

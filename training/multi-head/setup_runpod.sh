@@ -103,13 +103,15 @@ wc -l data/train_${GOLD_VERSION}.jsonl data/val_${GOLD_VERSION}.jsonl data/test_
 
 # ── 4. Vérification schéma labels v8.4 ─────────────────────────────────────────
 echo ""
-echo "🔍 Vérification labels ${GOLD_VERSION} (NUM_FINE=38, NUM_COARSE=10, NUM_GENDER=2)..."
+echo "🔍 Vérification labels ${GOLD_VERSION} (NUM_FINE=40, NUM_COARSE=11, NUM_GENDER=2)..."
 python3 - <<'PYEOF'
 import sys, os
 sys.path.insert(0, ".")
 import labels as L
-assert L.NUM_FINE == 38, f"NUM_FINE={L.NUM_FINE} attendu 38"
-assert len(L.COARSE_LABELS) == 10, f"NUM_COARSE={len(L.COARSE_LABELS)} attendu 10"
+# v8.24b : NUM_FINE passé de 38 → 40 (ajout hint_work_generic=38, hint_field=39).
+assert L.NUM_FINE == 40, f"NUM_FINE={L.NUM_FINE} attendu 40"
+# COARSE = 10 positifs (PER..BIO) + NONE = 11 (ajouts WORK, BIO).
+assert len(L.COARSE_LABELS) == 11, f"NUM_COARSE={len(L.COARSE_LABELS)} attendu 11"
 assert L.NUM_GENDER == 2, f"NUM_GENDER={L.NUM_GENDER} attendu 2 (N supprime v8.4)"
 assert 'hint_inst_name'  in L.FINE2ID, "hint_inst_name manquant"
 assert 'hint_inst_role'  in L.FINE2ID, "hint_inst_role manquant"
@@ -117,8 +119,10 @@ assert 'hint_notion'     in L.FINE2ID, "hint_notion manquant"
 assert 'hint_doctrine'   in L.FINE2ID, "hint_doctrine manquant"
 assert 'hint_process' not in L.FINE2ID, "hint_process encore present"
 assert 'hint_quantity' not in L.FINE2ID, "hint_quantity encore present"
-print(f"✅ labels.py {os.environ.get('GOLD_VERSION','v8.6')} OK — NUM_FINE={L.NUM_FINE} NUM_COARSE={len(L.COARSE_LABELS)} NUM_GENDER={L.NUM_GENDER}")
-print(f"   v8.6: offsets nettoyés (64 errs vs 8398 en v8.5), nerwarmup=0, Stanza spans revus par Claude")
+assert 'hint_work_generic' in L.FINE2ID, "hint_work_generic manquant (v8.24b)"
+assert 'hint_field'        in L.FINE2ID, "hint_field manquant (v8.24b)"
+print(f"✅ labels.py {os.environ.get('GOLD_VERSION','v8.24b_deps')} OK — NUM_FINE={L.NUM_FINE} NUM_COARSE={len(L.COARSE_LABELS)} NUM_GENDER={L.NUM_GENDER}")
+print(f"   v8.24b: NUM_FINE 38→40 (+hint_work_generic +hint_field), rattachement nominal par dépendances Stanza")
 PYEOF
 
 # ── 5. Lancement du training ─────────────────────────────────────────────────
