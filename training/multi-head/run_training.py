@@ -237,8 +237,9 @@ def compute_lambdas(cfg: dict, state: dict) -> dict:
 
     l_semantic_role = round(L["semantic_role"] * phase4_prog, 4)
     l_morpho       = round(L["morpho"]       * phase4_prog, 4)
-    # attributs transverses v9 (NER-side) : même ramp que morpho
-    l_attributes   = round(L.get("attributes", 0.0) * phase4_prog, 4)
+    # attributs transverses v9 (NER-side) : lambda CONSTANT (actif dès ep1,
+    # comme verb_family) — signal facile aligné sur les features NER.
+    l_attributes   = round(L.get("attributes", 0.0), 4)
 
     return {
         "boundary":     l_boundary,

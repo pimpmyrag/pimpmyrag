@@ -13,7 +13,7 @@
   ],
   "run": {
     "name_suffix": "bnd-fine-balanced-v824",
-    "max_epochs": 30,
+    "max_epochs": 10,
     "model": "microsoft/deberta-v3-base",
     "loss_weighting": "fixed",
     "ner_only_bench": false
@@ -45,7 +45,7 @@
     "verb_polarity": 1.0,
     "verb_aspect": 0.5,
     "verb_source": 0.4,
-    "attributes": 0.2,
+    "attributes": 0.5,
     "compat": 0.2
   },
   "focal": {
