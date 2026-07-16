@@ -12,7 +12,7 @@ FINE_LABELS = [
     "hint_norp",             # 2
     "hint_group_role",       # 3
     "hint_org_name",         # 4
-    "hint_inst_name",        # 5  institution NOMMÉE (sigle ou nom propre qualifié : "ONU", "OTAN", "Commission européenne", "Sénat américain")
+    "hint_inst_name",        # 5  institution NOMMÉE (sigle ou nom propre qualifié)
     "hint_gpe",              # 6
     "hint_fac_name",         # 7
     "hint_loc_generic",      # 8
@@ -22,34 +22,30 @@ FINE_LABELS = [
     "hint_food",             # 12
     "hint_infra",            # 13
     "hint_tool",             # 14
-    "hint_object_generic",   # 15
-    "hint_object_name",      # 16
-    "hint_event_nominal",    # 17
-    "hint_event_named",      # 18
-    "hint_time_date",        # 19
-    "hint_time_clock",       # 20
-    "hint_time_duration",    # 21
-    "hint_measure",          # 22
-    "hint_percentage",       # 23
-    "hint_count",            # 24
-    "hint_money",            # 25
-    "hint_rate",             # 26
-    "hint_work_of_art",      # 27
-    "hint_law",              # 28
-    "hint_document",         # 29  rapport, lettre, communiqué, données, contrat…
-    "hint_disease",          # 30
-    "hint_language",         # 31
-    "hint_inst_role",        # 32  institution GÉNÉRIQUE sans qualificatif (gouvernement, police, armée, parlement, tribunal…)
-    # ▼ v7.0 : hint_rule, hint_process, hint_concept supprimés (→ hint_notion/hint_event_nominal)
-    #          hint_concept éclaté en 4 sous-types sans fallback
-    # ▼ v8.0 : hint_quantity supprimé (→ hint_measure comme fallback)
-    "hint_animal",           # 33  animal (vivant non-humain)
-    "hint_vegetal",          # 34  végétal (plante, arbre, fleur, etc.)
-    "hint_doctrine",         # 35  doctrine, idéologie, courant de pensée, théorie (nommée ou non)
-    "hint_state",            # 36  état, condition, situation abstraite (pauvreté, crise, guerre, paix…)
-    "hint_notion",           # 37  notion, concept abstrait pur, valeur, principe, règle/norme générique
-    "hint_work_generic",     # 38  production culturelle générique sans titre (film, livre, presse, médias…)
-    "hint_field",            # 39  domaine / secteur d'activité (santé, éducation, agriculture, finance…)
+    "hint_object_generic",   # 15  ← v9 : absorbe hint_object_name
+    "hint_event_nominal",    # 16  ← v9 : absorbe hint_state (attribut dynamicity=stative)
+    "hint_event_named",      # 17
+    "hint_time_date",        # 18
+    "hint_time_clock",       # 19
+    "hint_time_duration",    # 20
+    "hint_measure",          # 21  ← v9 : absorbe hint_rate
+    "hint_percentage",       # 22
+    "hint_count",            # 23
+    "hint_money",            # 24
+    "hint_work_of_art",      # 25  ← v9 : absorbe hint_work_generic (attribut work=1)
+    "hint_law",              # 26
+    "hint_document",         # 27  rapport, lettre, communiqué, données, contrat…
+    "hint_disease",          # 28  coarse EVENT (condition), dynamicity=stative
+    "hint_language",         # 29
+    "hint_inst_role",        # 30  institution GÉNÉRIQUE (gouvernement, police, armée…)
+    "hint_animal",           # 31  vivant non-humain (v9 : absorbe hint_vegetal ;
+                             #      animacy distingue animal[animate]/plante[inanimate])
+    "hint_notion",           # 32  ← v9 : absorbe hint_doctrine
+    "hint_field",            # 33  domaine / secteur d'activité (santé, éducation…)
+    # ── v9.0 : taxonomie réduite 40→34. Fusions : object_name→object_generic,
+    #    rate→measure, work_generic→work_of_art, state→event_nominal,
+    #    doctrine→notion, vegetal→animal. BIO/ABSTRACT/WORK deviennent des
+    #    ATTRIBUTS transverses (animacy/living/abstract/dynamicity/work).
 ]
 
 FINE2ID = {x: i for i, x in enumerate(FINE_LABELS)}
@@ -58,7 +54,7 @@ ID2FINE = {i: x for x, i in FINE2ID.items()}
 NUM_FINE = len(FINE_LABELS)
 
 # Sentinel pour les spans négatifs (pas un vrai label fine)
-FINE_NONE_ID = NUM_FINE  # = 40, hors range [0..39]
+FINE_NONE_ID = NUM_FINE  # = 34, hors range [0..33]
 
 # ─────────────────────────────────────────────────────────────
 # GROUPES FINE LABELS : CONCRETE vs ABSTRACT
@@ -71,7 +67,6 @@ FINE_CONCRETE_LABELS = [
     "hint_inst_name",      # institution nommée (sigle, nom propre qualifié)
     "hint_gpe",            # entité géopolitique
     "hint_fac_name",       # facility nommée
-    "hint_object_name",    # objet nommé
     "hint_event_named",    # événement nommé
     "hint_time_date",      # date
     "hint_time_clock",     # heure
@@ -80,7 +75,6 @@ FINE_CONCRETE_LABELS = [
     "hint_percentage",     # pourcentage
     "hint_count",          # compte numérique
     "hint_money",          # montant monétaire
-    "hint_rate",           # taux
     "hint_work_of_art",    # œuvre nommée
     "hint_law",            # loi / texte officiel nommé
 ]
@@ -99,12 +93,9 @@ FINE_ABSTRACT_LABELS = [
     "hint_object_generic", # objet générique
     "hint_event_nominal",  # événement nominalé / non nommé
     "hint_document",       # document générique (rapport, lettre…)
-    "hint_work_generic",   # production culturelle générique
     "hint_disease",        # maladie
     "hint_language",       # langue
     "hint_inst_role",      # institution générique (gouvernement, armée…)
-    "hint_doctrine",       # doctrine, idéologie
-    "hint_state",          # état / condition abstraite
     "hint_notion",         # notion / concept abstrait
     "hint_field",          # domaine d'activité
 ]
@@ -117,17 +108,16 @@ FINE_ABSTRACT_IDS: frozenset[int] = frozenset(FINE2ID[l] for l in FINE_ABSTRACT_
 # ─────────────────────────────────────────────────────────────
 
 COARSE_LABELS = [
-    "PER",      # 0
-    "LOC",      # 1
-    "ORG",      # 2
-    "TIME",     # 3
-    "EVENT",    # 4
-    "OBJECT",   # 5  artefacts physiques
-    "VALUE",    # 6
-    "WORK",     # 7  ← nouveau : productions intellectuelles/culturelles (oeuvre, loi)
-    "ABSTRACT", # 8
-    "BIO",      # 9  ← nouveau : vivant (animaux, végétaux, maladies)
-    "NONE",     # 10
+    "PER",       # 0
+    "LOC",       # 1
+    "ORG",       # 2
+    "TIME",      # 3
+    "VALUE",     # 4
+    "OBJECT",    # 5  artefacts physiques + vivant physique (animal/plante)
+    "EVENT",     # 6  événements + états/conditions (disease)
+    "CONCEPT",   # 7  informationnel/abstrait (v9 : ex-ABSTRACT + ex-WORK)
+    "NONE",      # 8
+    # ── v9.0 : BIO et ABSTRACT supprimés (→ attributs), WORK fusionné dans CONCEPT.
 ]
 
 COARSE2ID = {x: i for i, x in enumerate(COARSE_LABELS)}
@@ -154,18 +144,19 @@ COARSE_TO_FINE = {
     ],
     COARSE2ID["ORG"]: [
         FINE2ID["hint_org_name"],
-        FINE2ID["hint_inst_name"],   # institution publique NOMMÉE (sigle, nom propre qualifié)
-        FINE2ID["hint_inst_role"],   # institution générique (gouvernement, police, armée…)
+        FINE2ID["hint_inst_name"],
+        FINE2ID["hint_inst_role"],
     ],
     COARSE2ID["TIME"]: [
         FINE2ID["hint_time_date"],
         FINE2ID["hint_time_clock"],
         FINE2ID["hint_time_duration"],
     ],
-    COARSE2ID["EVENT"]: [
-        FINE2ID["hint_event_nominal"],
-        FINE2ID["hint_event_named"],
-        FINE2ID["hint_state"],
+    COARSE2ID["VALUE"]: [
+        FINE2ID["hint_measure"],
+        FINE2ID["hint_percentage"],
+        FINE2ID["hint_count"],
+        FINE2ID["hint_money"],
     ],
     COARSE2ID["OBJECT"]: [
         FINE2ID["hint_weapon"],
@@ -174,30 +165,18 @@ COARSE_TO_FINE = {
         FINE2ID["hint_food"],
         FINE2ID["hint_tool"],
         FINE2ID["hint_object_generic"],
-        FINE2ID["hint_object_name"],
+        FINE2ID["hint_animal"],
     ],
-    COARSE2ID["VALUE"]: [
-        FINE2ID["hint_measure"],
-        FINE2ID["hint_percentage"],
-        FINE2ID["hint_count"],
-        FINE2ID["hint_money"],
-        FINE2ID["hint_rate"],
+    COARSE2ID["EVENT"]: [
+        FINE2ID["hint_event_nominal"],
+        FINE2ID["hint_event_named"],
+        FINE2ID["hint_disease"],
     ],
-    COARSE2ID["WORK"]: [
+    COARSE2ID["CONCEPT"]: [
         FINE2ID["hint_work_of_art"],
         FINE2ID["hint_law"],
-        FINE2ID["hint_document"],       # rapport, lettre, communiqué, données, contrat…
-        FINE2ID["hint_work_generic"],   # v6.9 : production culturelle générique sans titre (film, presse, cinéma…)
-    ],
-    COARSE2ID["BIO"]: [
-        FINE2ID["hint_disease"],
-        FINE2ID["hint_animal"],
-        FINE2ID["hint_vegetal"],
-    ],
-    COARSE2ID["ABSTRACT"]: [
+        FINE2ID["hint_document"],
         FINE2ID["hint_language"],
-        # v7.0 : hint_rule, hint_process, hint_concept supprimés → hint_notion/hint_event_nominal
-        FINE2ID["hint_doctrine"],
         FINE2ID["hint_notion"],
         FINE2ID["hint_field"],
     ],
@@ -230,6 +209,77 @@ def build_coarse_to_fine_mask() -> torch.Tensor:
         for f in fines:
             mask[c, f] = True
     return mask
+
+
+# ─────────────────────────────────────────────────────────────
+# v9.0 — MIGRATION anciens fines → v9  +  ATTRIBUTS TRANSVERSES
+# ─────────────────────────────────────────────────────────────
+# 6 fusions v8.x → v9 (les attributs portent l'info fusionnée, sans perte).
+LEGACY_TO_V9_FINE = {
+    "hint_state":        "hint_event_nominal",
+    "hint_doctrine":     "hint_notion",
+    "hint_work_generic": "hint_work_of_art",
+    "hint_object_name":  "hint_object_generic",
+    "hint_rate":         "hint_measure",
+    "hint_vegetal":      "hint_animal",
+}
+
+def to_v9_fine(label: str) -> str:
+    """Mappe un fine label (v8.x ou v9) vers le fine v9 canonique."""
+    return LEGACY_TO_V9_FINE.get(label, label)
+
+# --- 5 attributs binaires (sentinel NONE = nombre de classes) -----------------
+ANIMACY_LABELS    = ["inanimate", "animate"]
+ANIMACY2ID        = {x: i for i, x in enumerate(ANIMACY_LABELS)}
+NUM_ANIMACY       = len(ANIMACY_LABELS)
+ANIMACY_NONE_ID   = NUM_ANIMACY
+_ANIMATE_ORIG     = {"hint_person_name", "hint_person_role", "hint_norp",
+                     "hint_group_role", "hint_animal"}
+
+LIVING_LABELS     = ["non_living", "living"]
+LIVING2ID         = {x: i for i, x in enumerate(LIVING_LABELS)}
+NUM_LIVING        = len(LIVING_LABELS)
+LIVING_NONE_ID    = NUM_LIVING
+_LIVING_ORIG      = _ANIMATE_ORIG | {"hint_vegetal"}
+
+ABSTRACT_LABELS   = ["concrete", "abstract"]
+ABSTRACT2ID       = {x: i for i, x in enumerate(ABSTRACT_LABELS)}
+NUM_ABSTRACT      = len(ABSTRACT_LABELS)
+ABSTRACT_NONE_ID  = NUM_ABSTRACT
+_ABSTRACT_FINES   = {"hint_work_of_art", "hint_law", "hint_document", "hint_language",
+                     "hint_notion", "hint_field", "hint_disease"}
+
+DYNAMICITY_LABELS   = ["stative", "dynamic"]
+DYNAMICITY2ID       = {x: i for i, x in enumerate(DYNAMICITY_LABELS)}
+NUM_DYNAMICITY      = len(DYNAMICITY_LABELS)
+DYNAMICITY_NONE_ID  = NUM_DYNAMICITY
+_STATIVE_FINES      = {"hint_disease"}   # + hint_state via override d'origine
+
+WORK_LABELS       = ["non_work", "work"]
+WORK2ID           = {x: i for i, x in enumerate(WORK_LABELS)}
+NUM_WORK          = len(WORK_LABELS)
+WORK_NONE_ID      = NUM_WORK
+_WORK_FINES       = {"hint_work_of_art", "hint_law", "hint_document"}
+
+
+def derive_attributes(legacy_label: str) -> dict[str, int]:
+    """
+    Dérive les 5 attributs v9 depuis le label d'ORIGINE (v8.x ou v9), sans perte.
+    animacy/living : intrinsèques → basés sur le label d'ORIGINE (une plante
+    fusionnée dans hint_animal reste inanimate + living). abstract/work : label v9.
+    dynamicity : sur EVENT uniquement (ex-state → stative), sinon NONE.
+    """
+    v9 = to_v9_fine(legacy_label)
+    is_event = fine_label_to_coarse_id(v9) == COARSE2ID["EVENT"]
+    stative = (legacy_label == "hint_state") or (v9 in _STATIVE_FINES)
+    is_abstract = (v9 in _ABSTRACT_FINES) or (legacy_label == "hint_state")
+    return {
+        "animacy":    ANIMACY2ID["animate"] if legacy_label in _ANIMATE_ORIG else ANIMACY2ID["inanimate"],
+        "living":     LIVING2ID["living"] if legacy_label in _LIVING_ORIG else LIVING2ID["non_living"],
+        "abstract":   ABSTRACT2ID["abstract"] if is_abstract else ABSTRACT2ID["concrete"],
+        "dynamicity": (DYNAMICITY2ID["stative"] if stative else DYNAMICITY2ID["dynamic"]) if is_event else DYNAMICITY_NONE_ID,
+        "work":       WORK2ID["work"] if v9 in _WORK_FINES else WORK2ID["non_work"],
+    }
 
 
 # ─────────────────────────────────────────────────────────────

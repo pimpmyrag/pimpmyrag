@@ -115,6 +115,12 @@ class MultiTaskSpanDataset(Dataset):
                 "verb_polarity_label_id":    c.get("verb_polarity_label_id", VERB_POLARITY_NONE_ID),
                 "verb_aspect_label_id":      c.get("verb_aspect_label_id", VERB_ASPECT_NONE_ID),
                 "verb_source_label_id":      c.get("verb_source_label_id", VERB_SOURCE_NONE_ID),
+                # Attributs transverses v9 (dérivés du fine label ; NONE hors spans NER positifs)
+                "animacy_label_id":          c.get("animacy_label_id", ANIMACY_NONE_ID),
+                "living_label_id":           c.get("living_label_id", LIVING_NONE_ID),
+                "abstract_label_id":         c.get("abstract_label_id", ABSTRACT_NONE_ID),
+                "dynamicity_label_id":       c.get("dynamicity_label_id", DYNAMICITY_NONE_ID),
+                "work_label_id":             c.get("work_label_id", WORK_NONE_ID),
                 "sample_weight":         c.get("sample_weight", 1.0),
                 "neg_type":              c.get("neg_type", "unknown"),
             })

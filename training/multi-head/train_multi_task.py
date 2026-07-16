@@ -129,10 +129,10 @@ def _write_metrics_record(path: str | None, record: dict, latest_path: str | Non
 # ──────────────────────────────────────────────────────────
 #  Inline Hard Negative Mining — constantes
 # ──────────────────────────────────────────────────────────
-_LOW_PRECISION_COARSE = {"VALUE", "EVENT", "TIME", "ABSTRACT", "WORK"}
+_LOW_PRECISION_COARSE = {"VALUE", "EVENT", "TIME", "CONCEPT"}  # v9 : CONCEPT absorbe ABSTRACT+WORK
 _LOW_F1_FINE = {
-    "hint_measure", "hint_rate", "hint_infra", "hint_object_generic",
-    "hint_inst_name", "hint_document",   # nouveaux labels v5 — potentiellement rares en début de training
+    "hint_measure", "hint_infra", "hint_object_generic",
+    "hint_inst_name", "hint_document",   # labels rares/difficiles en début de training
 }
 _FP_LOW_PREC_EXTRA = 1.5
 _FINE_ERR_EXTRA    = 1.4

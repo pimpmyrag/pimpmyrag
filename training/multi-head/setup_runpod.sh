@@ -101,28 +101,36 @@ cd training/multi-head
 echo "✅ Datasets ${GOLD_VERSION} présents :"
 wc -l data/train_${GOLD_VERSION}.jsonl data/val_${GOLD_VERSION}.jsonl data/test_${GOLD_VERSION}.jsonl
 
-# ── 4. Vérification schéma labels v8.4 ─────────────────────────────────────────
+# ── 4. Vérification schéma labels v9 ───────────────────────────────────────────
 echo ""
-echo "🔍 Vérification labels ${GOLD_VERSION} (NUM_FINE=40, NUM_COARSE=11, NUM_GENDER=2)..."
+echo "🔍 Vérification labels ${GOLD_VERSION} v9 (NUM_FINE=34, NUM_COARSE=9, NUM_GENDER=2)..."
 python3 - <<'PYEOF'
 import sys, os
 sys.path.insert(0, ".")
 import labels as L
-# v8.24b : NUM_FINE passé de 38 → 40 (ajout hint_work_generic=38, hint_field=39).
-assert L.NUM_FINE == 40, f"NUM_FINE={L.NUM_FINE} attendu 40"
-# COARSE = 10 positifs (PER..BIO) + NONE = 11 (ajouts WORK, BIO).
-assert len(L.COARSE_LABELS) == 11, f"NUM_COARSE={len(L.COARSE_LABELS)} attendu 11"
-assert L.NUM_GENDER == 2, f"NUM_GENDER={L.NUM_GENDER} attendu 2 (N supprime v8.4)"
-assert 'hint_inst_name'  in L.FINE2ID, "hint_inst_name manquant"
-assert 'hint_inst_role'  in L.FINE2ID, "hint_inst_role manquant"
-assert 'hint_notion'     in L.FINE2ID, "hint_notion manquant"
-assert 'hint_doctrine'   in L.FINE2ID, "hint_doctrine manquant"
-assert 'hint_process' not in L.FINE2ID, "hint_process encore present"
-assert 'hint_quantity' not in L.FINE2ID, "hint_quantity encore present"
-assert 'hint_work_generic' in L.FINE2ID, "hint_work_generic manquant (v8.24b)"
-assert 'hint_field'        in L.FINE2ID, "hint_field manquant (v8.24b)"
-print(f"✅ labels.py {os.environ.get('GOLD_VERSION','v8.24b_deps')} OK — NUM_FINE={L.NUM_FINE} NUM_COARSE={len(L.COARSE_LABELS)} NUM_GENDER={L.NUM_GENDER}")
-print(f"   v8.24b: NUM_FINE 38→40 (+hint_work_generic +hint_field), rattachement nominal par dépendances Stanza")
+# v9.0 : taxonomie réduite — fine 40→34, coarse 11→9 (8 positifs + NONE).
+assert L.NUM_FINE == 34, f"NUM_FINE={L.NUM_FINE} attendu 34 (v9)"
+assert len(L.COARSE_LABELS) == 9, f"NUM_COARSE={len(L.COARSE_LABELS)} attendu 9 (v9 : 8+NONE)"
+assert L.NUM_GENDER == 2, f"NUM_GENDER={L.NUM_GENDER} attendu 2"
+# labels conservés
+assert 'hint_inst_name' in L.FINE2ID, "hint_inst_name manquant"
+assert 'hint_inst_role' in L.FINE2ID, "hint_inst_role manquant"
+assert 'hint_notion'    in L.FINE2ID, "hint_notion manquant"
+assert 'hint_field'     in L.FINE2ID, "hint_field manquant"
+assert 'hint_language'  in L.FINE2ID, "hint_language manquant"
+# labels fusionnés en v9 → doivent avoir DISPARU
+for gone in ('hint_doctrine','hint_state','hint_work_generic','hint_object_name','hint_rate','hint_vegetal'):
+    assert gone not in L.FINE2ID, f"{gone} devrait etre fusionne en v9"
+# coarse v9 : CONCEPT remplace WORK/ABSTRACT, plus de BIO
+for c in ('PER','LOC','ORG','TIME','VALUE','OBJECT','EVENT','CONCEPT','NONE'):
+    assert c in L.COARSE2ID, f"coarse {c} manquant"
+for c in ('BIO','ABSTRACT','WORK'):
+    assert c not in L.COARSE2ID, f"coarse {c} devrait etre supprime en v9"
+# attributs transverses
+assert L.NUM_ANIMACY == 2 and L.NUM_WORK == 2, "attributs v9 absents"
+assert L.derive_attributes('hint_vegetal')['animacy'] == 0, "vegetal doit rester inanimate"
+print(f"✅ labels.py v9 OK — NUM_FINE={L.NUM_FINE} NUM_COARSE={len(L.COARSE_LABELS)} + attributs animacy/living/abstract/dynamicity/work")
+print(f"   v9 : BIO/ABSTRACT/WORK → attributs ; 6 fusions fine (40→34)")
 PYEOF
 
 # ── 5. Lancement du training ─────────────────────────────────────────────────

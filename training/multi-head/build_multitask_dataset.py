@@ -38,7 +38,7 @@ from labels import (
 )
 # Attributs transverses v9 (dérivés du fine label — 0 annotation)
 from labels_v9 import (
-    derive_attributes,
+    derive_attributes, to_v9_fine,
     ANIMACY_NONE_ID, LIVING_NONE_ID, ABSTRACT_NONE_ID, DYNAMICITY_NONE_ID, WORK_NONE_ID,
 )
 
@@ -405,7 +405,11 @@ def build_gold_candidates(row, tokenizer):
         span_by_start.setdefault(s["start"], s)
 
     for sp in row.get("spans", []):
-        label = sp["label"]
+        _orig_label = sp["label"]
+        # v9 : fusionne object_name→object_generic, rate→measure,
+        # work_generic→work_of_art, state→event_nominal, doctrine→notion,
+        # vegetal→animal. Les attributs sont dérivés du label d'ORIGINE.
+        label = to_v9_fine(_orig_label)
         start = sp["start"]
         end   = sp["end"]
 
@@ -582,8 +586,8 @@ def build_gold_candidates(row, tokenizer):
         if nominal_parent_tok_start < 0:
             nominal_relation_label_id = NOMINAL_RELATION_NONE_ID
 
-        # Attributs transverses v9 dérivés du fine label d'origine (span NER positif)
-        _attrs_v9 = derive_attributes(label)
+        # Attributs transverses v9 dérivés du fine label d'ORIGINE (span NER positif)
+        _attrs_v9 = derive_attributes(_orig_label)
 
         cand = {
             "char_start":          start,
