@@ -96,7 +96,8 @@ def print_run_detail(r, max_epochs=None):
         prev_bnd = bnd if bnd == bnd else prev_bnd
 
     # ── Coarse par classe ──────────────────────────────────────────────────────
-    coarse_classes = ["PER", "LOC", "ORG", "TIME", "EVENT", "VALUE", "WORK", "OBJECT", "ABSTRACT"]
+    # v9 : 8 coarse (BIO/ABSTRACT → attributs, WORK → CONCEPT)
+    coarse_classes = ["PER", "LOC", "ORG", "TIME", "VALUE", "OBJECT", "EVENT", "CONCEPT"]
     coarse_class_keys = [f"val/coarse_f1_{c}" for c in coarse_classes]
     if any(k in by_ep.columns for k in coarse_class_keys):
         present = [(c, k) for c, k in zip(coarse_classes, coarse_class_keys) if k in by_ep.columns]
@@ -109,18 +110,20 @@ def print_run_detail(r, max_epochs=None):
             print(f"    {int(ep):>3}  {vals}")
 
     # ── Fine par famille coarse — tableau imbriqué ────────────────────────────
+    # v9 : 34 fine. Fusions object_name→object_generic, rate→measure,
+    #      work_generic→work_of_art, state→event_nominal, doctrine→notion,
+    #      vegetal→animal. WORK/ABSTRACT dissous dans CONCEPT.
     FAMILIES = {
         "PER":      ["hint_person_name", "hint_person_role", "hint_norp", "hint_group_role"],
         "LOC":      ["hint_gpe", "hint_fac_name", "hint_loc_generic", "hint_infra"],
         "ORG":      ["hint_org_name", "hint_inst_name", "hint_inst_role"],
         "TIME":     ["hint_time_date", "hint_time_clock", "hint_time_duration"],
-        "EVENT":    ["hint_event_nominal", "hint_event_named"],
+        "VALUE":    ["hint_measure", "hint_percentage", "hint_count", "hint_money"],
         "OBJECT":   ["hint_weapon", "hint_vehicle", "hint_substance", "hint_food",
-                     "hint_tool", "hint_object_generic", "hint_object_name"],
-        "VALUE":    ["hint_measure", "hint_percentage", "hint_count", "hint_money", "hint_rate"],
-        "WORK":     ["hint_work_of_art", "hint_law", "hint_document", "hint_work_generic"],
-        "ABSTRACT": ["hint_disease", "hint_language", "hint_doctrine", "hint_state",
-                     "hint_notion", "hint_field"],
+                     "hint_tool", "hint_object_generic", "hint_animal"],
+        "EVENT":    ["hint_event_nominal", "hint_event_named", "hint_disease"],
+        "CONCEPT":  ["hint_work_of_art", "hint_law", "hint_document",
+                     "hint_language", "hint_notion", "hint_field"],
     }
     family_has_data = any(
         f"val/fine_f1_{lbl}" in by_ep.columns
@@ -248,6 +251,25 @@ def print_run_detail(r, max_epochs=None):
         print(f"    {sep}")
         for ep, row in by_ep.iterrows():
             vals = "  ".join(f"{fmt(val(row, k)):>9}" for _, k in morpho_present)
+            print(f"    {int(ep):>3}  {vals}")
+
+    # ── Attributs transverses v9 (5 têtes binaires) ───────────────────────────
+    attr_keys = [
+        ("animacy",    "val/attr_animacy_f1"),
+        ("living",     "val/attr_living_f1"),
+        ("abstract",   "val/attr_abstract_f1"),
+        ("dynamicity", "val/attr_dynamicity_f1"),
+        ("work",       "val/attr_work_f1"),
+    ]
+    attr_present = [(n, k) for n, k in attr_keys if k in by_ep.columns]
+    if attr_present:
+        header = "  ".join(f"{n:>10}" for n, _ in attr_present)
+        print(f"\n  🧬 Attributs v9 (f1 val)")
+        print(f"    {'ep':>3}  {header}")
+        sep = '─' * max(30, 6+12*len(attr_present))
+        print(f"    {sep}")
+        for ep, row in by_ep.iterrows():
+            vals = "  ".join(f"{fmt(val(row, k)):>10}" for _, k in attr_present)
             print(f"    {int(ep):>3}  {vals}")
 
     # ── Loss ──────────────────────────────────────────────────────────────────
