@@ -3,8 +3,11 @@
 # Sur RunPod CUDA 12.x : pip install "torch>=2.6.0" --index-url https://download.pytorch.org/whl/cu121
 # torch est fourni par l'image RunPod (2.4+cu124) — ne pas upgrader (torchvision serait incompatible)
 # torch>=2.0.0
-transformers==4.46.2
-tokenizers>=0.19.0
+# v9-modernbert : bump 4.46.2 → 4.53.0 pour supporter answerdotai/ModernBERT-base
+# (ModernBERT ajouté en 4.48.0). 4.53.0 corrige des ReDoS vs 4.46.2, aucun CVE
+# nouveau. NE PAS passer à 5.x (breaking API). DeBERTa-v3 reste supporté.
+transformers==4.53.0
+tokenizers>=0.21.0
 sentencepiece>=0.2.0
 scikit-learn>=1.3.0
 numpy>=1.24.0
@@ -27,3 +30,4 @@ stanza>=1.8.2
 
 # Optional: for ONNX export
 # onnxruntime>=1.17.0
+
