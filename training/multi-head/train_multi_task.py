@@ -1468,12 +1468,16 @@ def main():
     #     - mode="reduce-overhead" (CUDA graphs) exige des shapes statiques → crash au 1er forward
     #     - compile de DeBERTa dépasse 15min et ne converge pas
     _is_deberta = "deberta" in args.model_name.lower()
+    # ModernBERT : même incompatibilité pratique — mode=reduce-overhead (CUDA graphs)
+    # sur un modèle span à nombre de candidats variable → mémoire obsolète rejouée → NaN au step 1.
+    _is_modernbert = "modernbert" in args.model_name.lower()
+    _compile_unsafe = _is_deberta or _is_modernbert
     if getattr(args, "compile", False) and device == "cuda":
-        if _is_deberta:
+        if _compile_unsafe:
             print(
-                f"⚠️  torch.compile ignoré pour DeBERTa ({args.model_name}) — "
-                "attention disentangled incompatible avec CUDA graphs (mode=reduce-overhead). "
-                "Le gain BF16 + batch size élevé suffit sur H100/A100."
+                f"⚠️  torch.compile ignoré pour {args.model_name} — "
+                "mode=reduce-overhead (CUDA graphs) incompatible avec les shapes dynamiques "
+                "du modèle span (candidats variables) → NaN/crash. BF16 + gros batch suffisent."
             )
         else:
             try:
