@@ -1,8 +1,9 @@
 # Core training dependencies
 # torch>=2.6.0 requis : transformers bloque torch.load() < 2.6 (CVE-2025-32434)
-# Sur RunPod CUDA 12.x : pip install "torch>=2.6.0" --index-url https://download.pytorch.org/whl/cu121
-# torch est fourni par l'image RunPod (2.4+cu124) — ne pas upgrader (torchvision serait incompatible)
-# torch>=2.0.0
+# Le venv RunPod est 100% isolé (pas de --system-site-packages, cf setup_runpod.sh)
+# et installe explicitement torch>=2.6.0 depuis download.pytorch.org/whl/cu124.
+# NE PAS remettre --system-site-packages : l'image de base runpod/pytorch:2.4
+# embarque cuDNN 8 + torch 2.4, ce qui empêche quasi systématiquement l'upgrade.
 # v9-modernbert : bump 4.46.2 → 4.53.0 pour supporter answerdotai/ModernBERT-base
 # (ModernBERT ajouté en 4.48.0). 4.53.0 corrige des ReDoS vs 4.46.2, aucun CVE
 # nouveau. NE PAS passer à 5.x (breaking API). DeBERTa-v3 reste supporté.

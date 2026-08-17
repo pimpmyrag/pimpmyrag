@@ -27,45 +27,47 @@ echo "📦 Setup RunPod ${GOLD_VERSION} — $(date)"
 echo ""
 echo "🐍 Installation des dépendances..."
 
-# ── cuDNN 9 — requis par torch 2.6+ (l'image de base runpod/pytorch:2.4 n'a que cuDNN 8)
-# Sans ça : ImportError libcudnn.so.9: cannot open shared object file
-echo "📦 Installation cuDNN 9 (requis torch 2.6+)..."
-apt-get install -y --no-install-recommends libcudnn9-cuda-12 2>/dev/null \
-    || apt-get install -y --no-install-recommends libcudnn9 2>/dev/null \
-    || echo "   ⚠️  libcudnn9 non dispo via apt — on continuera sans (torch bundled cuDNN)"
-
-# --system-site-packages : hérite torch/transformers de l'image de base
-# Évite de re-télécharger torch (2 GB) à chaque pod
-python3 -m venv venv --system-site-packages 2>/dev/null || true
+# ── venv 100% isolé (PAS de --system-site-packages) ──────────────────────────
+# L'image de base runpod/pytorch:2.4 embarque torch 2.4 + cuDNN 8, incompatibles
+# avec transformers>=4.53 qui EXIGE torch>=2.6 pour torch.load (CVE-2025-32434).
+# Hériter du site-packages système (--system-site-packages) mélange les deux
+# installations de torch/cuDNN et fait presque toujours échouer l'upgrade
+# (l'ancien torch système reste importable en priorité, ou le test CUDA échoue
+# à cause du mismatch cuDNN 8/9 et retombe sur le torch 2.4 cassé).
+# → on repart d'un venv totalement isolé et on installe torch 2.6+ proprement.
+python3 -m venv venv 2>/dev/null || true
 source venv/bin/activate
+pip install -q --upgrade pip
 
-# Forcer torch 2.6 (torchvision n'est PAS utilisé dans le training code)
-# torch 2.4 de l'image de base cause une régression ~-7% sur Fine F1 (vs 2.6)
-CURRENT_TORCH=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "0.0")
-echo "   torch actuel: ${CURRENT_TORCH}"
+echo "⬆️  Installation torch>=2.6.0 (CUDA 12.4, venv isolé)..."
+pip install -q "torch>=2.6.0" --index-url https://download.pytorch.org/whl/cu124 \
+    || pip install -q "torch>=2.6.0" --index-url https://download.pytorch.org/whl/cu121
 
-if python3 -c "import torch; v=torch.__version__; assert int(v.split('.')[0])>=2 and int(v.split('.')[1])>=6" 2>/dev/null; then
-    echo "   ✅ torch ${CURRENT_TORCH} >= 2.6 — OK, pas de réinstallation"
-else
-    echo "   ⬆️  Upgrade torch vers 2.6+ (CUDA 12.4)..."
-    # Désinstaller torchvision/torchaudio d'abord pour éviter les conflits
-    pip uninstall -q -y torchvision torchaudio 2>/dev/null || true
-    pip install -q "torch>=2.6.0" --index-url https://download.pytorch.org/whl/cu124
-    NEW_TORCH=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "unknown")
-    echo "   ✅ torch ${NEW_TORCH} installé"
+TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "")
+if [ -z "$TORCH_VERSION" ]; then
+    echo "   ❌ torch introuvable après installation — abandon."
+    exit 1
+fi
+echo "   torch installé: ${TORCH_VERSION}"
+
+if ! python3 -c "import torch; v=torch.__version__; assert int(v.split('.')[0])>=2 and int(v.split('.')[1])>=6"; then
+    echo "   ❌ torch ${TORCH_VERSION} < 2.6 — transformers>=4.53 va planter (CVE-2025-32434). Abandon."
+    exit 1
 fi
 
-# Vérification que torch est importable (détection précoce des problèmes cuDNN)
-if python3 -c "import torch; torch.zeros(1).cuda() if torch.cuda.is_available() else None; print('✅ torch OK')" 2>/dev/null; then
-    true
+# Vérification CUDA (avertissement seulement — ne JAMAIS redowngrader torch,
+# ça garantirait le crash CVE-2025-32434 plus tard dans le training)
+if python3 -c "import torch; assert torch.cuda.is_available(); torch.zeros(1).cuda()" 2>/dev/null; then
+    echo "   ✅ torch ${TORCH_VERSION} + CUDA OK"
 else
-    echo "   ⚠️  torch import ou CUDA échoue — tentative fallback torch 2.4 (system)..."
-    pip uninstall -q -y torch 2>/dev/null || true  # Retire le 2.6 cassé
-    # Le venv --system-site-packages reprendra le torch 2.4 system
-    python3 -c "import torch; print(f'   Fallback torch {torch.__version__}')" 2>/dev/null || true
+    echo "   ⚠️  CUDA indisponible ou cuDNN incomplet avec torch ${TORCH_VERSION} — on continue quand même"
+    echo "      (torch n'est PAS redowngradé : un torch <2.6 ferait planter transformers à coup sûr)"
 fi
 
-pip install -q -r requirements.txt
+# Contrainte pour empêcher `pip install -r requirements.txt` de retoucher torch
+TORCH_PIN="${TORCH_VERSION%%+*}"
+echo "torch==${TORCH_PIN}" > /tmp/torch_constraint.txt
+pip install -q -r requirements.txt -c /tmp/torch_constraint.txt
 
 # ── 2. W&B login ─────────────────────────────────────────────────────────────
 echo ""
